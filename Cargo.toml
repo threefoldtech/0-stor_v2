@@ -1,0 +1,37 @@
+[package]
+name = "zstor_v2"
+version = "0.1.0"
+authors = ["The Threefold Tech developers <info@threefold.tech>"]
+edition = "2018"
+repository = "https://github.com/threefoldtech/0-stor_v2"
+
+[[bin]]
+name = "zstor_v2"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-zdb"
+path = "src/test_zdb.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+reed-solomon-erasure = "4"
+rand = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.5"
+hex = "0.4"
+aes-gcm = "0.8"
+snap = "1"
+log = "0.4"
+redis = { version = "0.18", features = ["aio", "tokio-comp"] }
+sha-1 = "0.9"
+simple_logger = "1.11"
+structopt = "0.3"
+tokio = { version = "0.3", features = ["rt", "macros"] }
+tokio-compat-02 = "0.1"
+etcd-rs = "0.3"
+futures = "0.3"
+
+[dev-dependencies]
+rand = "0.7"
