@@ -169,34 +169,6 @@ fn main() -> Result<(), String> {
             _ => unimplemented!(),
         };
 
-        println!("{:#?}", opts);
-        const DATA_SHARDS: usize = 20;
-        const PARITY_SHARDS: usize = 15;
-        let mut data: Vec<u8> = vec![0; 3_000_000_000];
-        for d in data.iter_mut() {
-            *d = rand::thread_rng().gen();
-        }
-
-        let enc = Encoder::new(DATA_SHARDS, PARITY_SHARDS);
-
-        let packets = enc.encode(data.clone());
-
-        let mut shard_to_erase = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
-        for i in 0..shard_to_erase.capacity() {
-            shard_to_erase.push(i);
-        }
-        shard_to_erase.shuffle(&mut rand::thread_rng());
-
-        let mut recovered: Vec<Option<Vec<u8>>> = packets.into_iter().map(Some).collect();
-
-        for idx in &shard_to_erase[..PARITY_SHARDS] {
-            recovered[*idx] = None;
-        }
-
-        let orig = enc.decode(recovered).unwrap();
-
-        assert_eq!(orig, data);
-
         Ok(())
     })
 }
