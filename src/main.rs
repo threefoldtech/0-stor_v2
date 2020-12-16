@@ -1,5 +1,5 @@
-use futures::future::try_join_all;
-use log::{debug, trace};
+use futures::future::{join_all, try_join_all};
+use log::{debug, info, trace};
 use std::fs::File;
 use std::io::{Read, Write};
 use structopt::StructOpt;
@@ -52,6 +52,12 @@ enum Cmd {
             parse(from_os_str)
         )]
         config: std::path::PathBuf,
+        /// Path to the file to store
+        ///
+        /// The path to the file to store. The path is used to create a metadata key (by hashing
+        /// the full path). If a file is encoded at `path`, and then a new file is encoded for the
+        /// same `path`. The old file metadata is overwritten and you will no longer be able to
+        /// restore the file.
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: std::path::PathBuf,
     },
@@ -75,7 +81,13 @@ enum Cmd {
     ///
     /// Loads data from available shards, restores it, decrypts and decompresses it. This operation
     /// will fail if insufficient shards are available to retrieve the data.
-    Retrieve {},
+    Retrieve {
+        /// Path of the file to retrieve.
+        ///
+        /// The original path which was used to store the file.
+        #[structopt(name = "file", long, short, parse(from_os_str))]
+        file: std::path::PathBuf,
+    },
 }
 
 fn main() -> Result<(), String> {
@@ -176,21 +188,69 @@ fn main() -> Result<(), String> {
                     .compat()
                     .await?;
 
-                // for string meta
-                let filename = file
-                    .file_name()
-                    .ok_or("could not load file name".to_string())?
-                    .to_str()
-                    .ok_or("could not convert filename to standard string".to_string())?;
-                let metaname = format!("{}.meta", filename);
-                file.set_file_name(metaname);
+                // for file meta
+                // let filename = file
+                //     .file_name()
+                //     .ok_or("could not load file name".to_string())?
+                //     .to_str()
+                //     .ok_or("could not convert filename to standard string".to_string())?;
+                // let metaname = format!("{}.meta", filename);
+                // file.set_file_name(metaname);
 
-                let mut metafile = File::create(&file).map_err(|e| e.to_string())?;
-                metafile
-                    .write_all(&toml::to_vec(&metadata).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
+                // let mut metafile = File::create(&file).map_err(|e| e.to_string())?;
+                // metafile
+                //     .write_all(&toml::to_vec(&metadata).map_err(|e| e.to_string())?)
+                //     .map_err(|e| e.to_string())?;
             }
-            _ => unimplemented!(),
+            Cmd::Retrieve { ref file } => {
+                let metadata = cluster.load_meta(&opts.etcd_prefix, file).compat().await?;
+
+                // attempt to retrieve al shards
+                let mut shard_loads: Vec<JoinHandle<(usize, Result<_, String>)>> =
+                    Vec::with_capacity(metadata.shards().len());
+                for si in metadata.shards().iter().cloned() {
+                    shard_loads.push(tokio::spawn(async move {
+                        let mut db = match Zdb::new(si.zdb().clone()).await {
+                            Ok(ok) => ok,
+                            Err(e) => return (si.index(), Err(e)),
+                        };
+                        match db.get(si.key()).await {
+                            Ok(potential_shard) => match potential_shard {
+                                Some(shard) => (si.index(), Ok(shard)),
+                                None => (si.index(), Err("shard not found".to_string())),
+                            },
+                            Err(e) => (si.index(), Err(e)),
+                        }
+                    }));
+                }
+
+                let mut indexed_shards: Vec<(usize, Option<Vec<u8>>)> =
+                    Vec::with_capacity(shard_loads.len());
+                for shard_info in join_all(shard_loads).await {
+                    let (idx, shard) = shard_info.map_err(|e| e.to_string())?;
+                    indexed_shards.push((idx, shard.ok())); // don't really care about errors here
+                }
+
+                // sort the shards
+                indexed_shards.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                let shards = indexed_shards.into_iter().map(|(_, shard)| shard).collect();
+
+                let encoder = Encoder::new(metadata.data_shards(), metadata.parity_shards());
+                let decoded = encoder.decode(shards)?;
+
+                info!("rebuild data from shards");
+
+                let encryptor = AESGCM::new(metadata.encryption().key().clone());
+                let decrypted = encryptor.decrypt(&decoded)?;
+
+                let original = Snappy.decompress(&decrypted)?;
+
+                // create the file
+                let mut out = File::create(&file).map_err(|e| e.to_string())?;
+                out.write_all(&original).map_err(|e| e.to_string())?;
+            }
+            Cmd::Rebuild { config } => {}
         };
 
         Ok(())
