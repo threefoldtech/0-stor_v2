@@ -37,6 +37,7 @@ tokio-compat-02 = "0.1"
 etcd-rs = "0.3"
 futures = "0.3"
 blake2 = "0.9"
+gray-codes = "0.1"
 
 [dev-dependencies]
 rand = "0.7"

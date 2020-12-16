@@ -1,4 +1,5 @@
 use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 /// The full configuration for the data encoding and decoding. This included the etcd to save the
@@ -110,14 +111,162 @@ impl Config {
     /// encoding profile and redundancy policies. If no valid configuration can be found, an error
     /// is returned. If multiple valid configurations are found, one is selected at random.
     pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, String> {
-        // TODO: temp
-        Ok(self
+        // The challange here is to find a valid list of shards. We need exactly `data_shards +
+        // parity_shards` shards in total. We assume every shard in every group is valid.
+        // Furthermore, we need to make sure that if any `redundant_groups` groups are lost, we
+        // still have sufficient shards left to recover the data. Also, for every group we should
+        // be able to loose `redundant_nodes` nodes, and still be able to recover the data. It is
+        // acceptable to not find any good setup.
+
+        // used groups must be <= parity_shards/redundant_nodes, otherwise losing the max amount of
+        // nodes per group will lose too many shards
+        let max_groups = if self.redundant_nodes == 0 {
+            self.groups.len()
+        } else {
+            // add the redundant groups to the max groups, if we lose the entire group we no longer
+            // care about the individual nodes in the group after all
+            self.parity_shards / self.redundant_nodes + self.redundant_groups
+        };
+
+        // Get the index of every group for later lookup, eliminate groups which are statically too
+        // small
+        let groups: Vec<_> = self
             .groups
             .iter()
-            .map(|group| group.backends.clone())
-            .flatten()
-            .collect())
-        // unimplemented!();
+            .filter(|group| group.backends.len() >= self.redundant_nodes)
+            .collect();
+
+        let mut candidates = Vec::new();
+        // high enough capacity so we don't reallocate
+        let mut candidate = Vec::with_capacity(groups.len());
+        // generate possible group configs
+        use gray_codes::{InclusionExclusion, SetMutation};
+        for mutation in InclusionExclusion::of_len(groups.len()) {
+            match mutation {
+                SetMutation::Insert(i) => candidate.push((i, groups[i])),
+                SetMutation::Remove(ref i) => {
+                    candidate = candidate.into_iter().filter(|(j, _)| i != j).collect()
+                }
+            }
+
+            if candidate.len() <= max_groups
+                && candidate.len() > self.redundant_groups
+                && candidate
+                    .iter()
+                    .map(|(_, group)| group.backends.len() - self.redundant_nodes)
+                    .sum::<usize>()
+                    >= self.data_shards
+            {
+                candidates.push(candidate.clone());
+            }
+        }
+
+        // so now we have all configurations which have sufficient capacity to hold all shards,
+        // while still within the bouns of the redundant_nodes option
+        if candidates.len() == 0 {
+            return Err(
+                "could not find any viable backend distribution to statisfy redundancy requirement"
+                    .to_string(),
+            );
+        }
+
+        // for every possible solution, generate an equal distribution over all nodes, then verify
+        // that we still have sufficient data shards left if we lose the redundant_groups largest
+        // groups and redundant_nodes shards from the other groups (must still be larger than data
+        // shars)
+        let mut possible_configs = Vec::new();
+        for candidate in candidates {
+            let mut buckets: Vec<_> = candidate
+                .iter()
+                .map(|(_, group)| group.backends.len())
+                .collect();
+            self.build_configs(
+                self.data_shards + self.parity_shards,
+                &mut buckets,
+                &mut possible_configs,
+                &candidate,
+            );
+        }
+
+        // at this point we should have a list of _all_ possible configs
+        if possible_configs.len() == 0 {
+            return Err(
+                "unable to find a valid configuration due to redundancy settings".to_string(),
+            );
+        }
+
+        // randomly pick a solution
+        // unwrap is safe as we already established that we have at least 1 solution
+        let shard_distribution = possible_configs.choose(&mut rand::thread_rng()).unwrap();
+
+        let mut backends = Vec::with_capacity(self.data_shards + self.parity_shards);
+        for (group_idx, amount) in shard_distribution {
+            backends.extend(
+                self.groups[*group_idx]
+                    .backends
+                    .choose_multiple(&mut rand::thread_rng(), *amount)
+                    .into_iter()
+                    .cloned(),
+            );
+        }
+
+        Ok(backends)
+    }
+
+    // backtrack algorithm to find all ways to distribute n tokens in m buckets. If the last token is
+    // passed, finalizer is called
+    // A closure would be so clean here but it needs to be FnMut and then we can't both call it and
+    // pass it down it seems ffs
+    fn build_configs(
+        &self,
+        tokens_left: usize,
+        buckets: &mut [usize],
+        possible_configs: &mut Vec<Vec<(usize, usize)>>,
+        candidate: &[(usize, &Group)],
+    ) {
+        for i in 0..buckets.len() {
+            if buckets[i] > 0 {
+                buckets[i] -= 1;
+                if tokens_left - 1 == 0 {
+                    self.add_valid_config(possible_configs, candidate, buckets);
+                } else {
+                    self.build_configs(tokens_left - 1, buckets, possible_configs, candidate);
+                }
+                buckets[i] += 1;
+            }
+        }
+    }
+
+    fn add_valid_config(
+        &self,
+        possible_configs: &mut Vec<Vec<(usize, usize)>>,
+        candidate: &[(usize, &Group)],
+        used_buckets: &[usize],
+    ) {
+        // flip the remaining slots in the buckets to actually used slots
+        // since we are pessimistic remove the largest `redundant_groups` groups
+        let mut buckets_used: Vec<_> = used_buckets
+            .iter()
+            .enumerate()
+            .map(|(idx, remainder)| {
+                let (orig, group) = candidate[idx];
+                (orig, group.backends.len() - remainder)
+            })
+            .collect();
+        // cmp second to first so we sort large -> small TODO: verify
+        buckets_used.sort_by(|(_, used_1), (_, used_2)| used_2.cmp(used_1));
+        // verify that we still have sufficient data shards left if: we lose all
+        // redundant_groups nodes AND we lose redundant_nodes nodes in the remaining
+        // groups
+        if buckets_used
+            .iter()
+            .skip(self.redundant_groups)
+            .map(|(_, shard_count)| shard_count - self.redundant_nodes)
+            .sum::<usize>()
+            >= self.data_shards
+        {
+            possible_configs.push(buckets_used);
+        }
     }
 }
 
