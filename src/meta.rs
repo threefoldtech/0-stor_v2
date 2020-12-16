@@ -84,6 +84,11 @@ impl ShardInfo {
         Self { shard_idx, key, ci }
     }
 
+    /// Get the index of this shard in the encoding sequence
+    pub fn index(&self) -> usize {
+        self.shard_idx
+    }
+
     /// Get a reference to the connection info needed to reach the zdb namespace where this shard
     /// is stored.
     pub fn zdb(&self) -> &ZdbConnectionInfo {

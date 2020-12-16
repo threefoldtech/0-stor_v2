@@ -122,6 +122,14 @@ impl Config {
 }
 
 impl Encryption {
+    /// Create a new encryption instance
+    pub fn new(algorithm: &str, key: &SymmetricKey) -> Self {
+        Self {
+            algorithm: algorithm.to_owned(),
+            key: key.clone(),
+        }
+    }
+
     /// Get the name of the encryption algorithm to use
     pub fn algorithm(&self) -> &str {
         &self.algorithm
@@ -134,6 +142,13 @@ impl Encryption {
 }
 
 impl Compression {
+    /// Create a new compression instance
+    pub fn new(algorithm: &str) -> Self {
+        Self {
+            algorithm: algorithm.to_owned(),
+        }
+    }
+
     /// Get the name of the compression algorithm to use
     pub fn algorithm(&self) -> &str {
         &self.algorithm

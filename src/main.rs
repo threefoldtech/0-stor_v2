@@ -1,6 +1,5 @@
 use futures::future::try_join_all;
 use log::{debug, trace};
-use rand::{prelude::SliceRandom, Rng};
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
