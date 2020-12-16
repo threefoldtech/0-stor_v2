@@ -76,6 +76,14 @@ enum Cmd {
             parse(from_os_str)
         )]
         config: std::path::PathBuf,
+        /// Path to the file to rebuild
+        ///
+        /// The path to the file to rebuild. The path is used to create a metadata key (by hashing
+        /// the full path). The original data is decoded, and then reencoded as per the provided
+        /// config. The new metadata is then used to replace the old metadata in the metadata
+        /// store.
+        #[structopt(name = "file", long, short, parse(from_os_str))]
+        file: std::path::PathBuf,
     },
     /// Load encoded data
     ///
@@ -121,19 +129,7 @@ fn main() -> Result<(), String> {
             } => {
                 // TODO: check that `file` points to file and not a dir
                 trace!("encoding file {:?}", file);
-                trace!("opening config file {:?}", config);
-                let mut cfg_file = File::open(config).map_err(|e| e.to_string())?;
-                let mut cfg_str = String::new();
-                cfg_file
-                    .read_to_string(&mut cfg_str)
-                    .map_err(|e| e.to_string())?;
-
-                let cfg: Config = toml::from_str(&cfg_str).map_err(|e| e.to_string())?;
-                trace!("config read");
-                if let Err(e) = cfg.validate() {
-                    return Err(e);
-                }
-                trace!("config validated");
+                let cfg = read_cfg(config)?;
 
                 // start reading file to encrypt
                 trace!("loading file data");
@@ -152,37 +148,7 @@ fn main() -> Result<(), String> {
                 let encrypted = encryptor.encrypt(&compressed)?;
                 trace!("encrypted size: {} bytes", encrypted.len());
 
-                let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
-                let shards = encoder.encode(encrypted);
-                debug!("data encoded");
-
-                let backends = cfg.shard_stores()?;
-
-                trace!("store shards in backends");
-                let mut handles: Vec<JoinHandle<Result<_, String>>> =
-                    Vec::with_capacity(shards.len());
-
-                for (backend, (shard_idx, shard)) in
-                    backends.into_iter().zip(shards.into_iter().enumerate())
-                {
-                    handles.push(tokio::spawn(async move {
-                        let mut db = Zdb::new(backend.clone()).await?;
-                        let key = db.set(None, &shard).await?;
-                        Ok(ShardInfo::new(shard_idx, key, backend.clone()))
-                    }));
-                }
-
-                let mut metadata = MetaData::new(
-                    cfg.data_shards(),
-                    cfg.parity_shards(),
-                    cfg.encryption().clone(),
-                    cfg.compression().clone(),
-                );
-
-                for shard_info in try_join_all(handles).await.map_err(|e| e.to_string())? {
-                    metadata.add_shard(shard_info?);
-                }
-
+                let metadata = store_data(encrypted, &cfg).await?;
                 cluster
                     .save_meta(&opts.etcd_prefix, &file, &metadata)
                     .compat()
@@ -204,42 +170,7 @@ fn main() -> Result<(), String> {
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(&opts.etcd_prefix, file).compat().await?;
-
-                // attempt to retrieve al shards
-                let mut shard_loads: Vec<JoinHandle<(usize, Result<_, String>)>> =
-                    Vec::with_capacity(metadata.shards().len());
-                for si in metadata.shards().iter().cloned() {
-                    shard_loads.push(tokio::spawn(async move {
-                        let mut db = match Zdb::new(si.zdb().clone()).await {
-                            Ok(ok) => ok,
-                            Err(e) => return (si.index(), Err(e)),
-                        };
-                        match db.get(si.key()).await {
-                            Ok(potential_shard) => match potential_shard {
-                                Some(shard) => (si.index(), Ok(shard)),
-                                None => (si.index(), Err("shard not found".to_string())),
-                            },
-                            Err(e) => (si.index(), Err(e)),
-                        }
-                    }));
-                }
-
-                let mut indexed_shards: Vec<(usize, Option<Vec<u8>>)> =
-                    Vec::with_capacity(shard_loads.len());
-                for shard_info in join_all(shard_loads).await {
-                    let (idx, shard) = shard_info.map_err(|e| e.to_string())?;
-                    indexed_shards.push((idx, shard.ok())); // don't really care about errors here
-                }
-
-                // sort the shards
-                indexed_shards.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-                let shards = indexed_shards.into_iter().map(|(_, shard)| shard).collect();
-
-                let encoder = Encoder::new(metadata.data_shards(), metadata.parity_shards());
-                let decoded = encoder.decode(shards)?;
-
-                info!("rebuild data from shards");
+                let decoded = recover_data(&metadata).await?;
 
                 let encryptor = AESGCM::new(metadata.encryption().key().clone());
                 let decrypted = encryptor.decrypt(&decoded)?;
@@ -250,9 +181,109 @@ fn main() -> Result<(), String> {
                 let mut out = File::create(&file).map_err(|e| e.to_string())?;
                 out.write_all(&original).map_err(|e| e.to_string())?;
             }
-            Cmd::Rebuild { config } => {}
+            Cmd::Rebuild {
+                ref config,
+                ref file,
+            } => {
+                let cfg = read_cfg(&config)?;
+
+                let metadata = cluster.load_meta(&opts.etcd_prefix, file).compat().await?;
+                let decoded = recover_data(&metadata).await?;
+
+                let metadata = store_data(decoded, &cfg).await?;
+                cluster
+                    .save_meta(&opts.etcd_prefix, &file, &metadata)
+                    .compat()
+                    .await?;
+            }
         };
 
         Ok(())
     })
+}
+
+async fn recover_data(metadata: &MetaData) -> Result<Vec<u8>, String> {
+    // attempt to retrieve al shards
+    let mut shard_loads: Vec<JoinHandle<(usize, Result<_, String>)>> =
+        Vec::with_capacity(metadata.shards().len());
+    for si in metadata.shards().iter().cloned() {
+        shard_loads.push(tokio::spawn(async move {
+            let mut db = match Zdb::new(si.zdb().clone()).await {
+                Ok(ok) => ok,
+                Err(e) => return (si.index(), Err(e)),
+            };
+            match db.get(si.key()).await {
+                Ok(potential_shard) => match potential_shard {
+                    Some(shard) => (si.index(), Ok(shard)),
+                    None => (si.index(), Err("shard not found".to_string())),
+                },
+                Err(e) => (si.index(), Err(e)),
+            }
+        }));
+    }
+
+    let mut indexed_shards: Vec<(usize, Option<Vec<u8>>)> = Vec::with_capacity(shard_loads.len());
+    for shard_info in join_all(shard_loads).await {
+        let (idx, shard) = shard_info.map_err(|e| e.to_string())?;
+        indexed_shards.push((idx, shard.ok())); // don't really care about errors here
+    }
+
+    // sort the shards
+    indexed_shards.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let shards = indexed_shards.into_iter().map(|(_, shard)| shard).collect();
+
+    let encoder = Encoder::new(metadata.data_shards(), metadata.parity_shards());
+    let decoded = encoder.decode(shards)?;
+
+    info!("rebuild data from shards");
+
+    Ok(decoded)
+}
+
+async fn store_data(data: Vec<u8>, cfg: &Config) -> Result<MetaData, String> {
+    let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
+    let shards = encoder.encode(data);
+    debug!("data encoded");
+
+    let backends = cfg.shard_stores()?;
+
+    trace!("store shards in backends");
+    let mut handles: Vec<JoinHandle<Result<_, String>>> = Vec::with_capacity(shards.len());
+
+    for (backend, (shard_idx, shard)) in backends.into_iter().zip(shards.into_iter().enumerate()) {
+        handles.push(tokio::spawn(async move {
+            let mut db = Zdb::new(backend.clone()).await?;
+            let key = db.set(None, &shard).await?;
+            Ok(ShardInfo::new(shard_idx, key, backend.clone()))
+        }));
+    }
+
+    let mut metadata = MetaData::new(
+        cfg.data_shards(),
+        cfg.parity_shards(),
+        cfg.encryption().clone(),
+        cfg.compression().clone(),
+    );
+
+    for shard_info in try_join_all(handles).await.map_err(|e| e.to_string())? {
+        metadata.add_shard(shard_info?);
+    }
+
+    Ok(metadata)
+}
+
+fn read_cfg(config: &std::path::PathBuf) -> Result<Config, String> {
+    trace!("opening config file {:?}", config);
+    let mut cfg_file = File::open(config).map_err(|e| e.to_string())?;
+    let mut cfg_str = String::new();
+    cfg_file
+        .read_to_string(&mut cfg_str)
+        .map_err(|e| e.to_string())?;
+
+    let cfg: Config = toml::from_str(&cfg_str).map_err(|e| e.to_string())?;
+    trace!("config read");
+    cfg.validate()?;
+    trace!("config validated");
+    Ok(cfg)
 }
