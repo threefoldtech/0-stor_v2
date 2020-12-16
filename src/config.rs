@@ -111,13 +111,13 @@ impl Config {
     /// is returned. If multiple valid configurations are found, one is selected at random.
     pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, String> {
         // TODO: temp
-        //Ok(self
-        //    .groups
-        //    .iter()
-        //    .map(|group| group.backends.clone())
-        //    .flatten()
-        //    .collect())
-        unimplemented!();
+        Ok(self
+            .groups
+            .iter()
+            .map(|group| group.backends.clone())
+            .flatten()
+            .collect())
+        // unimplemented!();
     }
 }
 

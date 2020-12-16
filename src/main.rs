@@ -1,15 +1,16 @@
 use futures::future::try_join_all;
 use log::{debug, trace};
-use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
+use tokio_compat_02::FutureExt;
 use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::Config;
 use zstor_v2::encryption::{Encryptor, AESGCM};
 use zstor_v2::erasure::Encoder;
+use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{MetaData, ShardInfo};
 use zstor_v2::zdb::Zdb;
 
@@ -20,6 +21,17 @@ use zstor_v2::zdb::Zdb;
 /// Compresses, encrypts, and erasure codes data according to the provided config file and options.
 /// Data is send to a specified group of backends.
 struct Rstor {
+    /// Endpoints for the etcd cluster to store the metadata
+    ///
+    /// Endpoints are passed as a single comma separated string
+    #[structopt(long, short)]
+    etcd_endpoints: String,
+    /// Prefix to use when storing metadata
+    ///
+    /// The exact key will be the prefix and a hex encoded 16 byte blake2b hash of the full path of
+    /// the file to operate on, i.e. "/{prefix}/{hex_hash}"
+    #[structopt(name = "prefix", long, short)]
+    etcd_prefix: String,
     #[structopt(subcommand)]
     cmd: Cmd,
 }
@@ -75,7 +87,20 @@ fn main() -> Result<(), String> {
 
     rt.block_on(async {
         let mut opts = Rstor::from_args();
-        simple_logger::SimpleLogger::new().init().unwrap();
+        simple_logger::SimpleLogger::new()
+            .with_level(log::LevelFilter::Info)
+            .init()
+            .unwrap();
+
+        let cluster = Etcd::new(
+            opts.etcd_endpoints
+                .split(",")
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .compat()
+        .await?;
 
         match opts.cmd {
             Cmd::Store {
@@ -99,12 +124,8 @@ fn main() -> Result<(), String> {
                 trace!("config validated");
 
                 // start reading file to encrypt
-                // construct full path for meta storeage later
-                let path = fs::canonicalize(&file).map_err(|e| e.to_string())?;
-                trace!("full path {:?}", path);
-
                 trace!("loading file data");
-                let mut encoding_file = File::open(path).map_err(|e| e.to_string())?;
+                let mut encoding_file = File::open(&file).map_err(|e| e.to_string())?;
                 let mut buffer = Vec::new();
                 encoding_file
                     .read_to_end(&mut buffer)
@@ -150,6 +171,12 @@ fn main() -> Result<(), String> {
                     metadata.add_shard(shard_info?);
                 }
 
+                cluster
+                    .save_meta(&opts.etcd_prefix, &file, &metadata)
+                    .compat()
+                    .await?;
+
+                // for string meta
                 let filename = file
                     .file_name()
                     .ok_or("could not load file name".to_string())?
@@ -162,8 +189,6 @@ fn main() -> Result<(), String> {
                 metafile
                     .write_all(&toml::to_vec(&metadata).map_err(|e| e.to_string())?)
                     .map_err(|e| e.to_string())?;
-
-                debug!("{}", toml::to_string(&metadata).unwrap());
             }
             _ => unimplemented!(),
         };
