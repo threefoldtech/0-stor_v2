@@ -41,23 +41,25 @@ impl Encryptor for AESGCM {
 
         let nonce = GenericArray::clone_from_slice(&thread_rng().gen::<[u8; AES_GCM_NONCE_SIZE]>());
 
-        let mut ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
-        ciphertext.extend(nonce.as_slice());
+        // TODO: not really efficient way of doing things here
+        let mut total = Vec::with_capacity(AES_GCM_NONCE_SIZE + data.len() + 16);
 
-        Ok(ciphertext)
+        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
+        total.extend(nonce.as_slice());
+        total.extend(ciphertext);
+
+        Ok(total)
     }
 
     fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let key = GenericArray::from_slice(&self.key[..]);
         let cipher = aes_gcm::Aes256Gcm::new(key);
 
-        let iv = &data[data.len() - AES_GCM_NONCE_SIZE..];
-        assert!(iv.len() == AES_GCM_NONCE_SIZE);
+        let iv = &data[..AES_GCM_NONCE_SIZE];
+        debug_assert!(iv.len() == AES_GCM_NONCE_SIZE);
         let nonce = GenericArray::from_slice(iv);
 
-        let plaintext = cipher
-            .decrypt(nonce, &data[..data.len() - AES_GCM_NONCE_SIZE])
-            .unwrap();
+        let plaintext = cipher.decrypt(nonce, &data[AES_GCM_NONCE_SIZE..]).unwrap();
         Ok(plaintext)
     }
 }
