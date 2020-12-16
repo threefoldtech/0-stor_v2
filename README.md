@@ -8,6 +8,10 @@ removed, as long as sufficient are left to recover the data.
 - `Rebuild` the data, loading existing data (as long as sufficient zdbs are left),
 reencoding it, and storing it in (new) zdbs according to the current config
 
+NOTE: currently all backends in the config are assumed to be healthy: they are
+reachable, and the namespace has enough space to hold the data shard which will
+be written
+
 ## Building
 
 Make sure you have the lastest Rust stable installed. Clone the repository:
