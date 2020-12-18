@@ -5,6 +5,7 @@ use blake2::{
 };
 use etcd_rs::{Client, ClientConfig, KeyRange, PutRequest, RangeRequest};
 use log::{info, trace};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -13,40 +14,56 @@ use std::path::PathBuf;
 // TODO: debug
 pub struct Etcd {
     client: Client,
+    prefix: String,
+}
+
+/// Configuration options for an etcd cluster
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EtcdConfig {
+    endpoints: Vec<String>,
+    prefix: String,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 impl Etcd {
     /// Create a new client connecting to the cluster with the given endpoints
-    pub async fn new(endpoints: Vec<String>) -> Result<Self, String> {
+    pub async fn new(cfg: &EtcdConfig) -> Result<Self, String> {
         let client = Client::connect(ClientConfig {
-            endpoints,
-            auth: None,
+            endpoints: cfg.endpoints.clone(),
+            auth: match cfg {
+                EtcdConfig {
+                    username: Some(username),
+                    password: Some(password),
+                    ..
+                } => Some((username.clone(), password.clone())),
+                _ => None,
+            },
             tls: None,
         })
         .await
         .map_err(|e| format!("client connect failed: {}", e))?;
-        Ok(Etcd { client })
+        Ok(Etcd {
+            client,
+            prefix: cfg.prefix.clone(),
+        })
     }
 
     /// Save the metadata for the file identified by `path` with a given prefix
-    pub async fn save_meta(
-        &self,
-        prefix: &str,
-        path: &PathBuf,
-        meta: &MetaData,
-    ) -> Result<(), String> {
+    pub async fn save_meta(&self, path: &PathBuf, meta: &MetaData) -> Result<(), String> {
         // for now save metadata human readable
         trace!("encoding metadata");
         let enc_meta =
             toml::to_vec(meta).map_err(|e| format!("could not encode metadata: {}", e))?;
         // hash
-        let key = build_key(prefix, path)?;
+        let key = build_key(&self.prefix, path)?;
         self.write_value(&key, &enc_meta).await
     }
 
     /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&self, prefix: &str, path: &PathBuf) -> Result<MetaData, String> {
-        let key = build_key(prefix, path)?;
+    pub async fn load_meta(&self, path: &PathBuf) -> Result<MetaData, String> {
+        let key = build_key(&self.prefix, path)?;
         Ok(toml::from_slice(
             &self
                 .read_value(&key)
@@ -82,6 +99,23 @@ impl Etcd {
                     keys => Err(format!("expected to find single key, found {}", keys)),
                 }
             })
+    }
+}
+
+impl EtcdConfig {
+    /// Create a new config for an etcd cluster.
+    pub fn new(
+        endpoints: Vec<String>,
+        prefix: String,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self {
+            endpoints,
+            prefix,
+            username,
+            password,
+        }
     }
 }
 

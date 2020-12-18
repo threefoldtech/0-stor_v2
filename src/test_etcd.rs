@@ -25,9 +25,16 @@ fn main() {
             "http://127.0.0.1:32379".to_owned(),
         ];
 
-        let cluster = etcd::Etcd::new(nodes).compat().await.unwrap();
+        let cluster = etcd::Etcd::new(&etcd::EtcdConfig::new(
+            nodes,
+            "prefix".to_string(),
+            None,
+            None,
+        ))
+        .compat()
+        .await
+        .unwrap();
 
-        let prefix = "me";
         let mut path = PathBuf::new();
         path.push("./here");
         let mut data = MetaData::new(
@@ -48,12 +55,8 @@ fn main() {
             ZdbConnectionInfo::new("[::1]:9900".parse().unwrap(), None, None),
         ));
 
-        cluster
-            .save_meta(prefix, &path, &data)
-            .compat()
-            .await
-            .unwrap();
-        let rec = cluster.load_meta(prefix, &path).compat().await.unwrap();
+        cluster.save_meta(&path, &data).compat().await.unwrap();
+        let rec = cluster.load_meta(&path).compat().await.unwrap();
 
         log::info!("comparing data");
         assert_eq!(&rec, &data);

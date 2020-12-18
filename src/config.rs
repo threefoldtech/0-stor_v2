@@ -26,6 +26,8 @@ pub struct Config {
     encryption: Encryption,
     /// configuration to use for the compression stage
     compression: Compression,
+    /// configuration for the metadata store to use
+    meta: Meta,
     /// The backend groups to write the data to.
     groups: Vec<Group>,
 }
@@ -56,6 +58,16 @@ pub struct Compression {
     algorithm: String, // TODO: make enum
 }
 
+/// Configuration for the metadata store to use
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "type", content = "config")]
+#[serde(rename_all = "lowercase")]
+pub enum Meta {
+    /// Write metadata to an etc cluster
+    ETCD(crate::etcd::EtcdConfig),
+}
+
 impl Config {
     /// validate the config. This also makes sure that there is at least 1 valid configuration for
     /// the backends regarding groups and the required redundancy.
@@ -83,7 +95,7 @@ impl Config {
                 self.compression.algorithm
             ));
         }
-        // TODO
+
         Ok(())
     }
 
@@ -105,6 +117,11 @@ impl Config {
     /// Return the compression config to use for encoding this object.
     pub fn compression(&self) -> &Compression {
         &self.compression
+    }
+
+    /// Return the metastore configuration from the config
+    pub fn meta(&self) -> &Meta {
+        &self.meta
     }
 
     /// Returns a list of 0-db's to use for storage of the data shards, in accordance to the
@@ -359,6 +376,16 @@ mod tests {
             compression: super::Compression {
                 algorithm: "snappy".into(),
             },
+            meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
+                vec![
+                    "http://127.0.0.1:2379".to_string(),
+                    "http://127.0.0.1:22379".to_string(),
+                    "http://127.0.0.1:32379".to_string(),
+                ],
+                "someprefix".to_string(),
+                None,
+                None,
+            )),
         };
 
         let expected = r#"data_shards = 10
@@ -372,6 +399,13 @@ key = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [compression]
 algorithm = "snappy"
+
+[meta]
+type = "etcd"
+
+[meta.config]
+endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
+prefix = "someprefix"
 
 [[groups]]
 [[groups.backends]]
@@ -443,6 +477,16 @@ password = "supersecretpass"
             compression: super::Compression {
                 algorithm: "snappy".into(),
             },
+            meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
+                vec![
+                    "http://127.0.0.1:2379".to_string(),
+                    "http://127.0.0.1:22379".to_string(),
+                    "http://127.0.0.1:32379".to_string(),
+                ],
+                "someprefix".to_string(),
+                None,
+                None,
+            )),
         };
 
         let input = r#"data_shards = 10
@@ -456,6 +500,13 @@ key = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [compression]
 algorithm = "snappy"
+
+[meta]
+type = "etcd"
+
+[meta.config]
+endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
+prefix = "someprefix"
 
 [[groups]]
 [[groups.backends]]

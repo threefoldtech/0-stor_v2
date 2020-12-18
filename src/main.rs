@@ -7,7 +7,7 @@ use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use tokio_compat_02::FutureExt;
 use zstor_v2::compression::{Compressor, Snappy};
-use zstor_v2::config::Config;
+use zstor_v2::config::{Config, Meta};
 use zstor_v2::encryption::{Encryptor, AESGCM};
 use zstor_v2::erasure::Encoder;
 use zstor_v2::etcd::Etcd;
@@ -20,18 +20,16 @@ use zstor_v2::zdb::Zdb;
 ///
 /// Compresses, encrypts, and erasure codes data according to the provided config file and options.
 /// Data is send to a specified group of backends.
-struct Rstor {
-    /// Endpoints for the etcd cluster to store the metadata
-    ///
-    /// Endpoints are passed as a single comma separated string
-    #[structopt(long, short)]
-    etcd_endpoints: String,
-    /// Prefix to use when storing metadata
-    ///
-    /// The exact key will be the prefix and a hex encoded 16 byte blake2b hash of the full path of
-    /// the file to operate on, i.e. "/{prefix}/{hex_hash}"
-    #[structopt(name = "prefix", long, short)]
-    etcd_prefix: String,
+struct Opts {
+    /// Path to the config file to use for this invocation.
+    #[structopt(
+        name = "config",
+        default_value = "config.toml",
+        long,
+        short,
+        parse(from_os_str)
+    )]
+    config: std::path::PathBuf,
     #[structopt(subcommand)]
     cmd: Cmd,
 }
@@ -43,15 +41,6 @@ enum Cmd {
     /// The data is compressed and encrypted according to the config before being encoded. Successful
     /// termination of this command means all shars have been written.
     Store {
-        /// Path to the config file to use for this invocation.
-        #[structopt(
-            name = "config",
-            default_value = "config.toml",
-            long,
-            short,
-            parse(from_os_str)
-        )]
-        config: std::path::PathBuf,
         /// Path to the file to store
         ///
         /// The path to the file to store. The path is used to create a metadata key (by hashing
@@ -67,15 +56,6 @@ enum Cmd {
     /// re-encoded and redistributed over the backends in the current config file. This operation
     /// will fail if insufficient backends are available.
     Rebuild {
-        /// Path to the config file to use for this invocation.
-        #[structopt(
-            name = "config",
-            default_value = "config.toml",
-            long,
-            short,
-            parse(from_os_str)
-        )]
-        config: std::path::PathBuf,
         /// Path to the file to rebuild
         ///
         /// The path to the file to rebuild. The path is used to create a metadata key (by hashing
@@ -106,30 +86,23 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     rt.block_on(async {
-        let mut opts = Rstor::from_args();
+        let mut opts = Opts::from_args();
         simple_logger::SimpleLogger::new()
             .with_level(log::LevelFilter::Info)
             .init()
             .unwrap();
 
-        let cluster = Etcd::new(
-            opts.etcd_endpoints
-                .split(",")
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-        )
-        .compat()
-        .await?;
+        let cfg = read_cfg(&opts.config)?;
+
+        // Get from config if not present
+        let cluster = match cfg.meta() {
+            Meta::ETCD(etcdconf) => Etcd::new(etcdconf).compat().await?,
+        };
 
         match opts.cmd {
-            Cmd::Store {
-                ref config,
-                ref mut file,
-            } => {
+            Cmd::Store { ref mut file } => {
                 // TODO: check that `file` points to file and not a dir
                 trace!("encoding file {:?}", file);
-                let cfg = read_cfg(config)?;
 
                 // start reading file to encrypt
                 trace!("loading file data");
@@ -149,10 +122,7 @@ fn main() -> Result<(), String> {
                 trace!("encrypted size: {} bytes", encrypted.len());
 
                 let metadata = store_data(encrypted, &cfg).await?;
-                cluster
-                    .save_meta(&opts.etcd_prefix, &file, &metadata)
-                    .compat()
-                    .await?;
+                cluster.save_meta(&file, &metadata).compat().await?;
 
                 // for file meta
                 // let filename = file
@@ -169,7 +139,7 @@ fn main() -> Result<(), String> {
                 //     .map_err(|e| e.to_string())?;
             }
             Cmd::Retrieve { ref file } => {
-                let metadata = cluster.load_meta(&opts.etcd_prefix, file).compat().await?;
+                let metadata = cluster.load_meta(file).compat().await?;
                 let decoded = recover_data(&metadata).await?;
 
                 let encryptor = AESGCM::new(metadata.encryption().key().clone());
@@ -181,20 +151,12 @@ fn main() -> Result<(), String> {
                 let mut out = File::create(&file).map_err(|e| e.to_string())?;
                 out.write_all(&original).map_err(|e| e.to_string())?;
             }
-            Cmd::Rebuild {
-                ref config,
-                ref file,
-            } => {
-                let cfg = read_cfg(&config)?;
-
-                let metadata = cluster.load_meta(&opts.etcd_prefix, file).compat().await?;
+            Cmd::Rebuild { ref file } => {
+                let metadata = cluster.load_meta(file).compat().await?;
                 let decoded = recover_data(&metadata).await?;
 
                 let metadata = store_data(decoded, &cfg).await?;
-                cluster
-                    .save_meta(&opts.etcd_prefix, &file, &metadata)
-                    .compat()
-                    .await?;
+                cluster.save_meta(&file, &metadata).compat().await?;
             }
         };
 
