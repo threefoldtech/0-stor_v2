@@ -101,7 +101,12 @@ fn main() -> Result<(), String> {
 
         match opts.cmd {
             Cmd::Store { ref mut file } => {
-                // TODO: check that `file` points to file and not a dir
+                if !std::fs::metadata(&file)
+                    .map_err(|e| e.to_string())?
+                    .is_file()
+                {
+                    return Err("only files can be stored".to_string());
+                }
                 trace!("encoding file {:?}", file);
 
                 // start reading file to encrypt
@@ -123,20 +128,6 @@ fn main() -> Result<(), String> {
 
                 let metadata = store_data(encrypted, &cfg).await?;
                 cluster.save_meta(&file, &metadata).compat().await?;
-
-                // for file meta
-                // let filename = file
-                //     .file_name()
-                //     .ok_or("could not load file name".to_string())?
-                //     .to_str()
-                //     .ok_or("could not convert filename to standard string".to_string())?;
-                // let metaname = format!("{}.meta", filename);
-                // file.set_file_name(metaname);
-
-                // let mut metafile = File::create(&file).map_err(|e| e.to_string())?;
-                // metafile
-                //     .write_all(&toml::to_vec(&metadata).map_err(|e| e.to_string())?)
-                //     .map_err(|e| e.to_string())?;
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(file).compat().await?;
