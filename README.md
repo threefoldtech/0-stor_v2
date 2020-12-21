@@ -142,13 +142,13 @@ in the working directory.
 
 - Store file:
 
-`./target/debug/zstor_v2 -e "http://127.0.0.1:2379,http://127.0.0.1:22379,http://127.0.0.1:32379" -p me store -f file.txt`
+`./target/debug/zstor_v2 store -f file.txt`
 
 - Retrieve file:
 
-`./target/debug/zstor_v2 -e "http://127.0.0.1:2379,http://127.0.0.1:22379,http://127.0.0.1:32379" -p me retrieve -f file.txt`
+`./target/debug/zstor_v2 retrieve -f file.txt`
 
 - Rebuild file (with possibly new configuration)
 
-`./target/debug/zstor_v2 -e "http://127.0.0.1:2379,http://127.0.0.1:22379,http://127.0.0.1:32379" -p me rebuild -f file.txt`
+`./target/debug/zstor_v2 rebuild -f file.txt`
 
