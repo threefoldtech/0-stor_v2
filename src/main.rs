@@ -86,18 +86,34 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     rt.block_on(async {
-        let mut opts = Opts::from_args();
+        let opts = Opts::from_args();
         pretty_env_logger::init();
 
         let cfg = read_cfg(&opts.config)?;
 
         // Get from config if not present
         let cluster = match cfg.meta() {
-            Meta::ETCD(etcdconf) => Etcd::new(etcdconf).compat().await?,
+            Meta::ETCD(etcdconf) => {
+                Etcd::new(etcdconf, cfg.virtual_root().clone())
+                    .compat()
+                    .await?
+            }
         };
 
         match opts.cmd {
-            Cmd::Store { ref mut file } => {
+            Cmd::Store { ref file } => {
+                // start by canonicalizing the path
+                let file = canonicalize_path(&file)?;
+                // make sure file is in root dir
+                if let Some(ref root) = cfg.virtual_root() {
+                    if !file.starts_with(root) {
+                        return Err(format!(
+                            "attempting to store file which is not in the file tree rooted at {}",
+                            root.to_string_lossy()
+                        ));
+                    }
+                }
+
                 if !std::fs::metadata(&file)
                     .map_err(|e| e.to_string())?
                     .is_file()
@@ -136,7 +152,15 @@ fn main() -> Result<(), String> {
                 let original = Snappy.decompress(&decrypted)?;
 
                 // create the file
-                let mut out = File::create(&file).map_err(|e| e.to_string())?;
+                // Ideally we would do an if let on just the argument to create, but due to
+                // lifetimes that is not possible.
+                let mut out = if let Some(ref root) = cfg.virtual_root() {
+                    File::create(root.join(&file))
+                } else {
+                    File::create(file)
+                }
+                .map_err(|e| e.to_string())?;
+
                 out.write_all(&original).map_err(|e| e.to_string())?;
             }
             Cmd::Rebuild { ref file } => {
@@ -236,4 +260,27 @@ fn read_cfg(config: &std::path::PathBuf) -> Result<Config, String> {
     cfg.validate()?;
     trace!("config validated");
     Ok(cfg)
+}
+
+/// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
+/// work on files which don't exist by creating a dummy file if the file does not exist,
+/// canonicalizing the path, and removing the dummy file.
+fn canonicalize_path(path: &std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+    // annoyingly, the path needs to exist for this to work. So here's the plan:
+    // first we verify that it is actualy there
+    // if it is, no problem
+    // else, create a temp file, canonicalize that path, and remove the temp file again
+    Ok(match std::fs::metadata(path) {
+        Ok(_) => path.canonicalize().map_err(|e| e.to_string())?,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                std::fs::File::create(path)
+                    .map_err(|e| format!("could not create temp file: {}", e))?;
+                let cp = path.canonicalize().map_err(|e| e.to_string())?;
+                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                cp
+            }
+            _ => return Err(e.to_string()),
+        },
+    })
 }

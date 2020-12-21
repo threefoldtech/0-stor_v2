@@ -22,6 +22,9 @@ pub struct Config {
     /// The amount of nodes that can be lost in every group while still being able to recover the
     /// original data.
     redundant_nodes: usize,
+    /// virtual root on the filesystem to use, this path will be removed from all files saved. If
+    /// a file path is loaded, the path will be interpreted as relative to this directory
+    root: Option<std::path::PathBuf>,
     /// configuration to use for the encryption stage
     encryption: Encryption,
     /// configuration to use for the compression stage
@@ -107,6 +110,11 @@ impl Config {
     /// Get the amount of parity shards to use for the encoding
     pub fn parity_shards(&self) -> usize {
         self.parity_shards
+    }
+
+    /// Return the virtual root set in the config, if any
+    pub fn virtual_root(&self) -> &Option<std::path::PathBuf> {
+        &self.root
     }
 
     /// Return the encryption config to use for encoding this object.
@@ -376,6 +384,7 @@ mod tests {
             compression: super::Compression {
                 algorithm: "snappy".into(),
             },
+            root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
                 vec![
                     "http://127.0.0.1:2379".to_string(),
@@ -392,6 +401,7 @@ mod tests {
 parity_shards = 5
 redundant_groups = 1
 redundant_nodes = 1
+root = "/virtualroot"
 
 [encryption]
 algorithm = "AES"
@@ -477,6 +487,7 @@ password = "supersecretpass"
             compression: super::Compression {
                 algorithm: "snappy".into(),
             },
+            root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
                 vec![
                     "http://127.0.0.1:2379".to_string(),
@@ -493,6 +504,7 @@ password = "supersecretpass"
 parity_shards = 5
 redundant_groups = 1
 redundant_nodes = 1
+root = "/virtualroot"
 
 [encryption]
 algorithm = "AES"

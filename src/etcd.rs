@@ -4,7 +4,7 @@ use blake2::{
     VarBlake2b,
 };
 use etcd_rs::{Client, ClientConfig, KeyRange, PutRequest, RangeRequest};
-use log::{info, trace};
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -15,6 +15,7 @@ use std::path::PathBuf;
 pub struct Etcd {
     client: Client,
     prefix: String,
+    virtual_root: Option<PathBuf>,
 }
 
 /// Configuration options for an etcd cluster
@@ -29,7 +30,7 @@ pub struct EtcdConfig {
 
 impl Etcd {
     /// Create a new client connecting to the cluster with the given endpoints
-    pub async fn new(cfg: &EtcdConfig) -> Result<Self, String> {
+    pub async fn new(cfg: &EtcdConfig, virtual_root: Option<PathBuf>) -> Result<Self, String> {
         let client = Client::connect(ClientConfig {
             endpoints: cfg.endpoints.clone(),
             auth: match cfg {
@@ -47,6 +48,7 @@ impl Etcd {
         Ok(Etcd {
             client,
             prefix: cfg.prefix.clone(),
+            virtual_root,
         })
     }
 
@@ -57,13 +59,13 @@ impl Etcd {
         let enc_meta =
             toml::to_vec(meta).map_err(|e| format!("could not encode metadata: {}", e))?;
         // hash
-        let key = build_key(&self.prefix, path)?;
+        let key = self.build_key(path)?;
         self.write_value(&key, &enc_meta).await
     }
 
     /// loads the metadata for a given path and prefix
     pub async fn load_meta(&self, path: &PathBuf) -> Result<MetaData, String> {
-        let key = build_key(&self.prefix, path)?;
+        let key = self.build_key(path)?;
         Ok(toml::from_slice(
             &self
                 .read_value(&key)
@@ -73,8 +75,6 @@ impl Etcd {
         .map_err(|e| e.to_string())?)
     }
 
-    // TODO: save and load config
-    //
     // helper functions to read and write a value
     async fn write_value(&self, key: &str, value: &[u8]) -> Result<(), String> {
         self.client
@@ -100,6 +100,59 @@ impl Etcd {
                 }
             })
     }
+
+    // hash a path using blake2b with 16 bytes of output, and hex encode the result
+    // the path is canonicalized before encoding so the full path is used
+    fn build_key(&self, path: &PathBuf) -> Result<String, String> {
+        // annoyingly, the path needs to exist for this to work. So here's the plan:
+        // first we verify that it is actualy there
+        // if it is, no problem
+        // else, create a temp file, canonicalize that path, and remove the temp file again
+        let canonical_path = match fs::metadata(path) {
+            Ok(_) => path.canonicalize().map_err(|e| e.to_string())?,
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => {
+                    fs::File::create(path)
+                        .map_err(|e| format!("could not create temp file: {}", e))?;
+                    let cp = path.canonicalize().map_err(|e| e.to_string())?;
+                    fs::remove_file(path).map_err(|e| e.to_string())?;
+                    cp
+                }
+                _ => return Err(e.to_string()),
+            },
+        };
+
+        // now strip the virtual_root, if one is set
+        let actual_path = if let Some(ref virtual_root) = self.virtual_root {
+            trace!("stripping path prefix {:?}", virtual_root);
+            canonical_path
+                .strip_prefix(virtual_root)
+                .map_err(|e| format!("could not strip path prefix: {}", e))?
+        } else {
+            trace!("maintaining path");
+            canonical_path.as_path()
+        };
+
+        trace!("hashing path {:?}", actual_path);
+        // The unwrap here is safe since we know that 16 is a valid output size
+        let mut hasher = VarBlake2b::new(16).unwrap();
+        // TODO: might not need the move to a regular &str
+        hasher.update(
+            actual_path
+                .as_os_str()
+                .to_str()
+                .ok_or("could not interpret path as utf-8 str")?
+                .as_bytes(),
+        );
+
+        // TODO: is there a better way to do this?
+        let mut r = String::new();
+        hasher.finalize_variable(|resp| r = hex::encode(resp));
+        trace!("hashed path: {}", r);
+        let fp = format!("/{}/{}", self.prefix, r);
+        debug!("full path: {}", fp);
+        Ok(fp)
+    }
 }
 
 impl EtcdConfig {
@@ -117,44 +170,4 @@ impl EtcdConfig {
             password,
         }
     }
-}
-
-// hash a path using blake2b with 16 bytes of output, and hex encode the result
-// the path is canonicalized before encoding so the full path is used
-fn build_key(prefix: &str, path: &PathBuf) -> Result<String, String> {
-    // annoyingly, the path needs to exist for this to work. So here's the plan:
-    // first we verify that it is actualy there
-    // if it is, no problem
-    // else, create a temp file, canonicalize that path, and remove the temp file again
-    let canonical_path = match fs::metadata(path) {
-        Ok(_) => path.canonicalize().map_err(|e| e.to_string())?,
-        Err(e) => match e.kind() {
-            io::ErrorKind::NotFound => {
-                fs::File::create(path).map_err(|e| format!("could not create temp file: {}", e))?;
-                let cp = path.canonicalize().map_err(|e| e.to_string())?;
-                fs::remove_file(path).map_err(|e| e.to_string())?;
-                cp
-            }
-            _ => return Err(e.to_string()),
-        },
-    };
-    trace!("hashing path {:?}", canonical_path);
-    // The unwrap here is safe since we know that 16 is a valid output size
-    let mut hasher = VarBlake2b::new(16).unwrap();
-    // TODO: might not need the move to a regular &str
-    hasher.update(
-        canonical_path
-            .as_os_str()
-            .to_str()
-            .ok_or("could not interpret path as utf-8 str")?
-            .as_bytes(),
-    );
-
-    // TODO: is there a better way to do this?
-    let mut r = String::new();
-    hasher.finalize_variable(|resp| r = hex::encode(resp));
-    trace!("hashed path: {}", r);
-    let fp = format!("/{}/{}", prefix, r);
-    info!("full path: {}", fp);
-    Ok(fp)
 }

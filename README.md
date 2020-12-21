@@ -39,6 +39,7 @@ data_shards = 2
 parity_shards = 1
 redundant_groups = 0
 redundant_nodes = 0
+root = "/some/root"
 
 [encryption]
 algorithm = "AES"
@@ -84,6 +85,15 @@ The backends are automatically selected when writing data to guarantee data reco
 according to these options. If no vaible backend distribution can be generated,
 the program will exit.
 
+- `root`: Optional directory to use as a virtual root for all the files. If set,
+this prefix will be stripped from the full path of the files uploaded or downloaded.
+Example: assume we upload file `/mnt/somedir/somesubdir/file`, and set the `root`
+to `/mnt/somedir`. The key in the metastorage (if supported) will now be built
+from `somesubdir/file`, since the `/mnt/somedir` directories are stripped. Now,
+if you download the file again (possibly on a different machine), with `/mnt/someotherdir`
+as root, the file can be downloaded by given `/mnt/someotherdir/somesubdir/file`
+as argument to the `retrieve` command.
+
 - `encryption`: encryption configuration
   - `algorithm`: the encryption algorithm to use, currently only `AES` is supported
   - `key`: hex encoded symmetric key to use for encryption, must be 32 bytes (64
@@ -101,6 +111,15 @@ IPv6 are supported. Optionally, a `namespace` can be specified, in which case th
 namespace will be used to write the data. If a namespace is given, you can also
 optionally specify a `password`. In this case, the namespace will be opened via
 means of `SELECT SECURE` (old zdbs might not support this)
+
+- `meta`: The metadata system ot use. Currently `etcd` is the only one supported
+
+- `meta.config`: Configuration for the metadata backend that is used, if required.
+Since only etcd is supported right now, it always needs to be present.
+For `etcd`, there are 2 fields (both required):
+`endpoints`: A list of http listening endpoints for the cluster nodes
+`prefix`: The prefix to use for the keys in etcd. See the `Metadata` section for
+more info.
 
 ## Metadata
 
