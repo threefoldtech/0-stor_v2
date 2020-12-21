@@ -16,9 +16,9 @@ fn main() {
             .unwrap();
 
         let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let key = db.set(None, &data).await.unwrap();
+        let key = db.set(&data).await.unwrap();
 
-        let retrieved = db.get(key).await.unwrap().unwrap();
+        let retrieved = db.get(&key).await.unwrap().unwrap();
 
         assert_eq!(&retrieved, &data);
     });

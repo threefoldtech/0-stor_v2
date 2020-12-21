@@ -23,7 +23,7 @@ pub struct MetaData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShardInfo {
     shard_idx: usize,
-    key: Key,
+    keys: Vec<Key>,
     #[serde(flatten)]
     ci: ZdbConnectionInfo,
 }
@@ -80,8 +80,12 @@ impl MetaData {
 impl ShardInfo {
     /// Create a new shardinfo, from the connectioninfo for the zdb (namespace) and the actual key
     /// in which the data is stored
-    pub fn new(shard_idx: usize, key: Key, ci: ZdbConnectionInfo) -> Self {
-        Self { shard_idx, key, ci }
+    pub fn new(shard_idx: usize, keys: Vec<Key>, ci: ZdbConnectionInfo) -> Self {
+        Self {
+            shard_idx,
+            keys,
+            ci,
+        }
     }
 
     /// Get the index of this shard in the encoding sequence
@@ -96,7 +100,7 @@ impl ShardInfo {
     }
 
     /// Get the key used to store the shard
-    pub fn key(&self) -> Key {
-        self.key
+    pub fn key(&self) -> &[Key] {
+        &self.keys
     }
 }

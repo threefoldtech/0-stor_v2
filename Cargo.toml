@@ -31,6 +31,7 @@ log = { version = "0.4", features = ["release_max_level_debug"] }
 redis = { version = "0.18", features = ["aio", "tokio-comp"] }
 sha-1 = "0.9"
 simple_logger = "1.11"
+pretty_env_logger = "0.4"
 structopt = "0.3"
 tokio = { version = "0.3", features = ["rt", "macros"] }
 tokio-compat-02 = "0.1"

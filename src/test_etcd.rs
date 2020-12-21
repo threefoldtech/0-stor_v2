@@ -51,7 +51,7 @@ fn main() {
         );
         data.add_shard(ShardInfo::new(
             0,
-            0,
+            vec![0],
             ZdbConnectionInfo::new("[::1]:9900".parse().unwrap(), None, None),
         ));
 

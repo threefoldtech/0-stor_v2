@@ -9,6 +9,8 @@ use std::net::SocketAddr;
 /// The type of key's used in zdb in sequential mode
 pub type Key = u32;
 
+const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+
 // TODO impl debug
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
 /// the remote closed). No reconnection is attempted.
@@ -57,15 +59,12 @@ impl Zdb {
             passwd: None,
         };
 
-        trace!("{:#?}", ci);
         let client = redis::Client::open(ci).map_err(|e| e.to_string())?;
         let mut conn = client
             .get_async_connection()
             .await
             .map_err(|e| e.to_string())?;
         trace!("opened connection to db");
-        //  conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        //      .map_err(|e| e.to_string())?;
         trace!("pinging db");
         redis::cmd("PING")
             .query_async(&mut conn)
@@ -102,40 +101,47 @@ impl Zdb {
         Ok(Self { conn })
     }
 
-    /// Store some data in the zdb. The generated key is returned for later retrieval.
-    pub async fn set(&mut self, key: Option<Key>, data: &[u8]) -> Result<Key, String> {
+    /// Store some data in the zdb. The generated keys are returned for later retrieval.
+    /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
+    /// so we internally chunk the data.
+    pub async fn set(&mut self, data: &[u8]) -> Result<Vec<Key>, String> {
         trace!("storing data in zdb (length: {})", data.len());
-        let raw_key: Vec<u8> = redis::cmd("SET")
-            .arg(if let Some(key) = key {
-                trace!("overwriting existing key {}", key);
-                Vec::from(&key.to_le_bytes()[..])
-            } else {
-                Vec::new()
-            })
-            .arg(data)
-            .query_async(&mut self.conn)
-            .await
-            .map_err(|e| e.to_string())?;
 
-        // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
-        // a key
-        match key {
-            Some(key) => Ok(key),
-            None => {
-                debug_assert!(raw_key.len() == std::mem::size_of::<Key>());
-                Ok(read_le_key(&raw_key))
-            }
+        let mut keys =
+            Vec::with_capacity((data.len() as f64 / MAX_ZDB_CHUNK_SIZE as f64).ceil() as usize);
+
+        for chunk in data.chunks(MAX_ZDB_CHUNK_SIZE) {
+            trace!("writing chunk of size {}", chunk.len());
+            let raw_key: Vec<u8> = redis::cmd("SET")
+                .arg::<&[u8]>(&[])
+                .arg(chunk)
+                .query_async(&mut self.conn)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
+            // a key
+            debug_assert!(raw_key.len() == std::mem::size_of::<Key>());
+            keys.push(read_le_key(&raw_key))
         }
+        Ok(keys)
     }
 
-    /// Retrieve some previously stored data with its key
-    pub async fn get(&mut self, key: Key) -> Result<Option<Vec<u8>>, String> {
-        trace!("loading data at key {}", key);
-        Ok(redis::cmd("GET")
-            .arg(&key.to_le_bytes())
-            .query_async(&mut self.conn)
-            .await
-            .map_err(|e| e.to_string())?)
+    /// Retrieve some previously stored data with its keys
+    pub async fn get(&mut self, keys: &[Key]) -> Result<Option<Vec<u8>>, String> {
+        let mut data: Vec<u8> = Vec::new();
+        for key in keys.into_iter() {
+            trace!("loading data at key {}", key);
+            data.extend_from_slice(
+                &redis::cmd("GET")
+                    .arg(&key.to_le_bytes())
+                    .query_async::<_, Option<Vec<u8>>>(&mut self.conn)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or(format!("missing key {}", key))?,
+            );
+        }
+        Ok(Some(data))
     }
 }
 

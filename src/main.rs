@@ -87,10 +87,7 @@ fn main() -> Result<(), String> {
 
     rt.block_on(async {
         let mut opts = Opts::from_args();
-        simple_logger::SimpleLogger::new()
-            .with_level(log::LevelFilter::Info)
-            .init()
-            .unwrap();
+        pretty_env_logger::init();
 
         let cfg = read_cfg(&opts.config)?;
 
@@ -207,8 +204,8 @@ async fn store_data(data: Vec<u8>, cfg: &Config) -> Result<MetaData, String> {
     for (backend, (shard_idx, shard)) in backends.into_iter().zip(shards.into_iter().enumerate()) {
         handles.push(tokio::spawn(async move {
             let mut db = Zdb::new(backend.clone()).await?;
-            let key = db.set(None, &shard).await?;
-            Ok(ShardInfo::new(shard_idx, key, backend.clone()))
+            let keys = db.set(&shard).await?;
+            Ok(ShardInfo::new(shard_idx, keys, backend.clone()))
         }));
     }
 
