@@ -47,6 +47,13 @@ key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 [compression]
 algorithm = "snappy"
 
+[meta]
+type = "etcd"
+
+[meta.config]
+endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
+prefix = "someprefix"
+
 [[groups]]
 [[groups.backends]]
 address = "[::1]:19900"
