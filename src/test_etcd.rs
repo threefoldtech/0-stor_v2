@@ -59,7 +59,7 @@ fn main() {
         let rec = cluster.load_meta(&path).compat().await.unwrap();
 
         log::info!("comparing data");
-        assert_eq!(&rec, &data);
+        assert_eq!(&rec.unwrap(), &data);
         log::info!("compared data");
     });
 }

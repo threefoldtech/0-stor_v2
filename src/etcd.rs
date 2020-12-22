@@ -64,15 +64,16 @@ impl Etcd {
     }
 
     /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&self, path: &PathBuf) -> Result<MetaData, String> {
+    pub async fn load_meta(&self, path: &PathBuf) -> Result<Option<MetaData>, String> {
         let key = self.build_key(path)?;
-        Ok(toml::from_slice(
-            &self
-                .read_value(&key)
-                .await?
-                .ok_or("no meta found for path".to_string())?,
-        )
-        .map_err(|e| e.to_string())?)
+        Ok(if let Some(value) = self.read_value(&key).await? {
+            Some(
+                toml::from_slice(&value)
+                    .map_err(|e| format!("could not decode metadata: {}", e))?,
+            )
+        } else {
+            None
+        })
     }
 
     // helper functions to read and write a value

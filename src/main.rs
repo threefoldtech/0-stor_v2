@@ -78,6 +78,17 @@ enum Cmd {
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: std::path::PathBuf,
     },
+    /// Check if a file exists in the backend
+    ///
+    /// Checks if a valid metadata entry is available for the path. If it is, the hex of the file
+    /// checksum is printed, as well as the resolved path
+    Check {
+        /// Path of the file to check.
+        ///
+        /// The original path which was used to store the file.
+        #[structopt(name = "file", long, short, parse(from_os_str))]
+        file: std::path::PathBuf,
+    },
 }
 
 fn main() -> Result<(), String> {
@@ -148,7 +159,11 @@ fn main() -> Result<(), String> {
                 cluster.save_meta(&file, &metadata).compat().await?;
             }
             Cmd::Retrieve { ref file } => {
-                let metadata = cluster.load_meta(file).compat().await?;
+                let metadata = cluster
+                    .load_meta(file)
+                    .compat()
+                    .await?
+                    .ok_or("no metadata found for file")?;
                 let decoded = recover_data(&metadata).await?;
 
                 let encryptor = AESGCM::new(metadata.encryption().key().clone());
@@ -169,11 +184,35 @@ fn main() -> Result<(), String> {
                 out.write_all(&original).map_err(|e| e.to_string())?;
             }
             Cmd::Rebuild { ref file } => {
-                let metadata = cluster.load_meta(file).compat().await?;
+                let metadata = cluster
+                    .load_meta(file)
+                    .compat()
+                    .await?
+                    .ok_or("no metadata found for file")?;
                 let decoded = recover_data(&metadata).await?;
 
                 let metadata = store_data(decoded, metadata.checksum().clone(), &cfg).await?;
                 cluster.save_meta(&file, &metadata).compat().await?;
+            }
+            Cmd::Check { ref file } => {
+                match cluster.load_meta(file).compat().await? {
+                    Some(metadata) => {
+                        let file = canonicalize_path(&file)?;
+                        // strip the virtual_root, if one is set
+                        let actual_path = if let Some(ref virtual_root) = cfg.virtual_root() {
+                            file.strip_prefix(virtual_root)
+                                .map_err(|e| format!("could not strip path prefix: {}", e))?
+                        } else {
+                            file.as_path()
+                        };
+                        println!(
+                            "{}\t{}",
+                            hex::encode(metadata.checksum()),
+                            actual_path.to_string_lossy()
+                        );
+                    }
+                    None => std::process::exit(1),
+                };
             }
         };
 
