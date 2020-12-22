@@ -38,6 +38,7 @@ fn main() {
         let mut data = MetaData::new(
             1,
             2,
+            [0; 16],
             Encryption::new(
                 "AES",
                 &SymmetricKey::new([
@@ -49,6 +50,7 @@ fn main() {
         );
         data.add_shard(ShardInfo::new(
             0,
+            [0; 16],
             vec![0],
             ZdbConnectionInfo::new("[::1]:9900".parse().unwrap(), None, None),
         ));

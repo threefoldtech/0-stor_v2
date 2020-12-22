@@ -1,5 +1,11 @@
+use crate::meta::{Checksum, CHECKSUM_LENGTH};
+use blake2::{
+    digest::{Update, VariableOutput},
+    VarBlake2b,
+};
 use log::trace;
 use reed_solomon_erasure::galois_8::ReedSolomon;
+use std::convert::TryInto;
 
 /// A data encoder is responsible for encoding original data into multiple shards, and decoding
 /// multiple shards back to the original data, if sufficient shards are available.
@@ -8,6 +14,10 @@ pub struct Encoder {
     data_shards: usize,
     parity_shards: usize,
 }
+
+/// A data shard resulting from encoding data
+#[derive(Debug, Clone)]
+pub struct Shard(Vec<u8>);
 
 impl Encoder {
     /// Create a new encoder. There can be at most 255 data shards.
@@ -33,7 +43,7 @@ impl Encoder {
     /// Erasure encode data using ReedSolomon encoding over the galois 8 field. This returns the
     /// shards created by the encoding. The order of the shards is important to later retrieve
     /// the values
-    pub fn encode(&self, mut data: Vec<u8>) -> Vec<Vec<u8>> {
+    pub fn encode(&self, mut data: Vec<u8>) -> Vec<Shard> {
         trace!("encoding data ({} bytes)", data.len());
         // pkcs7 padding
         let padding_len = self.data_shards - data.len() % self.data_shards;
@@ -42,16 +52,16 @@ impl Encoder {
         // the constraints on the amount of data shards when a new encoder is created.
         data.extend_from_slice(&vec![padding_len as u8; padding_len]);
         // data shards
-        let mut shards: Vec<Vec<u8>> = data
+        let mut shards: Vec<Shard> = data
             .chunks_exact(data.len() / self.data_shards) // we already padded so this is always exact
-            .map(Vec::from)
+            .map(|chunk| Shard::from(Vec::from(chunk)))
             .collect();
         // add parity shards
         // NOTE: we don't need to do a float division with ceiling, since integer division
         // essentially always rounds down, and we always add padding
         trace!("preparing parity shards");
         shards.extend(vec![
-            vec![0; data.len() / self.data_shards]; // data is padded so this is a perfect division
+            Shard::from(vec![0; data.len() / self.data_shards]); // data is padded so this is a perfect division
             self.parity_shards
         ]);
 
@@ -103,6 +113,57 @@ impl Encoder {
     }
 }
 
+impl std::ops::Deref for Shard {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for Shard {
+    fn from(data: Vec<u8>) -> Self {
+        Shard(data)
+    }
+}
+
+impl AsRef<[u8]> for Shard {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsMut<[u8]> for Shard {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl Shard {
+    /// Create a new shard from some data
+    pub fn new(data: Vec<u8>) -> Self {
+        Shard(data)
+    }
+
+    /// Generate a checksum for the data in the shard
+    pub fn checksum(&self) -> Checksum {
+        let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
+        hasher.update(&self.0);
+
+        // expect is safe due to the static size, which is known to be valid
+        hasher
+            .finalize_boxed()
+            .as_ref()
+            .try_into()
+            .expect("Invalid hash size returned")
+    }
+
+    /// Cosume the shard, returning the actual data
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Encoder;
@@ -132,7 +193,10 @@ mod tests {
         }
         shard_to_erase.shuffle(&mut rand::thread_rng());
 
-        let recovered: Vec<Option<Vec<u8>>> = shards.into_iter().map(Some).collect();
+        let recovered: Vec<Option<Vec<u8>>> = shards
+            .into_iter()
+            .map(|shard| Some(shard.into_inner()))
+            .collect();
 
         let orig_res = encoder.decode(recovered);
 

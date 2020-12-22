@@ -1,5 +1,7 @@
+use blake2::{digest::VariableOutput, VarBlake2b};
 use futures::future::{join_all, try_join_all};
 use log::{debug, info, trace};
+use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Read, Write};
 use structopt::StructOpt;
@@ -11,7 +13,7 @@ use zstor_v2::config::{Config, Meta};
 use zstor_v2::encryption::{Encryptor, AESGCM};
 use zstor_v2::erasure::Encoder;
 use zstor_v2::etcd::Etcd;
-use zstor_v2::meta::{MetaData, ShardInfo};
+use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::Zdb;
 
 #[derive(StructOpt, Debug)]
@@ -104,6 +106,7 @@ fn main() -> Result<(), String> {
             Cmd::Store { ref file } => {
                 // start by canonicalizing the path
                 let file = canonicalize_path(&file)?;
+                trace!("encoding file {:?}", file);
                 // make sure file is in root dir
                 if let Some(ref root) = cfg.virtual_root() {
                     if !file.starts_with(root) {
@@ -120,7 +123,9 @@ fn main() -> Result<(), String> {
                 {
                     return Err("only files can be stored".to_string());
                 }
-                trace!("encoding file {:?}", file);
+
+                let file_checksum = checksum(&file)?;
+                debug!("file checksum: {}", hex::encode(file_checksum));
 
                 // start reading file to encrypt
                 trace!("loading file data");
@@ -139,7 +144,7 @@ fn main() -> Result<(), String> {
                 let encrypted = encryptor.encrypt(&compressed)?;
                 trace!("encrypted size: {} bytes", encrypted.len());
 
-                let metadata = store_data(encrypted, &cfg).await?;
+                let metadata = store_data(encrypted, file_checksum, &cfg).await?;
                 cluster.save_meta(&file, &metadata).compat().await?;
             }
             Cmd::Retrieve { ref file } => {
@@ -167,7 +172,7 @@ fn main() -> Result<(), String> {
                 let metadata = cluster.load_meta(file).compat().await?;
                 let decoded = recover_data(&metadata).await?;
 
-                let metadata = store_data(decoded, &cfg).await?;
+                let metadata = store_data(decoded, metadata.checksum().clone(), &cfg).await?;
                 cluster.save_meta(&file, &metadata).compat().await?;
             }
         };
@@ -215,7 +220,7 @@ async fn recover_data(metadata: &MetaData) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
-async fn store_data(data: Vec<u8>, cfg: &Config) -> Result<MetaData, String> {
+async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> Result<MetaData, String> {
     let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
     let shards = encoder.encode(data);
     debug!("data encoded");
@@ -229,13 +234,19 @@ async fn store_data(data: Vec<u8>, cfg: &Config) -> Result<MetaData, String> {
         handles.push(tokio::spawn(async move {
             let mut db = Zdb::new(backend.clone()).await?;
             let keys = db.set(&shard).await?;
-            Ok(ShardInfo::new(shard_idx, keys, backend.clone()))
+            Ok(ShardInfo::new(
+                shard_idx,
+                shard.checksum(),
+                keys,
+                backend.clone(),
+            ))
         }));
     }
 
     let mut metadata = MetaData::new(
         cfg.data_shards(),
         cfg.parity_shards(),
+        checksum,
         cfg.encryption().clone(),
         cfg.compression().clone(),
     );
@@ -283,4 +294,20 @@ fn canonicalize_path(path: &std::path::PathBuf) -> Result<std::path::PathBuf, St
             _ => return Err(e.to_string()),
         },
     })
+}
+
+/// Get a 16 byte blake2b checksum of a file
+fn checksum(file: &std::path::PathBuf) -> Result<Checksum, String> {
+    trace!("getting file checksum");
+    let mut file = File::open(file).map_err(|e| e.to_string())?;
+    // The unwrap here is safe since we know that 16 is a valid output size
+    let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("failed to get file hash: {}", e))?;
+
+    // expect is safe due to the static size, which is known to be valid
+    Ok(hasher
+        .finalize_boxed()
+        .as_ref()
+        .try_into()
+        .expect("Invalid hash size returned"))
 }

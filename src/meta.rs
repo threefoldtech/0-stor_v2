@@ -2,6 +2,11 @@ use crate::config::{Compression, Encryption};
 use crate::zdb::{Key, ZdbConnectionInfo};
 use serde::{Deserialize, Serialize};
 
+/// The length of file and shard checksums
+pub const CHECKSUM_LENGTH: usize = 16;
+/// A checksum of a data object
+pub type Checksum = [u8; CHECKSUM_LENGTH];
+
 /// MetaData holds all information needed to retrieve, decode, decrypt and decompress shards back
 /// to the original data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -11,6 +16,8 @@ pub struct MetaData {
     /// The amount of redundant data shards which are generated when the data is encoded. Essentially,
     /// this many shards can be lost while still being able to recover the original data.
     parity_shards: usize,
+    /// Checksum of the full file
+    checksum: Checksum,
     /// configuration to use for the encryption stage
     encryption: Encryption,
     /// configuration to use for the compression stage
@@ -23,6 +30,7 @@ pub struct MetaData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShardInfo {
     shard_idx: usize,
+    checksum: Checksum,
     keys: Vec<Key>,
     #[serde(flatten)]
     ci: ZdbConnectionInfo,
@@ -33,12 +41,14 @@ impl MetaData {
     pub fn new(
         data_shards: usize,
         parity_shards: usize,
+        checksum: Checksum,
         encryption: Encryption,
         compression: Compression,
     ) -> Self {
         Self {
             data_shards,
             parity_shards,
+            checksum,
             encryption,
             compression,
             shards: Vec::with_capacity(data_shards + parity_shards),
@@ -75,14 +85,25 @@ impl MetaData {
     pub fn shards(&self) -> &[ShardInfo] {
         &self.shards
     }
+
+    /// Return the checksum of the file
+    pub fn checksum(&self) -> &Checksum {
+        &self.checksum
+    }
 }
 
 impl ShardInfo {
     /// Create a new shardinfo, from the connectioninfo for the zdb (namespace) and the actual key
     /// in which the data is stored
-    pub fn new(shard_idx: usize, keys: Vec<Key>, ci: ZdbConnectionInfo) -> Self {
+    pub fn new(
+        shard_idx: usize,
+        checksum: Checksum,
+        keys: Vec<Key>,
+        ci: ZdbConnectionInfo,
+    ) -> Self {
         Self {
             shard_idx,
+            checksum,
             keys,
             ci,
         }
@@ -102,5 +123,10 @@ impl ShardInfo {
     /// Get the key used to store the shard
     pub fn key(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// Get the checksum of this shard
+    pub fn checksum(&self) -> &Checksum {
+        &self.checksum
     }
 }
