@@ -188,7 +188,7 @@ impl Config {
 
         // so now we have all configurations which have sufficient capacity to hold all shards,
         // while still within the bouns of the redundant_nodes option
-        if candidates.len() == 0 {
+        if candidates.is_empty() {
             return Err(
                 "could not find any viable backend distribution to statisfy redundancy requirement"
                     .to_string(),
@@ -214,7 +214,7 @@ impl Config {
         }
 
         // at this point we should have a list of _all_ possible configs
-        if possible_configs.len() == 0 {
+        if possible_configs.is_empty() {
             return Err(
                 "unable to find a valid configuration due to redundancy settings".to_string(),
             );

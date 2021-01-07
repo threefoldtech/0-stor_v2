@@ -132,7 +132,7 @@ impl Zdb {
     /// Retrieve some previously stored data with its keys
     pub async fn get(&mut self, keys: &[Key]) -> Result<Option<Vec<u8>>, String> {
         let mut data: Vec<u8> = Vec::new();
-        for key in keys.into_iter() {
+        for key in keys {
             trace!("loading data at key {}", key);
             data.extend_from_slice(
                 &redis::cmd("GET")

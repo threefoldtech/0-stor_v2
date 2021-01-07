@@ -191,7 +191,7 @@ fn main() -> Result<(), String> {
                     .ok_or("no metadata found for file")?;
                 let decoded = recover_data(&metadata).await?;
 
-                let metadata = store_data(decoded, metadata.checksum().clone(), &cfg).await?;
+                let metadata = store_data(decoded, *metadata.checksum(), &cfg).await?;
                 cluster.save_meta(&file, &metadata).compat().await?;
             }
             Cmd::Check { ref file } => {
