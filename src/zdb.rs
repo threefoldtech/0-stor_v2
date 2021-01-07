@@ -1,7 +1,7 @@
 use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+// use sha1::{Digest, Sha1};
 
 use std::convert::TryInto;
 use std::net::SocketAddr;
@@ -75,20 +75,22 @@ impl Zdb {
             let mut ns_select = redis::cmd("SELECT");
             ns_select.arg(ns);
             if let Some(pass) = &info.password {
-                trace!("requesting AUTH challange");
-                // request AUTH challenge
-                let challenge: String = redis::cmd("AUTH")
-                    .arg("SECURE")
-                    .arg("CHALLENGE")
-                    .query_async(&mut conn)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                trace!("got challange {}", challenge);
-                let mut hasher = Sha1::new();
-                hasher.update(format!("{}:{}", challenge, pass).as_bytes());
-                let result = hex::encode(hasher.finalize());
-                trace!("auth result {}", result);
-                ns_select.arg("SECURE").arg(result);
+                trace!("password authenticating to namespace");
+                ns_select.arg(pass);
+                // trace!("requesting AUTH challange");
+                // // request AUTH challenge
+                // let challenge: String = redis::cmd("AUTH")
+                //     .arg("SECURE")
+                //     .arg("CHALLENGE")
+                //     .query_async(&mut conn)
+                //     .await
+                //     .map_err(|e| e.to_string())?;
+                // trace!("got challange {}", challenge);
+                // let mut hasher = Sha1::new();
+                // hasher.update(format!("{}:{}", challenge, pass).as_bytes());
+                // let result = hex::encode(hasher.finalize());
+                // trace!("auth result {}", result);
+                // ns_select.arg("SECURE").arg(result);
             }
             trace!("opening namespace {}", ns);
             ns_select
