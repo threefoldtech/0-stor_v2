@@ -29,6 +29,15 @@ cargo build
 
 This will produce the executable in `./target/debug/zstor_v2`.
 
+### Static binary
+
+On linux, a fully static binary can be compiled by using the `x86_64-unknown-linux-musl`
+target, as follows:
+
+```rust
+cargo build --target x86_64-unknown-linux-musl --release
+```
+
 ## Config file
 
 Storing data and rebuilding existing data on new backends requires a config file.
