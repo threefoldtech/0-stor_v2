@@ -2,12 +2,16 @@ use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
 // use sha1::{Digest, Sha1};
+use std::fmt;
 
 use std::convert::TryInto;
 use std::net::SocketAddr;
 
-/// The type of key's used in zdb in sequential mode
+/// The type of key's used in zdb in sequential mode.
 pub type Key = u32;
+
+/// The result type as used by this module.
+pub type ZdbResult<T> = Result<T, ZdbError>;
 
 const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
 
@@ -16,6 +20,14 @@ const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
 /// the remote closed). No reconnection is attempted.
 pub struct Zdb {
     conn: Connection,
+    // connection info tracked to conveniently inspect the remote address.
+    ci: ConnectionInfo,
+}
+
+impl fmt::Debug for Zdb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ZDB at {}", self.ci.addr)
+    }
 }
 
 /// Connection info for a 0-db (namespace).
@@ -42,7 +54,7 @@ impl Zdb {
     /// Create a new connection to a zdb instance. The connection is opened and verified by means
     /// of the PING command. If provided, a namespace is also opened. SECURE AUTH is used to
     /// authenticate.
-    pub async fn new(info: ZdbConnectionInfo) -> Result<Self, String> {
+    pub async fn new(info: ZdbConnectionInfo) -> ZdbResult<Self> {
         // It appears there is a small bug in the library when specifying an ipv6 connection
         // String. Although there is some similar behavior to the `redis-cli` tool, there are also
         // valid strings which are outright failing. To work around this, manually construct the
@@ -59,17 +71,26 @@ impl Zdb {
             passwd: None,
         };
 
-        let client = redis::Client::open(ci).map_err(|e| e.to_string())?;
-        let mut conn = client
-            .get_async_connection()
-            .await
-            .map_err(|e| e.to_string())?;
+        let client = redis::Client::open(ci.clone()).map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Connect,
+            remote: ci.addr.to_string(),
+            internal: ErrorCause::Redis(e),
+        })?;
+        let mut conn = client.get_async_connection().await.map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Connect,
+            remote: ci.addr.to_string(),
+            internal: ErrorCause::Redis(e),
+        })?;
         trace!("opened connection to db");
         trace!("pinging db");
         redis::cmd("PING")
             .query_async(&mut conn)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Connect,
+                remote: ci.addr.to_string(),
+                internal: ErrorCause::Redis(e),
+            })?;
         // open the correct namespace, with or without password
         if let Some(ns) = &info.namespace {
             let mut ns_select = redis::cmd("SELECT");
@@ -96,17 +117,25 @@ impl Zdb {
             ns_select
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ZdbError {
+                    kind: if let redis::ErrorKind::AuthenticationFailed = e.kind() {
+                        ZdbErrorKind::Auth
+                    } else {
+                        ZdbErrorKind::Ns
+                    },
+                    remote: ci.addr.to_string(),
+                    internal: ErrorCause::Redis(e),
+                })?;
             trace!("opened namespace");
         }
 
-        Ok(Self { conn })
+        Ok(Self { conn, ci })
     }
 
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
     /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
     /// so we internally chunk the data.
-    pub async fn set(&mut self, data: &[u8]) -> Result<Vec<Key>, String> {
+    pub async fn set(&mut self, data: &[u8]) -> ZdbResult<Vec<Key>> {
         trace!("storing data in zdb (length: {})", data.len());
 
         let mut keys =
@@ -119,7 +148,11 @@ impl Zdb {
                 .arg(chunk)
                 .query_async(&mut self.conn)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ZdbError {
+                    kind: ZdbErrorKind::Write,
+                    remote: self.ci.addr.to_string(),
+                    internal: ErrorCause::Redis(e),
+                })?;
 
             // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
             // a key
@@ -130,7 +163,7 @@ impl Zdb {
     }
 
     /// Retrieve some previously stored data with its keys
-    pub async fn get(&mut self, keys: &[Key]) -> Result<Option<Vec<u8>>, String> {
+    pub async fn get(&mut self, keys: &[Key]) -> ZdbResult<Option<Vec<u8>>> {
         let mut data: Vec<u8> = Vec::new();
         for key in keys {
             trace!("loading data at key {}", key);
@@ -139,8 +172,16 @@ impl Zdb {
                     .arg(&key.to_le_bytes())
                     .query_async::<_, Option<Vec<u8>>>(&mut self.conn)
                     .await
-                    .map_err(|e| e.to_string())?
-                    .ok_or(format!("missing key {}", key))?,
+                    .map_err(|e| ZdbError {
+                        kind: ZdbErrorKind::Read,
+                        remote: self.ci.addr.to_string(),
+                        internal: ErrorCause::Redis(e),
+                    })?
+                    .ok_or(ZdbError {
+                        kind: ZdbErrorKind::Read,
+                        remote: self.ci.addr.to_string(),
+                        internal: ErrorCause::Other(format!("missing key {}", key)),
+                    })?,
             );
         }
         Ok(Some(data))
@@ -156,4 +197,83 @@ fn read_le_key(input: &[u8]) -> Key {
             .try_into()
             .expect("could not convert bytes to key"),
     )
+}
+
+/// A `ZdbError` holding details about failed zdb operations.
+#[derive(Debug)]
+pub struct ZdbError {
+    kind: ZdbErrorKind,
+    remote: String,
+    internal: ErrorCause,
+}
+
+impl fmt::Display for ZdbError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ZDB at {}, error {} caused by {}",
+            self.remote, self.kind, self.internal
+        )
+    }
+}
+
+impl std::error::Error for ZdbError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let ErrorCause::Redis(ref re) = self.internal {
+            Some(re)
+        } else {
+            None
+        }
+    }
+}
+
+/// The cause of a zero db error.
+#[derive(Debug)]
+enum ErrorCause {
+    Redis(redis::RedisError),
+    Other(String),
+}
+
+impl fmt::Display for ErrorCause {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ErrorCause::Redis(e) => e.to_string(),
+                ErrorCause::Other(e) => e.clone(),
+            }
+        )
+    }
+}
+
+/// Some information about the exact operation which failed
+#[derive(Debug)]
+pub enum ZdbErrorKind {
+    /// Error in the connection information or while connecting to the remote
+    Connect,
+    /// Error while setting the namespace
+    Ns,
+    /// Error while authenticating to the namespace
+    Auth,
+    /// Error while writing data
+    Write,
+    /// Error while reading data
+    Read,
+}
+
+impl fmt::Display for ZdbErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "operation {}",
+            match self {
+                ZdbErrorKind::Connect => "CONNECT",
+                ZdbErrorKind::Ns => "NS",
+                ZdbErrorKind::Auth => "AUTH",
+                ZdbErrorKind::Write => "WRITE",
+                ZdbErrorKind::Read => "READ",
+            }
+        )
+    }
 }
