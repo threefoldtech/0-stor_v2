@@ -7,7 +7,6 @@ use std::io::{Read, Write};
 use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
-use tokio_compat_02::FutureExt;
 use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::{Config, Meta};
 use zstor_v2::encryption::{Encryptor, AESGCM};
@@ -106,11 +105,7 @@ fn main() -> Result<(), String> {
 
         // Get from config if not present
         let cluster = match cfg.meta() {
-            Meta::ETCD(etcdconf) => {
-                Etcd::new(etcdconf, cfg.virtual_root().clone())
-                    .compat()
-                    .await?
-            }
+            Meta::ETCD(etcdconf) => Etcd::new(etcdconf, cfg.virtual_root().clone()).await?,
         };
 
         match opts.cmd {
@@ -156,12 +151,11 @@ fn main() -> Result<(), String> {
                 trace!("encrypted size: {} bytes", encrypted.len());
 
                 let metadata = store_data(encrypted, file_checksum, &cfg).await?;
-                cluster.save_meta(&file, &metadata).compat().await?;
+                cluster.save_meta(&file, &metadata).await?;
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster
                     .load_meta(file)
-                    .compat()
                     .await?
                     .ok_or("no metadata found for file")?;
                 let decoded = recover_data(&metadata).await?;
@@ -186,16 +180,15 @@ fn main() -> Result<(), String> {
             Cmd::Rebuild { ref file } => {
                 let metadata = cluster
                     .load_meta(file)
-                    .compat()
                     .await?
                     .ok_or("no metadata found for file")?;
                 let decoded = recover_data(&metadata).await?;
 
                 let metadata = store_data(decoded, *metadata.checksum(), &cfg).await?;
-                cluster.save_meta(&file, &metadata).compat().await?;
+                cluster.save_meta(&file, &metadata).await?;
             }
             Cmd::Check { ref file } => {
-                match cluster.load_meta(file).compat().await? {
+                match cluster.load_meta(file).await? {
                     Some(metadata) => {
                         let file = canonicalize_path(&file)?;
                         // strip the virtual_root, if one is set
