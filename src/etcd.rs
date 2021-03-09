@@ -6,9 +6,11 @@ use blake2::{
 use etcd_rs::{Client, ClientConfig, KeyRange, PutRequest, RangeRequest};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{fmt, fs, io};
+
+/// Result type of all etcd operations
+pub type EtcdResult<T> = Result<T, EtcdError>;
 
 /// A basic etcd cluster client
 // TODO: debug
@@ -30,7 +32,7 @@ pub struct EtcdConfig {
 
 impl Etcd {
     /// Create a new client connecting to the cluster with the given endpoints
-    pub async fn new(cfg: &EtcdConfig, virtual_root: Option<PathBuf>) -> Result<Self, String> {
+    pub async fn new(cfg: &EtcdConfig, virtual_root: Option<PathBuf>) -> EtcdResult<Self> {
         let client = Client::connect(ClientConfig {
             endpoints: cfg.endpoints.clone(),
             auth: match cfg {
@@ -44,7 +46,10 @@ impl Etcd {
             tls: None,
         })
         .await
-        .map_err(|e| format!("client connect failed: {}", e))?;
+        .map_err(|e| EtcdError {
+            kind: EtcdErrorKind::Connect,
+            internal: InternalError::Etcd(e),
+        })?;
         Ok(Etcd {
             client,
             prefix: cfg.prefix.clone(),
@@ -53,73 +58,91 @@ impl Etcd {
     }
 
     /// Save the metadata for the file identified by `path` with a given prefix
-    pub async fn save_meta(&self, path: &PathBuf, meta: &MetaData) -> Result<(), String> {
+    pub async fn save_meta(&self, path: &PathBuf, meta: &MetaData) -> EtcdResult<()> {
         // for now save metadata human readable
         trace!("encoding metadata");
-        let enc_meta =
-            toml::to_vec(meta).map_err(|e| format!("could not encode metadata: {}", e))?;
+        let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
+            kind: EtcdErrorKind::Write,
+            internal: InternalError::Meta(Box::new(e)),
+        })?;
         // hash
         let key = self.build_key(path)?;
         self.write_value(&key, &enc_meta).await
     }
 
     /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&self, path: &PathBuf) -> Result<Option<MetaData>, String> {
+    pub async fn load_meta(&self, path: &PathBuf) -> EtcdResult<Option<MetaData>> {
         let key = self.build_key(path)?;
         Ok(if let Some(value) = self.read_value(&key).await? {
-            Some(
-                toml::from_slice(&value)
-                    .map_err(|e| format!("could not decode metadata: {}", e))?,
-            )
+            Some(toml::from_slice(&value).map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Meta(Box::new(e)),
+            })?)
         } else {
             None
         })
     }
 
     // helper functions to read and write a value
-    async fn write_value(&self, key: &str, value: &[u8]) -> Result<(), String> {
+    async fn write_value(&self, key: &str, value: &[u8]) -> EtcdResult<()> {
         self.client
             .kv()
             .put(PutRequest::new(key, value))
             .await
             .map(|_| ()) // ignore result
-            .map_err(|e| format!("could not save value: {}", e))
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Write,
+                internal: InternalError::Etcd(e),
+            })
     }
 
-    async fn read_value(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+    async fn read_value(&self, key: &str) -> EtcdResult<Option<Vec<u8>>> {
         self.client
             .kv()
             .range(RangeRequest::new(KeyRange::key(key)))
             .await
-            .map_err(|e| format!("could not load value: {}", e))
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Etcd(e),
+            })
             .and_then(|mut resp| {
                 let mut kvs = resp.take_kvs();
                 match kvs.len() {
                     0 => Ok(None),
                     1 => Ok(Some(kvs[0].take_value())),
-                    keys => Err(format!("expected to find single key, found {}", keys)),
+                    keys => Err(EtcdError {
+                        kind: EtcdErrorKind::Meta,
+                        internal: InternalError::Other(format!(
+                            "expected to find single key, found {}",
+                            keys
+                        )),
+                    }),
                 }
             })
     }
 
     // hash a path using blake2b with 16 bytes of output, and hex encode the result
     // the path is canonicalized before encoding so the full path is used
-    fn build_key(&self, path: &PathBuf) -> Result<String, String> {
+    fn build_key(&self, path: &PathBuf) -> EtcdResult<String> {
         // annoyingly, the path needs to exist for this to work. So here's the plan:
         // first we verify that it is actualy there
         // if it is, no problem
         // else, create a temp file, canonicalize that path, and remove the temp file again
         let canonical_path = match fs::metadata(path) {
-            Ok(_) => path.canonicalize().map_err(|e| e.to_string())?,
+            Ok(_) => path.canonicalize()?,
             Err(e) => match e.kind() {
                 io::ErrorKind::NotFound => {
-                    fs::File::create(path)
-                        .map_err(|e| format!("could not create temp file: {}", e))?;
-                    let cp = path.canonicalize().map_err(|e| e.to_string())?;
-                    fs::remove_file(path).map_err(|e| e.to_string())?;
+                    fs::File::create(path)?;
+                    let cp = path.canonicalize()?;
+                    fs::remove_file(path)?;
                     cp
                 }
-                _ => return Err(e.to_string()),
+                _ => {
+                    return Err(EtcdError {
+                        kind: EtcdErrorKind::Key,
+                        internal: InternalError::IO(e),
+                    })
+                }
             },
         };
 
@@ -128,7 +151,10 @@ impl Etcd {
             trace!("stripping path prefix {:?}", virtual_root);
             canonical_path
                 .strip_prefix(virtual_root)
-                .map_err(|e| format!("could not strip path prefix: {}", e))?
+                .map_err(|e| EtcdError {
+                    kind: EtcdErrorKind::Key,
+                    internal: InternalError::Other(format!("could not strip path prefix: {}", e)),
+                })?
         } else {
             trace!("maintaining path");
             canonical_path.as_path()
@@ -142,7 +168,12 @@ impl Etcd {
             actual_path
                 .as_os_str()
                 .to_str()
-                .ok_or("could not interpret path as utf-8 str")?
+                .ok_or(EtcdError {
+                    kind: EtcdErrorKind::Key,
+                    internal: InternalError::Other(
+                        "could not interpret path as utf-8 str".to_string(),
+                    ),
+                })?
                 .as_bytes(),
         );
 
@@ -169,6 +200,94 @@ impl EtcdConfig {
             prefix,
             username,
             password,
+        }
+    }
+}
+
+/// An error related to etcd (or its configuration).
+#[derive(Debug)]
+pub struct EtcdError {
+    kind: EtcdErrorKind,
+    internal: InternalError,
+}
+
+impl fmt::Display for EtcdError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "EtcdError: {}: {}", self.kind, self.internal)
+    }
+}
+
+impl std::error::Error for EtcdError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.internal {
+            InternalError::Etcd(ref e) => Some(e),
+            InternalError::Meta(ref e) => Some(&**e),
+            InternalError::IO(ref e) => Some(e),
+            InternalError::Other(_) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum InternalError {
+    Etcd(etcd_rs::Error),
+    Meta(Box<dyn std::error::Error>),
+    IO(io::Error),
+    Other(String),
+}
+
+impl fmt::Display for InternalError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                InternalError::Etcd(e) => e.to_string(),
+                InternalError::Meta(e) => e.to_string(),
+                InternalError::IO(e) => e.to_string(),
+                InternalError::Other(e) => e.to_string(),
+            }
+        )
+    }
+}
+
+/// Specific type of error for etcd
+#[derive(Debug)]
+pub enum EtcdErrorKind {
+    /// Error in the connection to etcd or the connection configuration
+    Connect,
+    /// Error while writing data to etcd
+    Write,
+    /// Error while reading data from etcd
+    Read,
+    /// Error while building data key
+    Key,
+    /// Error while encoding or decoding
+    Meta,
+}
+
+impl fmt::Display for EtcdErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Operation: {}",
+            match self {
+                EtcdErrorKind::Connect => "CONNECT",
+                EtcdErrorKind::Write => "WRITE",
+                EtcdErrorKind::Read => "READ",
+                EtcdErrorKind::Key => "KEY",
+                EtcdErrorKind::Meta => "META",
+            }
+        )
+    }
+}
+
+// In practice io errors are only returned when building the storage key
+impl From<io::Error> for EtcdError {
+    fn from(e: io::Error) -> Self {
+        EtcdError {
+            kind: EtcdErrorKind::Key,
+            internal: InternalError::IO(e),
         }
     }
 }
