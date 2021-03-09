@@ -1,7 +1,6 @@
 use simple_logger::SimpleLogger;
 use std::path::PathBuf;
 use tokio::runtime::Builder;
-use tokio_compat_02::FutureExt;
 use zstor_v2::{
     config::{Compression, Encryption},
     encryption::SymmetricKey,
@@ -29,7 +28,6 @@ fn main() {
             &etcd::EtcdConfig::new(nodes, "prefix".to_string(), None, None),
             None,
         )
-        .compat()
         .await
         .unwrap();
 
@@ -55,8 +53,8 @@ fn main() {
             ZdbConnectionInfo::new("[::1]:9900".parse().unwrap(), None, None),
         ));
 
-        cluster.save_meta(&path, &data).compat().await.unwrap();
-        let rec = cluster.load_meta(&path).compat().await.unwrap();
+        cluster.save_meta(&path, &data).await.unwrap();
+        let rec = cluster.load_meta(&path).await.unwrap();
 
         log::info!("comparing data");
         assert_eq!(&rec.unwrap(), &data);
