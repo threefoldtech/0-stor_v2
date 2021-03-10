@@ -5,18 +5,22 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::convert::TryInto;
+use std::fmt;
+
+/// Result type for encryption and decryption operations
+pub type EncryptionResult<T> = Result<T, EncryptionError>;
 
 const AES_GCM_NONCE_SIZE: usize = 12;
 
 /// A general encryptor, able to encrypt and decrypt data. Encryptors are expected to implement
 /// symmetric encryption.
 pub trait Encryptor {
-    /// Encrypt some data using the encryptor. The encryptor generates a new IV, and appends it to
+    /// Encrypt some data using the encryptor. The encryptor generates a new IV, and prepends it to
     /// the encrypted data.
-    fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>, String>;
-    /// Decrypt some data using the encryptor. The IV is assumed to be appended to the data. It is
+    fn encrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>>;
+    /// Decrypt some data using the encryptor. The IV is assumed to be prepended to the data. It is
     /// the callers responsibility to ensure storage and recovery of the IV ishandled properly.
-    fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, String>;
+    fn decrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>>;
 }
 
 /// An implementation of the AES encryption algorithm running in GCM mode.
@@ -35,7 +39,7 @@ impl AESGCM {
 }
 
 impl Encryptor for AESGCM {
-    fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+    fn encrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>> {
         let key = GenericArray::from_slice(&self.key[..]);
         let cipher = aes_gcm::Aes256Gcm::new(key);
 
@@ -44,14 +48,17 @@ impl Encryptor for AESGCM {
         // TODO: not really efficient way of doing things here
         let mut total = Vec::with_capacity(AES_GCM_NONCE_SIZE + data.len() + 16);
 
-        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
+        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| EncryptionError {
+            kind: EncryptionErrorKind::Encrypt,
+            internal: e,
+        })?;
         total.extend(nonce.as_slice());
         total.extend(ciphertext);
 
         Ok(total)
     }
 
-    fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+    fn decrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>> {
         let key = GenericArray::from_slice(&self.key[..]);
         let cipher = aes_gcm::Aes256Gcm::new(key);
 
@@ -124,6 +131,41 @@ impl<'de> Visitor<'de> for SymKeyVisitor {
         hex::decode(v)
             .map_err(E::custom)
             .map(|vec| SymmetricKey(vec.try_into().unwrap()))
+    }
+}
+
+/// Errors related to encyrpting and decrypting
+#[derive(Debug)]
+pub struct EncryptionError {
+    kind: EncryptionErrorKind,
+    internal: aes_gcm::Error,
+}
+
+impl fmt::Display for EncryptionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Crypto error: {}: {}", self.kind, self.internal)
+    }
+}
+
+/// Specific error type related to encyrpting and decrypting
+#[derive(Debug)]
+pub enum EncryptionErrorKind {
+    /// Error while encrypting data
+    Encrypt,
+    /// Error while decrypting data
+    Decrypt,
+}
+
+impl fmt::Display for EncryptionErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Operation {}",
+            match self {
+                EncryptionErrorKind::Encrypt => "ENCRYPT",
+                EncryptionErrorKind::Decrypt => "DECRYPT",
+            }
+        )
     }
 }
 
