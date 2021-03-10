@@ -147,6 +147,12 @@ impl fmt::Display for EncryptionError {
     }
 }
 
+impl std::error::Error for EncryptionError {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        Some(&self.internal)
+    }
+}
+
 /// Specific error type related to encyrpting and decrypting
 #[derive(Debug)]
 pub enum EncryptionErrorKind {
