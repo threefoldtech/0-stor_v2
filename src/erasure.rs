@@ -4,8 +4,12 @@ use blake2::{
     VarBlake2b,
 };
 use log::trace;
-use reed_solomon_erasure::galois_8::ReedSolomon;
+use reed_solomon_erasure::{galois_8::ReedSolomon, Error as RsError};
 use std::convert::TryInto;
+use std::fmt;
+
+/// Result type for erasur operations.
+pub type ErasureResult<T> = Result<T, EncodingError>;
 
 /// A data encoder is responsible for encoding original data into multiple shards, and decoding
 /// multiple shards back to the original data, if sufficient shards are available.
@@ -78,12 +82,14 @@ impl Encoder {
     /// is important. If a shard is not available or otherwise corrupted, it can be marked as
     /// missing. As long as sufficient shards (at least the amount of specified data shards) are
     /// available, the input can be recovered.
-    pub fn decode(&self, mut shards: Vec<Option<Vec<u8>>>) -> Result<Vec<u8>, String> {
+    pub fn decode(&self, mut shards: Vec<Option<Vec<u8>>>) -> ErasureResult<Vec<u8>> {
         trace!("decoding data");
         // reconstruct all shards
         let dec = ReedSolomon::new(self.data_shards, self.parity_shards).unwrap();
-        dec.reconstruct(&mut shards)
-            .map_err(|e| format!("could not reconstruct shards: {}", e))?;
+        dec.reconstruct(&mut shards).map_err(|e| EncodingError {
+            kind: EncodingErrorKind::Reconstruct,
+            internal: e,
+        })?;
 
         // rebuild data
         let shard_len = if let Some(ref shard) = shards[0] {
@@ -161,6 +167,48 @@ impl Shard {
     /// Cosume the shard, returning the actual data
     pub fn into_inner(self) -> Vec<u8> {
         self.0
+    }
+}
+
+/// An error related to encoding or decoding data
+#[derive(Debug)]
+pub struct EncodingError {
+    kind: EncodingErrorKind,
+    internal: RsError,
+}
+
+impl fmt::Display for EncodingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Error in encoder/decoder: {}, {}",
+            self.kind, self.internal
+        )
+    }
+}
+
+impl std::error::Error for EncodingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.internal)
+    }
+}
+
+/// Specific error type for the encoding.
+#[derive(Debug)]
+pub enum EncodingErrorKind {
+    /// Error while reconstructing data.
+    Reconstruct,
+}
+
+impl fmt::Display for EncodingErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Operation: {}",
+            match self {
+                EncodingErrorKind::Reconstruct => "RECONSTRUCT",
+            }
+        )
     }
 }
 
