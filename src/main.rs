@@ -14,10 +14,11 @@ use zstor_v2::erasure::Encoder;
 use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::Zdb;
+use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 #[derive(StructOpt, Debug)]
-#[structopt(about = "rstor data encoder")]
-/// Rstor data encoder
+#[structopt(about = "xstor data encoder")]
+/// Zstor data encoder
 ///
 /// Compresses, encrypts, and erasure codes data according to the provided config file and options.
 /// Data is send to a specified group of backends.
@@ -90,12 +91,13 @@ enum Cmd {
     },
 }
 
-fn main() -> Result<(), String> {
+fn main() -> ZstorResult<()> {
     // construct an async runtime, do this manually so we can select the single threaded runtime.
     let rt = Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| e.to_string())?;
+        // Realistically this should never happen. If it does happen, its fatal anyway.
+        .expect("Could not build configure program runtime");
 
     rt.block_on(async {
         let opts = Opts::from_args();
@@ -116,18 +118,23 @@ fn main() -> Result<(), String> {
                 // make sure file is in root dir
                 if let Some(ref root) = cfg.virtual_root() {
                     if !file.starts_with(root) {
-                        return Err(format!(
+                        return Err(ZstorError::new_io(
+                            format!(
                             "attempting to store file which is not in the file tree rooted at {}",
-                            root.to_string_lossy()
+                            root.to_string_lossy()),
+                            std::io::Error::from(std::io::ErrorKind::InvalidData),
                         ));
                     }
                 }
 
                 if !std::fs::metadata(&file)
-                    .map_err(|e| e.to_string())?
+                    .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
                     .is_file()
                 {
-                    return Err("only files can be stored".to_string());
+                    return Err(ZstorError::new_io(
+                        "only files can be stored".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::InvalidData),
+                    ));
                 }
 
                 let file_checksum = checksum(&file)?;
@@ -135,11 +142,13 @@ fn main() -> Result<(), String> {
 
                 // start reading file to encrypt
                 trace!("loading file data");
-                let mut encoding_file = File::open(&file).map_err(|e| e.to_string())?;
+                let mut encoding_file = File::open(&file).map_err(|e| {
+                    ZstorError::new_io("could not open file to encode".to_string(), e)
+                })?;
                 let mut buffer = Vec::new();
                 encoding_file
                     .read_to_end(&mut buffer)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| ZstorError::new_io("".to_string(), e))?;
                 trace!("loaded {} bytes of data", buffer.len());
 
                 let compressor = Snappy;
@@ -154,10 +163,12 @@ fn main() -> Result<(), String> {
                 cluster.save_meta(&file, &metadata).await?;
             }
             Cmd::Retrieve { ref file } => {
-                let metadata = cluster
-                    .load_meta(file)
-                    .await?
-                    .ok_or("no metadata found for file")?;
+                let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
+                    ZstorError::new_io(
+                        "no metadata found for file".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::NotFound),
+                    )
+                })?;
                 let decoded = recover_data(&metadata).await?;
 
                 let encryptor = AESGCM::new(metadata.encryption().key().clone());
@@ -173,15 +184,19 @@ fn main() -> Result<(), String> {
                 } else {
                     File::create(file)
                 }
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
 
-                out.write_all(&original).map_err(|e| e.to_string())?;
+                out.write_all(&original).map_err(|e| {
+                    ZstorError::new_io("could not write data to output file".to_string(), e)
+                })?;
             }
             Cmd::Rebuild { ref file } => {
-                let metadata = cluster
-                    .load_meta(file)
-                    .await?
-                    .ok_or("no metadata found for file")?;
+                let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
+                    ZstorError::new_io(
+                        "no metadata found for file".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::NotFound),
+                    )
+                })?;
                 let decoded = recover_data(&metadata).await?;
 
                 let metadata = store_data(decoded, *metadata.checksum(), &cfg).await?;
@@ -193,8 +208,15 @@ fn main() -> Result<(), String> {
                         let file = canonicalize_path(&file)?;
                         // strip the virtual_root, if one is set
                         let actual_path = if let Some(ref virtual_root) = cfg.virtual_root() {
-                            file.strip_prefix(virtual_root)
-                                .map_err(|e| format!("could not strip path prefix: {}", e))?
+                            file.strip_prefix(virtual_root).map_err(|_| {
+                                ZstorError::new_io(
+                                    format!(
+                                        "path prefix {} not found",
+                                        virtual_root.as_path().to_string_lossy()
+                                    ),
+                                    std::io::Error::from(std::io::ErrorKind::NotFound),
+                                )
+                            })?
                         } else {
                             file.as_path()
                         };
@@ -213,29 +235,36 @@ fn main() -> Result<(), String> {
     })
 }
 
-async fn recover_data(metadata: &MetaData) -> Result<Vec<u8>, String> {
-    // attempt to retrieve al shards
-    let mut shard_loads: Vec<JoinHandle<(usize, Result<_, String>)>> =
+async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
+    // attempt to retrieve all shards
+    let mut shard_loads: Vec<JoinHandle<(usize, Result<_, ZstorError>)>> =
         Vec::with_capacity(metadata.shards().len());
     for si in metadata.shards().iter().cloned() {
         shard_loads.push(tokio::spawn(async move {
             let mut db = match Zdb::new(si.zdb().clone()).await {
                 Ok(ok) => ok,
-                Err(e) => return (si.index(), Err(e)),
+                Err(e) => return (si.index(), Err(e.into())),
             };
             match db.get(si.key()).await {
                 Ok(potential_shard) => match potential_shard {
                     Some(shard) => (si.index(), Ok(shard)),
-                    None => (si.index(), Err("shard not found".to_string())),
+                    None => (
+                        si.index(),
+                        // TODO: Proper error here?
+                        Err(ZstorError::new_io(
+                            "shard not found".to_string(),
+                            std::io::Error::from(std::io::ErrorKind::NotFound),
+                        )),
+                    ),
                 },
-                Err(e) => (si.index(), Err(e)),
+                Err(e) => (si.index(), Err(e.into())),
             }
         }));
     }
 
     let mut indexed_shards: Vec<(usize, Option<Vec<u8>>)> = Vec::with_capacity(shard_loads.len());
     for shard_info in join_all(shard_loads).await {
-        let (idx, shard) = shard_info.map_err(|e| e.to_string())?;
+        let (idx, shard) = shard_info?;
         indexed_shards.push((idx, shard.ok())); // don't really care about errors here
     }
 
@@ -252,7 +281,7 @@ async fn recover_data(metadata: &MetaData) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
-async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> Result<MetaData, String> {
+async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorResult<MetaData> {
     let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
     let shards = encoder.encode(data);
     debug!("data encoded");
@@ -260,7 +289,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> Result<M
     let backends = cfg.shard_stores()?;
 
     trace!("store shards in backends");
-    let mut handles: Vec<JoinHandle<Result<_, String>>> = Vec::with_capacity(shards.len());
+    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
 
     for (backend, (shard_idx, shard)) in backends.into_iter().zip(shards.into_iter().enumerate()) {
         handles.push(tokio::spawn(async move {
@@ -283,22 +312,24 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> Result<M
         cfg.compression().clone(),
     );
 
-    for shard_info in try_join_all(handles).await.map_err(|e| e.to_string())? {
+    for shard_info in try_join_all(handles).await? {
         metadata.add_shard(shard_info?);
     }
 
     Ok(metadata)
 }
 
-fn read_cfg(config: &std::path::PathBuf) -> Result<Config, String> {
+fn read_cfg(config: &std::path::PathBuf) -> ZstorResult<Config> {
     trace!("opening config file {:?}", config);
-    let mut cfg_file = File::open(config).map_err(|e| e.to_string())?;
+    let mut cfg_file = File::open(config)
+        .map_err(|e| ZstorError::new_io("could not open config file".to_string(), e))?;
     let mut cfg_str = String::new();
     cfg_file
         .read_to_string(&mut cfg_str)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ZstorError::new_io("could not read config file".to_string(), e))?;
 
-    let cfg: Config = toml::from_str(&cfg_str).map_err(|e| e.to_string())?;
+    let cfg: Config = toml::from_str(&cfg_str)
+        .map_err(|e| ZstorError::new(ZstorErrorKind::Config, Box::new(e)))?;
     trace!("config read");
     cfg.validate()?;
     trace!("config validated");
@@ -308,33 +339,45 @@ fn read_cfg(config: &std::path::PathBuf) -> Result<Config, String> {
 /// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
 /// work on files which don't exist by creating a dummy file if the file does not exist,
 /// canonicalizing the path, and removing the dummy file.
-fn canonicalize_path(path: &std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+fn canonicalize_path(path: &std::path::PathBuf) -> ZstorResult<std::path::PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
     // first we verify that it is actualy there
     // if it is, no problem
     // else, create a temp file, canonicalize that path, and remove the temp file again
     Ok(match std::fs::metadata(path) {
-        Ok(_) => path.canonicalize().map_err(|e| e.to_string())?,
+        Ok(_) => path
+            .canonicalize()
+            .map_err(|e| ZstorError::new_io("could not canonicalize path".to_string(), e))?,
         Err(e) => match e.kind() {
             std::io::ErrorKind::NotFound => {
                 std::fs::File::create(path)
-                    .map_err(|e| format!("could not create temp file: {}", e))?;
-                let cp = path.canonicalize().map_err(|e| e.to_string())?;
-                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                    .map_err(|e| ZstorError::new_io("could not create temp file".to_string(), e))?;
+                let cp = path.canonicalize().map_err(|e| {
+                    ZstorError::new_io("could not canonicalize path".to_string(), e)
+                })?;
+                std::fs::remove_file(path)
+                    .map_err(|e| ZstorError::new_io("could not remove temp file".to_string(), e))?;
                 cp
             }
-            _ => return Err(e.to_string()),
+            _ => {
+                return Err(ZstorError::new_io(
+                    "could not load file metadata".to_string(),
+                    e,
+                ))
+            }
         },
     })
 }
 
 /// Get a 16 byte blake2b checksum of a file
-fn checksum(file: &std::path::PathBuf) -> Result<Checksum, String> {
+fn checksum(file: &std::path::PathBuf) -> ZstorResult<Checksum> {
     trace!("getting file checksum");
-    let mut file = File::open(file).map_err(|e| e.to_string())?;
+    let mut file =
+        File::open(file).map_err(|e| ZstorError::new_io("could not open file".to_string(), e))?;
     // The unwrap here is safe since we know that 16 is a valid output size
     let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
-    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("failed to get file hash: {}", e))?;
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| ZstorError::new_io("could not get file hash".to_string(), e))?;
 
     // expect is safe due to the static size, which is known to be valid
     Ok(hasher
