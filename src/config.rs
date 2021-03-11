@@ -74,7 +74,7 @@ pub enum Meta {
 impl Config {
     /// validate the config. This also makes sure that there is at least 1 valid configuration for
     /// the backends regarding groups and the required redundancy.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         let backend_len = self
             .groups
             .iter()
@@ -84,19 +84,19 @@ impl Config {
                 "insufficient data backends, require at least {}, only found {}",
                 self.data_shards + self.parity_shards,
                 backend_len
-            ));
+            ))?;
         };
         if self.encryption.algorithm != "AES" {
             return Err(format!(
                 "unknown encryption algorithm {}",
                 self.encryption.algorithm
-            ));
+            ))?;
         }
         if self.compression.algorithm != "snappy" {
             return Err(format!(
                 "unknown compression algorithm {}",
                 self.compression.algorithm
-            ));
+            ))?;
         }
 
         Ok(())
@@ -136,7 +136,7 @@ impl Config {
     /// encoding profile and redundancy policies. If no valid configuration can be found, an error
     /// is returned. If multiple valid configurations are found, one is selected at random.
     pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, String> {
-        // The challange here is to find a valid list of shards. We need exactly `data_shards +
+        // The challenge here is to find a valid list of shards. We need exactly `data_shards +
         // parity_shards` shards in total. We assume every shard in every group is valid.
         // Furthermore, we need to make sure that if any `redundant_groups` groups are lost, we
         // still have sufficient shards left to recover the data. Also, for every group we should
@@ -326,6 +326,28 @@ impl Compression {
     /// Get the name of the compression algorithm to use
     pub fn algorithm(&self) -> &str {
         &self.algorithm
+    }
+}
+
+/// An error in the configuration
+#[derive(Debug)]
+pub struct ConfigError {
+    msg: String,
+}
+
+use std::fmt;
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+// default impls are fine here
+impl std::error::Error for ConfigError {}
+
+impl From<String> for ConfigError {
+    fn from(s: String) -> Self {
+        ConfigError { msg: s }
     }
 }
 
