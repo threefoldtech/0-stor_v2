@@ -135,7 +135,7 @@ impl Config {
     /// Returns a list of 0-db's to use for storage of the data shards, in accordance to the
     /// encoding profile and redundancy policies. If no valid configuration can be found, an error
     /// is returned. If multiple valid configurations are found, one is selected at random.
-    pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, String> {
+    pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, ConfigError> {
         // The challenge here is to find a valid list of shards. We need exactly `data_shards +
         // parity_shards` shards in total. We assume every shard in every group is valid.
         // Furthermore, we need to make sure that if any `redundant_groups` groups are lost, we
@@ -192,7 +192,7 @@ impl Config {
             return Err(
                 "could not find any viable backend distribution to statisfy redundancy requirement"
                     .to_string(),
-            );
+            )?;
         }
 
         // for every possible solution, generate an equal distribution over all nodes, then verify
@@ -217,7 +217,7 @@ impl Config {
         if possible_configs.is_empty() {
             return Err(
                 "unable to find a valid configuration due to redundancy settings".to_string(),
-            );
+            )?;
         }
 
         // randomly pick a solution
