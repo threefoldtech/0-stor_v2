@@ -211,6 +211,9 @@ pub struct EtcdError {
     internal: InternalError,
 }
 
+// TODO
+unsafe impl Send for EtcdError {}
+
 impl fmt::Display for EtcdError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "EtcdError: {}: {}", self.kind, self.internal)
