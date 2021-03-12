@@ -3,7 +3,7 @@ use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
 };
-use etcd_rs::{Client, ClientConfig, KeyRange, PutRequest, RangeRequest};
+use etcd_client::{Client, ConnectOptions};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -33,23 +33,22 @@ pub struct EtcdConfig {
 impl Etcd {
     /// Create a new client connecting to the cluster with the given endpoints
     pub async fn new(cfg: &EtcdConfig, virtual_root: Option<PathBuf>) -> EtcdResult<Self> {
-        let client = Client::connect(ClientConfig {
-            endpoints: cfg.endpoints.clone(),
-            auth: match cfg {
-                EtcdConfig {
-                    username: Some(username),
-                    password: Some(password),
-                    ..
-                } => Some((username.clone(), password.clone())),
-                _ => None,
-            },
-            tls: None,
-        })
-        .await
-        .map_err(|e| EtcdError {
-            kind: EtcdErrorKind::Connect,
-            internal: InternalError::Etcd(e),
-        })?;
+        // Don't set TLS client options, etcd client lib can figure this out for us.
+        let mut co = ConnectOptions::new();
+        match cfg {
+            EtcdConfig {
+                username: Some(username),
+                password: Some(password),
+                ..
+            } => co = co.with_user(username, password),
+            _ => {}
+        }
+        let client = Client::connect(&cfg.endpoints, Some(co))
+            .await
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Connect,
+                internal: InternalError::Etcd(e),
+            })?;
         Ok(Etcd {
             client,
             prefix: cfg.prefix.clone(),
@@ -58,7 +57,7 @@ impl Etcd {
     }
 
     /// Save the metadata for the file identified by `path` with a given prefix
-    pub async fn save_meta(&self, path: &PathBuf, meta: &MetaData) -> EtcdResult<()> {
+    pub async fn save_meta(&mut self, path: &PathBuf, meta: &MetaData) -> EtcdResult<()> {
         // for now save metadata human readable
         trace!("encoding metadata");
         let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
@@ -71,7 +70,7 @@ impl Etcd {
     }
 
     /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&self, path: &PathBuf) -> EtcdResult<Option<MetaData>> {
+    pub async fn load_meta(&mut self, path: &PathBuf) -> EtcdResult<Option<MetaData>> {
         let key = self.build_key(path)?;
         Ok(if let Some(value) = self.read_value(&key).await? {
             Some(toml::from_slice(&value).map_err(|e| EtcdError {
@@ -84,10 +83,9 @@ impl Etcd {
     }
 
     // helper functions to read and write a value
-    async fn write_value(&self, key: &str, value: &[u8]) -> EtcdResult<()> {
+    async fn write_value(&mut self, key: &str, value: &[u8]) -> EtcdResult<()> {
         self.client
-            .kv()
-            .put(PutRequest::new(key, value))
+            .put(key, value, None)
             .await
             .map(|_| ()) // ignore result
             .map_err(|e| EtcdError {
@@ -96,20 +94,19 @@ impl Etcd {
             })
     }
 
-    async fn read_value(&self, key: &str) -> EtcdResult<Option<Vec<u8>>> {
+    async fn read_value(&mut self, key: &str) -> EtcdResult<Option<Vec<u8>>> {
         self.client
-            .kv()
-            .range(RangeRequest::new(KeyRange::key(key)))
+            .get(key, None)
             .await
             .map_err(|e| EtcdError {
                 kind: EtcdErrorKind::Read,
                 internal: InternalError::Etcd(e),
             })
-            .and_then(|mut resp| {
-                let mut kvs = resp.take_kvs();
+            .and_then(|resp| {
+                let kvs = resp.kvs();
                 match kvs.len() {
                     0 => Ok(None),
-                    1 => Ok(Some(kvs[0].take_value())),
+                    1 => Ok(Some(kvs[0].value().to_vec())),
                     keys => Err(EtcdError {
                         kind: EtcdErrorKind::Meta,
                         internal: InternalError::Other(format!(
@@ -211,9 +208,6 @@ pub struct EtcdError {
     internal: InternalError,
 }
 
-// TODO
-unsafe impl Send for EtcdError {}
-
 impl fmt::Display for EtcdError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "EtcdError: {}: {}", self.kind, self.internal)
@@ -233,8 +227,8 @@ impl std::error::Error for EtcdError {
 
 #[derive(Debug)]
 enum InternalError {
-    Etcd(etcd_rs::Error),
-    Meta(Box<dyn std::error::Error>),
+    Etcd(etcd_client::Error),
+    Meta(Box<dyn std::error::Error + Send>),
     IO(io::Error),
     Other(String),
 }

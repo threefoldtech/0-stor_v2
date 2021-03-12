@@ -24,7 +24,7 @@ fn main() {
             "http://127.0.0.1:32379".to_owned(),
         ];
 
-        let cluster = etcd::Etcd::new(
+        let mut cluster = etcd::Etcd::new(
             &etcd::EtcdConfig::new(nodes, "prefix".to_string(), None, None),
             None,
         )
