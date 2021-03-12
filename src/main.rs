@@ -106,7 +106,7 @@ fn main() -> ZstorResult<()> {
         let cfg = read_cfg(&opts.config)?;
 
         // Get from config if not present
-        let cluster = match cfg.meta() {
+        let mut cluster = match cfg.meta() {
             Meta::ETCD(etcdconf) => Etcd::new(etcdconf, cfg.virtual_root().clone()).await?,
         };
 
