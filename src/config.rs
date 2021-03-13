@@ -84,19 +84,20 @@ impl Config {
                 "insufficient data backends, require at least {}, only found {}",
                 self.data_shards + self.parity_shards,
                 backend_len
-            ))?;
+            )
+            .into());
         };
         if self.encryption.algorithm != "AES" {
-            return Err(format!(
-                "unknown encryption algorithm {}",
-                self.encryption.algorithm
-            ))?;
+            return Err(
+                format!("unknown encryption algorithm {}", self.encryption.algorithm).into(),
+            );
         }
         if self.compression.algorithm != "snappy" {
             return Err(format!(
                 "unknown compression algorithm {}",
                 self.compression.algorithm
-            ))?;
+            )
+            .into());
         }
 
         Ok(())
@@ -191,8 +192,9 @@ impl Config {
         if candidates.is_empty() {
             return Err(
                 "could not find any viable backend distribution to statisfy redundancy requirement"
-                    .to_string(),
-            )?;
+                    .to_string()
+                    .into(),
+            );
         }
 
         // for every possible solution, generate an equal distribution over all nodes, then verify
@@ -216,8 +218,10 @@ impl Config {
         // at this point we should have a list of _all_ possible configs
         if possible_configs.is_empty() {
             return Err(
-                "unable to find a valid configuration due to redundancy settings".to_string(),
-            )?;
+                "unable to find a valid configuration due to redundancy settings"
+                    .to_string()
+                    .into(),
+            );
         }
 
         // randomly pick a solution

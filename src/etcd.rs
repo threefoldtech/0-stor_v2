@@ -35,14 +35,14 @@ impl Etcd {
     pub async fn new(cfg: &EtcdConfig, virtual_root: Option<PathBuf>) -> EtcdResult<Self> {
         // Don't set TLS client options, etcd client lib can figure this out for us.
         let mut co = ConnectOptions::new();
-        match cfg {
-            EtcdConfig {
-                username: Some(username),
-                password: Some(password),
-                ..
-            } => co = co.with_user(username, password),
-            _ => {}
-        }
+        if let EtcdConfig {
+            username: Some(username),
+            password: Some(password),
+            ..
+        } = cfg
+        {
+            co = co.with_user(username, password)
+        };
         let client = Client::connect(&cfg.endpoints, Some(co))
             .await
             .map_err(|e| EtcdError {
