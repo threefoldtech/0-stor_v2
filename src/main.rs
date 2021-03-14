@@ -1,6 +1,6 @@
 use blake2::{digest::VariableOutput, VarBlake2b};
 use futures::future::{join_all, try_join_all};
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -81,7 +81,7 @@ enum Cmd {
     /// Check if a file exists in the backend
     ///
     /// Checks if a valid metadata entry is available for the path. If it is, the hex of the file
-    /// checksum is printed, as well as the resolved path
+    /// checksum is printed, as well as the resolved path.
     Check {
         /// Path of the file to check.
         ///
@@ -89,6 +89,12 @@ enum Cmd {
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: std::path::PathBuf,
     },
+    /// Test the configuration and backends
+    ///
+    /// Tests if the configuration is valid, and all backends are available. Also makes sure the
+    /// metadata storage is reachable. Validation of the configuration also includes making sure
+    /// at least 1 distribution can be generated for writing files.
+    Test,
 }
 
 fn main() -> ZstorResult<()> {
@@ -228,6 +234,30 @@ fn main() -> ZstorResult<()> {
                     }
                     None => std::process::exit(1),
                 };
+            }
+            Cmd::Test => {
+                // load config => already done
+                // connect to metastore => already done
+                // connect to backends
+                debug!("Testing 0-db reachability");
+                for conn_result in join_all(cfg.backends().into_iter().cloned().map(|ci| {
+                    tokio::spawn(async move {
+                        Zdb::new(ci).await
+                    })
+                })).await {
+                    // type here is Resut<Result<Zdb, ZdbError>, JoinError>
+                    // so we need to try on the outer JoinError to get to the possible ZdbError 
+                    if let Err(e) = conn_result? {
+                        error!("can't connect to 0-db backend: {}", e);
+                        return Err(e.into());
+                    }
+                };
+
+                // retrieve a config
+                if let Err(e) = cfg.shard_stores() {
+                    error!("No valid storage configuration given the backend setup and redundancy profile");    
+                    return Err(e.into());
+                }
             }
         };
 

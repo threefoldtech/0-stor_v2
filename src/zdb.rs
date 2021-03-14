@@ -91,6 +91,7 @@ impl Zdb {
                 remote: ci.addr.to_string(),
                 internal: ErrorCause::Redis(e),
             })?;
+        trace!("db connection established");
         // open the correct namespace, with or without password
         if let Some(ns) = &info.namespace {
             let mut ns_select = redis::cmd("SELECT");

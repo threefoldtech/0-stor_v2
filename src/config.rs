@@ -1,4 +1,5 @@
 use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
+use gray_codes::{InclusionExclusion, SetMutation};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -128,9 +129,18 @@ impl Config {
         &self.compression
     }
 
-    /// Return the metastore configuration from the config
+    /// Return the metastore configuration from the config.
     pub fn meta(&self) -> &Meta {
         &self.meta
+    }
+
+    /// Return a list of all available backends in the config.
+    pub fn backends(&self) -> Vec<&ZdbConnectionInfo> {
+        self.groups
+            .iter()
+            .map(|group| &group.backends)
+            .flatten()
+            .collect()
     }
 
     /// Returns a list of 0-db's to use for storage of the data shards, in accordance to the
@@ -166,7 +176,6 @@ impl Config {
         // high enough capacity so we don't reallocate
         let mut candidate = Vec::with_capacity(groups.len());
         // generate possible group configs
-        use gray_codes::{InclusionExclusion, SetMutation};
         for mutation in InclusionExclusion::of_len(groups.len()) {
             match mutation {
                 SetMutation::Insert(i) => candidate.push((i, groups[i])),
