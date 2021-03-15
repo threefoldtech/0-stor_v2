@@ -2,6 +2,7 @@ use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
 use gray_codes::{InclusionExclusion, SetMutation};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 /// The full configuration for the data encoding and decoding. This included the etcd to save the
 /// data to, as well as all backends which may or may not be used when data is written.
@@ -141,6 +142,18 @@ impl Config {
             .map(|group| &group.backends)
             .flatten()
             .collect()
+    }
+
+    /// Remove a shard from the config. If the shard is present multiple times, all instances will
+    /// be removed.
+    pub fn remove_shard(&mut self, address: &SocketAddr) {
+        for mut group in &mut self.groups {
+            group.backends = group
+                .backends
+                .drain(..)
+                .filter(|backend| backend.address() != address)
+                .collect();
+        }
     }
 
     /// Returns a list of 0-db's to use for storage of the data shards, in accordance to the
