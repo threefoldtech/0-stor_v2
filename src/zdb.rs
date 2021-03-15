@@ -48,6 +48,11 @@ impl ZdbConnectionInfo {
             password,
         }
     }
+
+    /// Get the address of the 0-db.
+    pub fn address(&self) -> &SocketAddr {
+        &self.address
+    }
 }
 
 impl Zdb {

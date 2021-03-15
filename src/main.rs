@@ -17,7 +17,7 @@ use zstor_v2::zdb::Zdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 #[derive(StructOpt, Debug)]
-#[structopt(about = "xstor data encoder")]
+#[structopt(about = "zstor data encoder")]
 /// Zstor data encoder
 ///
 /// Compresses, encrypts, and erasure codes data according to the provided config file and options.
@@ -97,7 +97,77 @@ enum Cmd {
     Test,
 }
 
+use log::LevelFilter;
+use log4rs::append::rolling_file::policy::compound::{
+    roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
+};
+use log4rs::append::rolling_file::RollingFileAppender;
+use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::filter::{Filter, Response};
+const MIB: u64 = 1 << 20;
+
+/// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
+#[derive(Debug)]
+struct ModuleFilter {
+    module: String,
+}
+
+impl Filter for ModuleFilter {
+    fn filter(&self, record: &log::Record) -> Response {
+        if let Some(mod_path) = record.module_path() {
+            // this is technically not correct but sufficient for our purposes
+            if mod_path.starts_with(self.module.as_str()) {
+                return Response::Neutral;
+            }
+        }
+        Response::Reject
+    }
+}
+
 fn main() -> ZstorResult<()> {
+    if let Err(e) = real_main() {
+        error!("{}", e);
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+fn real_main() -> ZstorResult<()> {
+    // init logger
+    let policy = CompoundPolicy::new(
+        Box::new(SizeTrigger::new(10 * MIB)),
+        Box::new(
+            FixedWindowRoller::builder()
+                .build("./zstor.{}.log", 5)
+                .unwrap(),
+        ),
+    );
+    let log_file = RollingFileAppender::builder()
+        .append(true)
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S %Z)(local)}: {l} {m}{n}",
+        )))
+        .build("./zstor.log", Box::new(policy))
+        .unwrap();
+    let log_config = LogConfig::builder()
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ModuleFilter {
+                    module: "zstor_v2".to_string(),
+                }))
+                .build("logfile", Box::new(log_file)),
+        )
+        .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(log::LevelFilter::Debug),
+        )
+        .unwrap();
+    log4rs::init_config(log_config).unwrap();
+
     // construct an async runtime, do this manually so we can select the single threaded runtime.
     let rt = Builder::new_current_thread()
         .enable_all()
@@ -107,7 +177,6 @@ fn main() -> ZstorResult<()> {
 
     rt.block_on(async {
         let opts = Opts::from_args();
-        pretty_env_logger::init();
 
         let cfg = read_cfg(&opts.config)?;
 
@@ -152,9 +221,9 @@ fn main() -> ZstorResult<()> {
                     ZstorError::new_io("could not open file to encode".to_string(), e)
                 })?;
                 let mut buffer = Vec::new();
-                encoding_file
-                    .read_to_end(&mut buffer)
-                    .map_err(|e| ZstorError::new_io("".to_string(), e))?;
+                encoding_file.read_to_end(&mut buffer).map_err(|e| {
+                    ZstorError::new_io("could not read file to encode".to_string(), e)
+                })?;
                 trace!("loaded {} bytes of data", buffer.len());
 
                 let compressor = Snappy;
@@ -167,6 +236,17 @@ fn main() -> ZstorResult<()> {
 
                 let metadata = store_data(encrypted, file_checksum, &cfg).await?;
                 cluster.save_meta(&file, &metadata).await?;
+                info!(
+                    "Stored file {:?} ({} bytes) to {}",
+                    file.as_path(),
+                    buffer.len(),
+                    metadata
+                        .shards()
+                        .iter()
+                        .map(|si| si.zdb().address().to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
@@ -195,18 +275,48 @@ fn main() -> ZstorResult<()> {
                 out.write_all(&original).map_err(|e| {
                     ZstorError::new_io("could not write data to output file".to_string(), e)
                 })?;
+                info!(
+                    "Recovered file {:?} ({} bytes) from {}",
+                    if let Some(ref root) = cfg.virtual_root() {
+                        root.join(&file)
+                    } else {
+                        file.clone()
+                    },
+                    original.len(),
+                    metadata
+                        .shards()
+                        .iter()
+                        .map(|si| si.zdb().address().to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
             }
             Cmd::Rebuild { ref file } => {
-                let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
+                let old_metadata = cluster.load_meta(file).await?.ok_or_else(|| {
                     ZstorError::new_io(
                         "no metadata found for file".to_string(),
                         std::io::Error::from(std::io::ErrorKind::NotFound),
                     )
                 })?;
-                let decoded = recover_data(&metadata).await?;
+                let decoded = recover_data(&old_metadata).await?;
 
-                let metadata = store_data(decoded, *metadata.checksum(), &cfg).await?;
+                let metadata = store_data(decoded, *old_metadata.checksum(), &cfg).await?;
                 cluster.save_meta(&file, &metadata).await?;
+                info!(
+                    "Rebuild file from {} to {}",
+                    old_metadata
+                        .shards()
+                        .iter()
+                        .map(|si| si.zdb().address().to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    metadata
+                        .shards()
+                        .iter()
+                        .map(|si| si.zdb().address().to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
             }
             Cmd::Check { ref file } => {
                 match cluster.load_meta(file).await? {
@@ -240,24 +350,21 @@ fn main() -> ZstorResult<()> {
                 // connect to metastore => already done
                 // connect to backends
                 debug!("Testing 0-db reachability");
-                for conn_result in join_all(cfg.backends().into_iter().cloned().map(|ci| {
-                    tokio::spawn(async move {
-                        Zdb::new(ci).await
-                    })
-                })).await {
+                for conn_result in join_all(
+                    cfg.backends()
+                        .into_iter()
+                        .cloned()
+                        .map(|ci| tokio::spawn(async move { Zdb::new(ci).await })),
+                )
+                .await
+                {
                     // type here is Resut<Result<Zdb, ZdbError>, JoinError>
-                    // so we need to try on the outer JoinError to get to the possible ZdbError 
-                    if let Err(e) = conn_result? {
-                        error!("can't connect to 0-db backend: {}", e);
-                        return Err(e.into());
-                    }
-                };
+                    // so we need to try on the outer JoinError to get to the possible ZdbError
+                    conn_result??;
+                }
 
                 // retrieve a config
-                if let Err(e) = cfg.shard_stores() {
-                    error!("No valid storage configuration given the backend setup and redundancy profile");    
-                    return Err(e.into());
-                }
+                cfg.shard_stores()?;
             }
         };
 
@@ -314,7 +421,7 @@ async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
 async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorResult<MetaData> {
     let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
     let shards = encoder.encode(data);
-    debug!("data encoded");
+    trace!("data encoded");
 
     let backends = cfg.shard_stores()?;
 

@@ -30,7 +30,7 @@ snap = "1"
 log = { version = "0.4", features = ["release_max_level_debug"] }
 redis = { version = "0.20", default-features = false, features = ["aio", "tokio-comp"] }
 sha-1 = "0.9"
-simple_logger = "1.11"
+simple_logger = "1.11" # TODO: remove this
 pretty_env_logger = "0.4"
 structopt = "0.3"
 tokio = { version = "1", features = ["rt", "macros"] }
@@ -38,6 +38,7 @@ futures = "0.3"
 blake2 = "0.9"
 gray-codes = "0.1"
 etcd-client = { version = "0.6", features = ["tls", "tls-roots"] }
+log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
 
 [dev-dependencies]
 rand = "0.7"
