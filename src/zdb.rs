@@ -20,14 +20,13 @@ const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
 /// the remote closed). No reconnection is attempted.
 pub struct Zdb {
     conn: Connection,
-    // connection info tracked to conveniently inspect the remote address.
-    ci: ConnectionInfo,
-    ns: Option<String>,
+    // connection info tracked to conveniently inspect the remote address and namespace.
+    ci: ZdbConnectionInfo,
 }
 
 impl fmt::Debug for Zdb {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ZDB at {}", self.ci.addr)
+        write!(f, "ZDB at {}", self.ci.address)
     }
 }
 
@@ -79,12 +78,12 @@ impl Zdb {
 
         let client = redis::Client::open(ci.clone()).map_err(|e| ZdbError {
             kind: ZdbErrorKind::Connect,
-            remote: ci.addr.to_string(),
+            remote: info.address,
             internal: ErrorCause::Redis(e),
         })?;
         let mut conn = client.get_async_connection().await.map_err(|e| ZdbError {
             kind: ZdbErrorKind::Connect,
-            remote: ci.addr.to_string(),
+            remote: info.address,
             internal: ErrorCause::Redis(e),
         })?;
         trace!("opened connection to db");
@@ -94,7 +93,7 @@ impl Zdb {
             .await
             .map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Connect,
-                remote: ci.addr.to_string(),
+                remote: info.address,
                 internal: ErrorCause::Redis(e),
             })?;
         trace!("db connection established");
@@ -130,17 +129,13 @@ impl Zdb {
                     } else {
                         ZdbErrorKind::Ns
                     },
-                    remote: ci.addr.to_string(),
+                    remote: info.address,
                     internal: ErrorCause::Redis(e),
                 })?;
             trace!("opened namespace");
         }
 
-        Ok(Self {
-            conn,
-            ci,
-            ns: info.namespace,
-        })
+        Ok(Self { conn, ci: info })
     }
 
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
@@ -161,7 +156,7 @@ impl Zdb {
                 .await
                 .map_err(|e| ZdbError {
                     kind: ZdbErrorKind::Write,
-                    remote: self.ci.addr.to_string(),
+                    remote: self.ci.address,
                     internal: ErrorCause::Redis(e),
                 })?;
 
@@ -185,12 +180,12 @@ impl Zdb {
                     .await
                     .map_err(|e| ZdbError {
                         kind: ZdbErrorKind::Read,
-                        remote: self.ci.addr.to_string(),
+                        remote: self.ci.address,
                         internal: ErrorCause::Redis(e),
                     })?
                     .ok_or(ZdbError {
                         kind: ZdbErrorKind::Read,
-                        remote: self.ci.addr.to_string(),
+                        remote: self.ci.address,
                         internal: ErrorCause::Other(format!("missing key {}", key)),
                     })?,
             );
@@ -216,7 +211,7 @@ impl Zdb {
     /// Query info about the namespace.
     pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
         let list: String = redis::cmd("NSINFO")
-            .arg(if let Some(ref ns) = self.ns {
+            .arg(if let Some(ref ns) = self.ci.namespace {
                 ns
             } else {
                 "default"
@@ -225,7 +220,7 @@ impl Zdb {
             .await
             .map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Read,
-                remote: self.ci.addr.to_string(),
+                remote: self.ci.address,
                 internal: ErrorCause::Redis(e),
             })?;
 
@@ -251,7 +246,7 @@ impl Zdb {
             name: kvs["name"].to_string(),
             entries: kvs["entries"].parse().map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.addr.to_string(),
+                remote: self.ci.address,
                 internal: ErrorCause::Other(format!("expected entries to be an integer ({})", e)),
             })?,
             public: match kvs["public"] {
@@ -260,7 +255,7 @@ impl Zdb {
                 _ => {
                     return Err(ZdbError {
                         kind: ZdbErrorKind::Format,
-                        remote: self.ci.addr.to_string(),
+                        remote: self.ci.address,
                         internal: ErrorCause::Other("expected public to be yes/no".to_string()),
                     })
                 }
@@ -271,14 +266,14 @@ impl Zdb {
                 _ => {
                     return Err(ZdbError {
                         kind: ZdbErrorKind::Format,
-                        remote: self.ci.addr.to_string(),
+                        remote: self.ci.address,
                         internal: ErrorCause::Other("expected password to be yes/no".to_string()),
                     })
                 }
             },
             data_size_bytes: kvs["data_size_bytes"].parse().map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.addr.to_string(),
+                remote: self.ci.address,
                 internal: ErrorCause::Other(format!(
                     "expected data_size_bytes to be an integer ({})",
                     e
@@ -286,7 +281,7 @@ impl Zdb {
             })?,
             data_limit_bytes: match kvs["data_limits_bytes"].parse().map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.addr.to_string(),
+                remote: self.ci.address,
                 internal: ErrorCause::Other(format!(
                     "expected data_limit_bytes to be an integer ({})",
                     e
@@ -297,7 +292,7 @@ impl Zdb {
             },
             index_size_bytes: kvs["index_size_bytes"].parse().map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.addr.to_string(),
+                remote: self.ci.address,
                 internal: ErrorCause::Other(format!(
                     "expected index_size_bytes to be an integer ({})",
                     e
@@ -309,7 +304,7 @@ impl Zdb {
                 _ => {
                     return Err(ZdbError {
                         kind: ZdbErrorKind::Format,
-                        remote: self.ci.addr.to_string(),
+                        remote: self.ci.address,
                         internal: ErrorCause::Other(
                             "expected mode to be usermode/sequential".to_string(),
                         ),
@@ -319,7 +314,7 @@ impl Zdb {
             index_disk_freespace_bytes: kvs["index_disk_freespace_bytes"].parse().map_err(|e| {
                 ZdbError {
                     kind: ZdbErrorKind::Format,
-                    remote: self.ci.addr.to_string(),
+                    remote: self.ci.address,
                     internal: ErrorCause::Other(format!(
                         "expected index_disk_freespace_bytes to be an integer ({})",
                         e
@@ -329,7 +324,7 @@ impl Zdb {
             data_disk_freespace_bytes: kvs["data_disk_freespace_bytes"].parse().map_err(|e| {
                 ZdbError {
                     kind: ZdbErrorKind::Format,
-                    remote: self.ci.addr.to_string(),
+                    remote: self.ci.address,
                     internal: ErrorCause::Other(format!(
                         "expected index_disk_freespace_bytes to be an integer ({})",
                         e
@@ -337,6 +332,11 @@ impl Zdb {
                 }
             })?,
         })
+    }
+
+    /// Returns the [`zstor_v2::zdb::ZdbConnectionInfo`] object used to connect to this db.
+    pub async fn connection_info(&self) -> &ZdbConnectionInfo {
+        &self.ci
     }
 }
 
@@ -380,7 +380,7 @@ fn read_le_key(input: &[u8]) -> Key {
 #[derive(Debug)]
 pub struct ZdbError {
     kind: ZdbErrorKind,
-    remote: String,
+    remote: SocketAddr,
     internal: ErrorCause,
 }
 
@@ -401,6 +401,13 @@ impl std::error::Error for ZdbError {
         } else {
             None
         }
+    }
+}
+
+impl ZdbError {
+    /// The address of the 0-db which caused this error.
+    pub fn address(&self) -> &SocketAddr {
+        &self.remote
     }
 }
 

@@ -38,7 +38,7 @@ pub type ZstorResult<T> = Result<T, ZstorError>;
 #[derive(Debug)]
 pub struct ZstorError {
     kind: ZstorErrorKind,
-    internal: Box<dyn std::error::Error + Send>,
+    internal: InternalError,
 }
 
 impl fmt::Display for ZstorError {
@@ -49,7 +49,10 @@ impl fmt::Display for ZstorError {
 
 impl std::error::Error for ZstorError {
     fn cause(&self) -> Option<&dyn std::error::Error> {
-        Some(&*self.internal)
+        match self.internal {
+            InternalError::Zdb(ref e) => Some(e),
+            InternalError::Other(ref e) => Some(e.as_ref()),
+        }
     }
 }
 
@@ -58,13 +61,45 @@ impl ZstorError {
     pub fn new_io(msg: String, e: std::io::Error) -> Self {
         ZstorError {
             kind: ZstorErrorKind::LocalIO(msg),
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 
     /// Create a new ZstorError from any kind, with the underlying error included
     pub fn new(kind: ZstorErrorKind, internal: Box<dyn std::error::Error + Send>) -> Self {
-        ZstorError { kind, internal }
+        ZstorError {
+            kind,
+            internal: InternalError::Other(internal),
+        }
+    }
+
+    /// Return a reference to the embedded [`zstor_v2::zdb::ZdbError`], if this error is caused by
+    /// a ZdbError, or nothing otherwise.
+    pub fn zdb_error(&self) -> Option<&ZdbError> {
+        match self.internal {
+            InternalError::Zdb(ref e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Wrapper error for the ZstorError
+#[derive(Debug)]
+enum InternalError {
+    Zdb(ZdbError),
+    Other(Box<dyn std::error::Error + Send>),
+}
+
+impl fmt::Display for InternalError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                InternalError::Zdb(ref e) => e as &dyn std::error::Error,
+                InternalError::Other(e) => e.as_ref(),
+            }
+        )
     }
 }
 
@@ -114,7 +149,7 @@ impl From<ZdbError> for ZstorError {
     fn from(e: ZdbError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Storage,
-            internal: Box::new(e),
+            internal: InternalError::Zdb(e),
         }
     }
 }
@@ -123,7 +158,7 @@ impl From<EtcdError> for ZstorError {
     fn from(e: EtcdError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Metadata,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
@@ -132,7 +167,7 @@ impl From<EncodingError> for ZstorError {
     fn from(e: EncodingError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Encoding,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
@@ -141,7 +176,7 @@ impl From<EncryptionError> for ZstorError {
     fn from(e: EncryptionError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Encryption,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
@@ -150,7 +185,7 @@ impl From<CompressorError> for ZstorError {
     fn from(e: CompressorError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Compression,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
@@ -159,7 +194,7 @@ impl From<ConfigError> for ZstorError {
     fn from(e: ConfigError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Config,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
@@ -168,7 +203,7 @@ impl From<JoinError> for ZstorError {
     fn from(e: JoinError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Async,
-            internal: Box::new(e),
+            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
