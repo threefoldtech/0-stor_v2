@@ -2,6 +2,8 @@ use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::time::timeout;
 // use sha1::{Digest, Sha1};
 use std::fmt;
 
@@ -14,7 +16,11 @@ pub type Key = u32;
 /// The result type as used by this module.
 pub type ZdbResult<T> = Result<T, ZdbError>;
 
+// Max size of a single entry in zdb
 const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+// Max allowed duration for an operation
+// Since max chunk size is 2MiB, 30 seconds would mean a throughput of ~69.9 KB/s
+const ZDB_TIMEOUT: Duration = Duration::from_secs(30);
 
 // TODO impl debug
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
@@ -82,16 +88,27 @@ impl Zdb {
             remote: info.address,
             internal: ErrorCause::Redis(e),
         })?;
-        let mut conn = client.get_async_connection().await.map_err(|e| ZdbError {
-            kind: ZdbErrorKind::Connect,
-            remote: info.address,
-            internal: ErrorCause::Redis(e),
-        })?;
+        let mut conn = timeout(ZDB_TIMEOUT, client.get_async_connection())
+            .await
+            .map_err(|_| ZdbError {
+                kind: ZdbErrorKind::Connect,
+                remote: info.address,
+                internal: ErrorCause::Timeout,
+            })?
+            .map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Connect,
+                remote: info.address,
+                internal: ErrorCause::Redis(e),
+            })?;
         trace!("opened connection to db");
         trace!("pinging db");
-        redis::cmd("PING")
-            .query_async(&mut conn)
+        timeout(ZDB_TIMEOUT, redis::cmd("PING").query_async(&mut conn))
             .await
+            .map_err(|_| ZdbError {
+                kind: ZdbErrorKind::Connect,
+                remote: info.address,
+                internal: ErrorCause::Timeout,
+            })?
             .map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Connect,
                 remote: info.address,
@@ -121,9 +138,19 @@ impl Zdb {
                 // ns_select.arg("SECURE").arg(result);
             }
             trace!("opening namespace {}", ns);
-            ns_select
-                .query_async(&mut conn)
+            timeout(ZDB_TIMEOUT, ns_select.query_async(&mut conn))
                 .await
+                .map_err(|_| ZdbError {
+                    // try to guess the right kind of failure based on wether we are authenticating
+                    // or not
+                    kind: if let Some(_) = &info.password {
+                        ZdbErrorKind::Auth
+                    } else {
+                        ZdbErrorKind::Ns
+                    },
+                    remote: info.address,
+                    internal: ErrorCause::Timeout,
+                })?
                 .map_err(|e| ZdbError {
                     kind: if let redis::ErrorKind::AuthenticationFailed = e.kind() {
                         ZdbErrorKind::Auth
@@ -150,16 +177,24 @@ impl Zdb {
 
         for chunk in data.chunks(MAX_ZDB_CHUNK_SIZE) {
             trace!("writing chunk of size {}", chunk.len());
-            let raw_key: Vec<u8> = redis::cmd("SET")
-                .arg::<&[u8]>(&[])
-                .arg(chunk)
-                .query_async(&mut self.conn)
-                .await
-                .map_err(|e| ZdbError {
-                    kind: ZdbErrorKind::Write,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Redis(e),
-                })?;
+            let raw_key: Vec<u8> = timeout(
+                ZDB_TIMEOUT,
+                redis::cmd("SET")
+                    .arg::<&[u8]>(&[])
+                    .arg(chunk)
+                    .query_async(&mut self.conn),
+            )
+            .await
+            .map_err(|_| ZdbError {
+                kind: ZdbErrorKind::Write,
+                remote: self.ci.address,
+                internal: ErrorCause::Timeout,
+            })?
+            .map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Write,
+                remote: self.ci.address,
+                internal: ErrorCause::Redis(e),
+            })?;
 
             // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
             // a key
@@ -175,20 +210,29 @@ impl Zdb {
         for key in keys {
             trace!("loading data at key {}", key);
             data.extend_from_slice(
-                &redis::cmd("GET")
-                    .arg(&key.to_le_bytes())
-                    .query_async::<_, Option<Vec<u8>>>(&mut self.conn)
-                    .await
-                    .map_err(|e| ZdbError {
-                        kind: ZdbErrorKind::Read,
-                        remote: self.ci.address,
-                        internal: ErrorCause::Redis(e),
-                    })?
-                    .ok_or(ZdbError {
-                        kind: ZdbErrorKind::Read,
-                        remote: self.ci.address,
-                        internal: ErrorCause::Other(format!("missing key {}", key)),
-                    })?,
+                timeout(
+                    ZDB_TIMEOUT,
+                    redis::cmd("GET")
+                        .arg(&key.to_le_bytes())
+                        .query_async::<_, Option<Vec<u8>>>(&mut self.conn),
+                )
+                .await
+                .map_err(|_| ZdbError {
+                    kind: ZdbErrorKind::Read,
+                    remote: self.ci.address,
+                    internal: ErrorCause::Timeout,
+                })?
+                .map_err(|e| ZdbError {
+                    kind: ZdbErrorKind::Read,
+                    remote: self.ci.address,
+                    internal: ErrorCause::Redis(e),
+                })?
+                .ok_or(ZdbError {
+                    kind: ZdbErrorKind::Read,
+                    remote: self.ci.address,
+                    internal: ErrorCause::Other(format!("missing key {}", key)),
+                })?
+                .as_ref(),
             );
         }
         Ok(Some(data))
@@ -211,19 +255,27 @@ impl Zdb {
 
     /// Query info about the namespace.
     pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
-        let list: String = redis::cmd("NSINFO")
-            .arg(if let Some(ref ns) = self.ci.namespace {
-                ns
-            } else {
-                "default"
-            })
-            .query_async(&mut self.conn)
-            .await
-            .map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Read,
-                remote: self.ci.address,
-                internal: ErrorCause::Redis(e),
-            })?;
+        let list: String = timeout(
+            ZDB_TIMEOUT,
+            redis::cmd("NSINFO")
+                .arg(if let Some(ref ns) = self.ci.namespace {
+                    ns
+                } else {
+                    "default"
+                })
+                .query_async(&mut self.conn),
+        )
+        .await
+        .map_err(|_| ZdbError {
+            kind: ZdbErrorKind::Read,
+            remote: self.ci.address,
+            internal: ErrorCause::Timeout,
+        })?
+        .map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Read,
+            remote: self.ci.address,
+            internal: ErrorCause::Redis(e),
+        })?;
 
         let kvs: HashMap<_, _> = list
             .lines()
@@ -413,6 +465,7 @@ impl ZdbError {
 enum ErrorCause {
     Redis(redis::RedisError),
     Other(String),
+    Timeout,
 }
 
 impl fmt::Display for ErrorCause {
@@ -423,6 +476,7 @@ impl fmt::Display for ErrorCause {
             match self {
                 ErrorCause::Redis(e) => e.to_string(),
                 ErrorCause::Other(e) => e.clone(),
+                ErrorCause::Timeout => "timeout".to_string(),
             }
         )
     }
@@ -443,6 +497,8 @@ pub enum ZdbErrorKind {
     Read,
     /// Data returned is not in the expected format
     Format,
+    /// The operation timed out
+    Timeout,
 }
 
 impl fmt::Display for ZdbErrorKind {
@@ -457,6 +513,7 @@ impl fmt::Display for ZdbErrorKind {
                 ZdbErrorKind::Write => "WRITE",
                 ZdbErrorKind::Read => "READ",
                 ZdbErrorKind::Format => "WRONG FORMAT",
+                ZdbErrorKind::Timeout => "OPERATION TIMEOUT",
             }
         )
     }
