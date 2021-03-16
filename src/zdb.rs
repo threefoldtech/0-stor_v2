@@ -1,6 +1,7 @@
 use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 // use sha1::{Digest, Sha1};
 use std::fmt;
 
@@ -224,8 +225,6 @@ impl Zdb {
                 internal: ErrorCause::Redis(e),
             })?;
 
-        use std::collections::HashMap;
-
         let kvs: HashMap<_, _> = list
             .lines()
             .map(|line| line.trim())
@@ -239,8 +238,6 @@ impl Zdb {
                 )
             })
             .collect();
-
-        println!("{:?}", kvs);
 
         Ok(NsInfo {
             name: kvs["name"].to_string(),
