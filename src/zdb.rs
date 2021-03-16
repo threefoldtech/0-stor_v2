@@ -22,6 +22,7 @@ pub struct Zdb {
     conn: Connection,
     // connection info tracked to conveniently inspect the remote address.
     ci: ConnectionInfo,
+    ns: Option<String>,
 }
 
 impl fmt::Debug for Zdb {
@@ -135,7 +136,11 @@ impl Zdb {
             trace!("opened namespace");
         }
 
-        Ok(Self { conn, ci })
+        Ok(Self {
+            conn,
+            ci,
+            ns: info.namespace,
+        })
     }
 
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
@@ -192,6 +197,172 @@ impl Zdb {
         }
         Ok(Some(data))
     }
+
+    /// Get the amount of free space in the connected namespace. If there is no limit, or the free
+    /// space according to the limit is higher than the remaining free disk size, the remainder of
+    /// the free disk size is returned.
+    pub async fn free_space(&mut self) -> ZdbResult<usize> {
+        let ns_info = self.ns_info().await?;
+        if let Some(limit) = ns_info.data_limit_bytes {
+            let free_limit = limit - ns_info.data_size_bytes;
+            if free_limit < ns_info.data_disk_freespace_bytes {
+                return Ok(free_limit);
+            }
+        }
+
+        return Ok(ns_info.data_disk_freespace_bytes);
+    }
+
+    /// Query info about the namespace.
+    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+        let list: String = redis::cmd("NSINFO")
+            .arg(if let Some(ref ns) = self.ns {
+                ns
+            } else {
+                "default"
+            })
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Read,
+                remote: self.ci.addr.to_string(),
+                internal: ErrorCause::Redis(e),
+            })?;
+
+        use std::collections::HashMap;
+
+        let kvs: HashMap<_, _> = list
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| {
+                let mut split = line.split(": ");
+                // unwraps are safe because fixed
+                (
+                    split.next().or(Some("")).unwrap(),
+                    split.next().or(Some("")).unwrap(),
+                )
+            })
+            .collect();
+
+        println!("{:?}", kvs);
+
+        Ok(NsInfo {
+            name: kvs["name"].to_string(),
+            entries: kvs["entries"].parse().map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.addr.to_string(),
+                internal: ErrorCause::Other(format!("expected entries to be an integer ({})", e)),
+            })?,
+            public: match kvs["public"] {
+                "yes" => true,
+                "no" => false,
+                _ => {
+                    return Err(ZdbError {
+                        kind: ZdbErrorKind::Format,
+                        remote: self.ci.addr.to_string(),
+                        internal: ErrorCause::Other("expected public to be yes/no".to_string()),
+                    })
+                }
+            },
+            password: match kvs["password"] {
+                "yes" => true,
+                "no" => false,
+                _ => {
+                    return Err(ZdbError {
+                        kind: ZdbErrorKind::Format,
+                        remote: self.ci.addr.to_string(),
+                        internal: ErrorCause::Other("expected password to be yes/no".to_string()),
+                    })
+                }
+            },
+            data_size_bytes: kvs["data_size_bytes"].parse().map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.addr.to_string(),
+                internal: ErrorCause::Other(format!(
+                    "expected data_size_bytes to be an integer ({})",
+                    e
+                )),
+            })?,
+            data_limit_bytes: match kvs["data_limits_bytes"].parse().map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.addr.to_string(),
+                internal: ErrorCause::Other(format!(
+                    "expected data_limit_bytes to be an integer ({})",
+                    e
+                )),
+            })? {
+                0 => None,
+                limit => Some(limit),
+            },
+            index_size_bytes: kvs["index_size_bytes"].parse().map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.addr.to_string(),
+                internal: ErrorCause::Other(format!(
+                    "expected index_size_bytes to be an integer ({})",
+                    e
+                )),
+            })?,
+            mode: match kvs["mode"] {
+                "userkey" => ZdbRunMode::User,
+                "sequential" => ZdbRunMode::Seq,
+                _ => {
+                    return Err(ZdbError {
+                        kind: ZdbErrorKind::Format,
+                        remote: self.ci.addr.to_string(),
+                        internal: ErrorCause::Other(
+                            "expected mode to be usermode/sequential".to_string(),
+                        ),
+                    })
+                }
+            },
+            index_disk_freespace_bytes: kvs["index_disk_freespace_bytes"].parse().map_err(|e| {
+                ZdbError {
+                    kind: ZdbErrorKind::Format,
+                    remote: self.ci.addr.to_string(),
+                    internal: ErrorCause::Other(format!(
+                        "expected index_disk_freespace_bytes to be an integer ({})",
+                        e
+                    )),
+                }
+            })?,
+            data_disk_freespace_bytes: kvs["data_disk_freespace_bytes"].parse().map_err(|e| {
+                ZdbError {
+                    kind: ZdbErrorKind::Format,
+                    remote: self.ci.addr.to_string(),
+                    internal: ErrorCause::Other(format!(
+                        "expected index_disk_freespace_bytes to be an integer ({})",
+                        e
+                    )),
+                }
+            })?,
+        })
+    }
+}
+
+/// Information about a 0-db namespace, as reported by the db itself.
+// TODO: not complete
+#[derive(Debug)]
+pub struct NsInfo {
+    name: String,
+    entries: usize,
+    public: bool,
+    password: bool,
+    data_size_bytes: usize,
+    data_limit_bytes: Option<usize>,
+    index_size_bytes: usize,
+    mode: ZdbRunMode,
+    index_disk_freespace_bytes: usize,
+    data_disk_freespace_bytes: usize,
+}
+
+/// The different running modes for a zdb instance
+#[derive(Debug)]
+pub enum ZdbRunMode {
+    /// Userkey run mode
+    User,
+    /// Sequential run mode
+    Seq,
 }
 
 /// Interpret a byteslice as a [`Key`] type. This is a helper function to easily interpret the
@@ -266,6 +437,8 @@ pub enum ZdbErrorKind {
     Write,
     /// Error while reading data
     Read,
+    /// Data returned is not in the expected format
+    Format,
 }
 
 impl fmt::Display for ZdbErrorKind {
@@ -279,6 +452,7 @@ impl fmt::Display for ZdbErrorKind {
                 ZdbErrorKind::Auth => "AUTH",
                 ZdbErrorKind::Write => "WRITE",
                 ZdbErrorKind::Read => "READ",
+                ZdbErrorKind::Format => "WRONG FORMAT",
             }
         )
     }
