@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io;
-use std::io::{copy, Cursor};
+use std::io::copy;
 
 /// Result type for compressor operations.
 pub type CompressorResult<T> = Result<T, CompressorError>;
@@ -8,9 +8,17 @@ pub type CompressorResult<T> = Result<T, CompressorError>;
 /// A compression unit allows compressing and later decompressing data.
 pub trait Compressor {
     /// Compress the given input buffer, returning the compressed data.
-    fn compress(&self, data: &[u8]) -> CompressorResult<Vec<u8>>;
+    fn compress(
+        &self,
+        input: &mut dyn io::Read,
+        output: &mut dyn io::Write,
+    ) -> CompressorResult<u64>;
     /// Decompress the given input buffer, returning the decompressed data.
-    fn decompress(&self, data: &[u8]) -> CompressorResult<Vec<u8>>;
+    fn decompress(
+        &self,
+        input: &mut dyn io::Read,
+        output: &mut dyn io::Write,
+    ) -> CompressorResult<u64>;
 }
 
 /// A compressor implementing the snappy algorithm
@@ -18,38 +26,34 @@ pub trait Compressor {
 pub struct Snappy;
 
 impl Compressor for Snappy {
-    fn compress(&self, data: &[u8]) -> CompressorResult<Vec<u8>> {
-        let mut input = Cursor::new(data);
-        let out = Cursor::new(Vec::new());
+    fn compress(
+        &self,
+        mut input: &mut dyn io::Read,
+        output: &mut dyn io::Write,
+    ) -> CompressorResult<u64> {
+        let mut wtr = snap::write::FrameEncoder::new(output);
 
-        let mut wtr = snap::write::FrameEncoder::new(out);
-
-        copy(&mut input, &mut wtr).map_err(|e| CompressorError {
+        let total = copy(&mut input, &mut wtr).map_err(|e| CompressorError {
             kind: CompressorErrorKind::Compress,
             internal: e,
         })?;
 
-        Ok(wtr
-            .into_inner()
-            .map_err(|e| CompressorError {
-                kind: CompressorErrorKind::Compress,
-                internal: io::Error::from(e.error().kind()), // TODO: this could be better
-            })?
-            .into_inner())
+        Ok(total)
     }
 
-    fn decompress(&self, data: &[u8]) -> CompressorResult<Vec<u8>> {
-        let input = Cursor::new(data);
-        let mut out = Cursor::new(Vec::new());
-
+    fn decompress(
+        &self,
+        input: &mut dyn io::Read,
+        mut output: &mut dyn io::Write,
+    ) -> CompressorResult<u64> {
         let mut rdr = snap::read::FrameDecoder::new(input);
 
-        copy(&mut rdr, &mut out).map_err(|e| CompressorError {
+        let total = copy(&mut rdr, &mut output).map_err(|e| CompressorError {
             kind: CompressorErrorKind::Decompress,
             internal: e,
         })?;
 
-        Ok(out.into_inner())
+        Ok(total)
     }
 }
 

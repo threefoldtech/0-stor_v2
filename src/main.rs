@@ -3,7 +3,7 @@ use futures::future::{join_all, try_join_all};
 use log::{debug, error, info, trace};
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read};
 use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
@@ -220,15 +220,12 @@ fn real_main() -> ZstorResult<()> {
                 let mut encoding_file = File::open(&file).map_err(|e| {
                     ZstorError::new_io("could not open file to encode".to_string(), e)
                 })?;
-                let mut buffer = Vec::new();
-                encoding_file.read_to_end(&mut buffer).map_err(|e| {
-                    ZstorError::new_io("could not read file to encode".to_string(), e)
-                })?;
-                trace!("loaded {} bytes of data", buffer.len());
 
-                let compressor = Snappy;
-                let compressed = compressor.compress(&buffer)?;
-                trace!("compressed size: {} bytes", compressed.len());
+                let compressed = Vec::new();
+                let mut cursor = Cursor::new(compressed);
+                let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
+                let compressed = cursor.into_inner();
+                trace!("compressed size: {} bytes", original_size);
 
                 let encryptor = AESGCM::new(cfg.encryption().key().clone());
                 let encrypted = encryptor.encrypt(&compressed)?;
@@ -239,7 +236,7 @@ fn real_main() -> ZstorResult<()> {
                 info!(
                     "Stored file {:?} ({} bytes) to {}",
                     file.as_path(),
-                    buffer.len(),
+                    original_size,
                     metadata
                         .shards()
                         .iter()
@@ -260,11 +257,7 @@ fn real_main() -> ZstorResult<()> {
                 let encryptor = AESGCM::new(metadata.encryption().key().clone());
                 let decrypted = encryptor.decrypt(&decoded)?;
 
-                let original = Snappy.decompress(&decrypted)?;
-
                 // create the file
-                // Ideally we would do an if let on just the argument to create, but due to
-                // lifetimes that is not possible.
                 let mut out = if let Some(ref root) = cfg.virtual_root() {
                     File::create(root.join(&file))
                 } else {
@@ -272,9 +265,27 @@ fn real_main() -> ZstorResult<()> {
                 }
                 .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
 
-                out.write_all(&original).map_err(|e| {
-                    ZstorError::new_io("could not write data to output file".to_string(), e)
-                })?;
+                let mut cursor = Cursor::new(decrypted);
+                Snappy.decompress(&mut cursor, &mut out)?;
+
+                // get file size
+                let file_size = if let Ok(meta) = out.metadata() {
+                    Some(meta.len())
+                } else {
+                    // TODO: is this possible?
+                    None
+                };
+
+                if !std::fs::metadata(&file)
+                    .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
+                    .is_file()
+                {
+                    return Err(ZstorError::new_io(
+                        "only files can be stored".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::InvalidData),
+                    ));
+                }
+
                 info!(
                     "Recovered file {:?} ({} bytes) from {}",
                     if let Some(ref root) = cfg.virtual_root() {
@@ -282,7 +293,11 @@ fn real_main() -> ZstorResult<()> {
                     } else {
                         file.clone()
                     },
-                    original.len(),
+                    if let Some(size) = file_size {
+                        size.to_string()
+                    } else {
+                        "unknown".to_string()
+                    },
                     metadata
                         .shards()
                         .iter()
