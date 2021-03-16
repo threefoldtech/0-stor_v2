@@ -423,23 +423,61 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
     let shards = encoder.encode(data);
     trace!("data encoded");
 
-    let backends = cfg.shard_stores()?;
+    // craate a local copy of the config which we can modify to remove dead nodes
+    let mut cfg = cfg.clone();
 
+    let shard_len = shards[0].len(); // Safe as a valid encoder needs at least 1 shard
+
+    trace!("verifiying backends");
+
+    let dbs = loop {
+        debug!("Finding backend config");
+        let backends = cfg.shard_stores()?;
+
+        let mut failed_shards: usize = 0;
+        let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
+
+        for backend in backends {
+            handles.push(tokio::spawn(async move {
+                let mut db = Zdb::new(backend.clone()).await?;
+                // check space in backend
+                match db.free_space().await? {
+                    insufficient if insufficient < shard_len => Err(ZstorError::new(
+                        ZstorErrorKind::Storage,
+                        // TODO nospace error
+                        Box::new(std::io::Error::from(std::io::ErrorKind::Other)),
+                    )),
+                    _ => Ok(db),
+                }
+            }));
+        }
+
+        let mut dbs = Vec::new();
+        for db in join_all(handles).await {
+            match db? {
+                Err(e) => {
+                    if let Some(zdbe) = e.zdb_error() {
+                        debug!("could not connect to 0-db: {}", zdbe);
+                        cfg.remove_shard(zdbe.address());
+                        failed_shards += 1;
+                    }
+                }
+                Ok(db) => dbs.push(db),
+                // no error so healthy db backend
+            }
+        }
+
+        // if we find one we are good
+        if failed_shards == 0 {
+            debug!("found valid backend configuration");
+            break dbs;
+        }
+
+        debug!("Backend config failed");
+    };
+
+    // TODO
     trace!("store shards in backends");
-    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
-
-    for (backend, (shard_idx, shard)) in backends.into_iter().zip(shards.into_iter().enumerate()) {
-        handles.push(tokio::spawn(async move {
-            let mut db = Zdb::new(backend.clone()).await?;
-            let keys = db.set(&shard).await?;
-            Ok(ShardInfo::new(
-                shard_idx,
-                shard.checksum(),
-                keys,
-                backend.clone(),
-            ))
-        }));
-    }
 
     let mut metadata = MetaData::new(
         cfg.data_shards(),
@@ -448,6 +486,19 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
         cfg.encryption().clone(),
         cfg.compression().clone(),
     );
+
+    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
+    for (mut db, (shard_idx, shard)) in dbs.into_iter().zip(shards.into_iter().enumerate()) {
+        handles.push(tokio::spawn(async move {
+            let keys = db.set(&shard).await?;
+            Ok(ShardInfo::new(
+                shard_idx,
+                shard.checksum(),
+                keys,
+                db.connection_info().await.clone(),
+            ))
+        }));
+    }
 
     for shard_info in try_join_all(handles).await? {
         metadata.add_shard(shard_info?);
