@@ -1,6 +1,14 @@
 use blake2::{digest::VariableOutput, VarBlake2b};
 use futures::future::{join_all, try_join_all};
+use log::LevelFilter;
 use log::{debug, error, info, trace, warn};
+use log4rs::append::rolling_file::policy::compound::{
+    roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
+};
+use log4rs::append::rolling_file::RollingFileAppender;
+use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::filter::{Filter, Response};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -15,6 +23,8 @@ use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::{Zdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
+
+const MIB: u64 = 1 << 20;
 
 #[derive(StructOpt, Debug)]
 #[structopt(about = "zstor data encoder")]
@@ -32,6 +42,15 @@ struct Opts {
         parse(from_os_str)
     )]
     config: std::path::PathBuf,
+    /// Path to the log file to use. The logfile will automatically roll over if the size
+    /// increases beyond 10MiB.
+    #[structopt(
+        name = "log_file",
+        default_value = "zstor.log",
+        long,
+        parse(from_os_str)
+    )]
+    log_file: std::path::PathBuf,
     #[structopt(subcommand)]
     cmd: Cmd,
 }
@@ -97,16 +116,6 @@ enum Cmd {
     Test,
 }
 
-use log::LevelFilter;
-use log4rs::append::rolling_file::policy::compound::{
-    roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
-};
-use log4rs::append::rolling_file::RollingFileAppender;
-use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
-use log4rs::encode::pattern::PatternEncoder;
-use log4rs::filter::{Filter, Response};
-const MIB: u64 = 1 << 20;
-
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
 #[derive(Debug)]
 struct ModuleFilter {
@@ -135,39 +144,6 @@ fn main() -> ZstorResult<()> {
 }
 
 fn real_main() -> ZstorResult<()> {
-    // init logger
-    let policy = CompoundPolicy::new(
-        Box::new(SizeTrigger::new(10 * MIB)),
-        Box::new(
-            FixedWindowRoller::builder()
-                .build("./zstor.{}.log", 5)
-                .unwrap(),
-        ),
-    );
-    let log_file = RollingFileAppender::builder()
-        .append(true)
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%Y-%m-%d %H:%M:%S %Z)(local)}: {l} {m}{n}",
-        )))
-        .build("./zstor.log", Box::new(policy))
-        .unwrap();
-    let log_config = LogConfig::builder()
-        .appender(
-            Appender::builder()
-                .filter(Box::new(ModuleFilter {
-                    module: "zstor_v2".to_string(),
-                }))
-                .build("logfile", Box::new(log_file)),
-        )
-        .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .build(log::LevelFilter::Debug),
-        )
-        .unwrap();
-    log4rs::init_config(log_config).unwrap();
-
     // construct an async runtime, do this manually so we can select the single threaded runtime.
     let rt = Builder::new_current_thread()
         .enable_all()
@@ -177,6 +153,55 @@ fn real_main() -> ZstorResult<()> {
 
     rt.block_on(async {
         let opts = Opts::from_args();
+
+        // TODO: add check for file name
+        let mut rolled_log_file = opts.log_file.clone();
+        let name = if let Some(ext) = rolled_log_file.extension() {
+            format!(
+                "{}.{{}}.{}",
+                rolled_log_file.file_stem().unwrap().to_str().unwrap(),
+                ext.to_str().unwrap(),
+            )
+        } else {
+            format!(
+                "{}.{{}}",
+                rolled_log_file.file_stem().unwrap().to_str().unwrap(),
+            )
+        };
+        rolled_log_file.set_file_name(name);
+
+        // init logger
+        let policy = CompoundPolicy::new(
+            Box::new(SizeTrigger::new(10 * MIB)),
+            Box::new(
+                FixedWindowRoller::builder()
+                    .build(rolled_log_file.to_str().unwrap(), 5)
+                    .unwrap(),
+            ),
+        );
+        let log_file = RollingFileAppender::builder()
+            .append(true)
+            .encoder(Box::new(PatternEncoder::new(
+                "{d(%Y-%m-%d %H:%M:%S %Z)(local)}: {l} {m}{n}",
+            )))
+            .build(&opts.log_file, Box::new(policy))
+            .unwrap();
+        let log_config = LogConfig::builder()
+            .appender(
+                Appender::builder()
+                    .filter(Box::new(ModuleFilter {
+                        module: "zstor_v2".to_string(),
+                    }))
+                    .build("logfile", Box::new(log_file)),
+            )
+            .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
+            .build(
+                Root::builder()
+                    .appender("logfile")
+                    .build(log::LevelFilter::Debug),
+            )
+            .unwrap();
+        log4rs::init_config(log_config).unwrap();
 
         let cfg = read_cfg(&opts.config)?;
 
