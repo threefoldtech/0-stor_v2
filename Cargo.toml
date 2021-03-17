@@ -2,6 +2,7 @@
 
 members = [
 	"zstor",
+	"zstor_monitor",
 ]
 
 [profile.release]

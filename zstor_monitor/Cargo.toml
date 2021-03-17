@@ -1,0 +1,20 @@
+[package]
+name = "zstor_monitor"
+version = "0.1.0"
+authors = ["Lee Smet <lee@threefold.tech>"]
+edition = "2018"
+repository = "https://github.com/threefoldtech/0-stor_v2"
+
+[[bin]]
+name = "zstor_monitor"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
+log = { version = "0.4", features = ["release_max_level_debug"] }
+toml = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+zstor_v2 = { path = "../zstor" }
