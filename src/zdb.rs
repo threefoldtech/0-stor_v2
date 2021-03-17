@@ -238,21 +238,6 @@ impl Zdb {
         Ok(Some(data))
     }
 
-    /// Get the amount of free space in the connected namespace. If there is no limit, or the free
-    /// space according to the limit is higher than the remaining free disk size, the remainder of
-    /// the free disk size is returned.
-    pub async fn free_space(&mut self) -> ZdbResult<usize> {
-        let ns_info = self.ns_info().await?;
-        if let Some(limit) = ns_info.data_limit_bytes {
-            let free_limit = limit - ns_info.data_size_bytes;
-            if free_limit < ns_info.data_disk_freespace_bytes {
-                return Ok(free_limit);
-            }
-        }
-
-        return Ok(ns_info.data_disk_freespace_bytes);
-    }
-
     /// Query info about the namespace.
     pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
         let list: String = timeout(
@@ -384,7 +369,7 @@ impl Zdb {
     }
 
     /// Returns the [`zstor_v2::zdb::ZdbConnectionInfo`] object used to connect to this db.
-    pub async fn connection_info(&self) -> &ZdbConnectionInfo {
+    pub fn connection_info(&self) -> &ZdbConnectionInfo {
         &self.ci
     }
 }
@@ -403,6 +388,22 @@ pub struct NsInfo {
     mode: ZdbRunMode,
     index_disk_freespace_bytes: usize,
     data_disk_freespace_bytes: usize,
+}
+
+impl NsInfo {
+    /// Get the amount of free space in the namespace. If there is no limit, or the free
+    /// space according to the limit is higher than the remaining free disk size, the remainder of
+    /// the free disk size is returned.
+    pub fn free_space(&self) -> usize {
+        if let Some(limit) = self.data_limit_bytes {
+            let free_limit = limit - self.data_size_bytes;
+            if free_limit < self.data_disk_freespace_bytes {
+                return free_limit;
+            }
+        }
+
+        return self.data_disk_freespace_bytes;
+    }
 }
 
 /// The different running modes for a zdb instance
@@ -454,6 +455,18 @@ impl std::error::Error for ZdbError {
 }
 
 impl ZdbError {
+    /// Create a new ZstorError indicating the namespace does not have sufficient storage space
+    pub fn new_storage_size(remote: SocketAddr, required: usize, limit: usize) -> Self {
+        ZdbError {
+            kind: ZdbErrorKind::NsSize,
+            remote,
+            internal: ErrorCause::Other(format!(
+                "Namespace only has {} bytes of space left, but {} bytes are needed",
+                limit, required
+            )),
+        }
+    }
+
     /// The address of the 0-db which caused this error.
     pub fn address(&self) -> &SocketAddr {
         &self.remote
@@ -489,6 +502,8 @@ pub enum ZdbErrorKind {
     Connect,
     /// Error while setting the namespace
     Ns,
+    /// The namespace does not have sufficient capacity left
+    NsSize,
     /// Error while authenticating to the namespace
     Auth,
     /// Error while writing data
@@ -509,6 +524,7 @@ impl fmt::Display for ZdbErrorKind {
             match self {
                 ZdbErrorKind::Connect => "CONNECT",
                 ZdbErrorKind::Ns => "NS",
+                ZdbErrorKind::NsSize => "NS SIZE",
                 ZdbErrorKind::Auth => "AUTH",
                 ZdbErrorKind::Write => "WRITE",
                 ZdbErrorKind::Read => "READ",

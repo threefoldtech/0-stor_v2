@@ -13,7 +13,7 @@ use zstor_v2::encryption::{Encryptor, AESGCM};
 use zstor_v2::erasure::Encoder;
 use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
-use zstor_v2::zdb::Zdb;
+use zstor_v2::zdb::{Zdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 #[derive(StructOpt, Debug)]
@@ -450,17 +450,18 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
         let backends = cfg.shard_stores()?;
 
         let mut failed_shards: usize = 0;
-        let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
+        let mut handles: Vec<JoinHandle<ZdbResult<_>>> = Vec::with_capacity(shards.len());
 
         for backend in backends {
             handles.push(tokio::spawn(async move {
                 let mut db = Zdb::new(backend.clone()).await?;
                 // check space in backend
-                match db.free_space().await? {
-                    insufficient if insufficient < shard_len => Err(ZstorError::new(
-                        ZstorErrorKind::Storage,
-                        // TODO nospace error
-                        Box::new(std::io::Error::from(std::io::ErrorKind::Other)),
+                let ns_info = db.ns_info().await?;
+                match ns_info.free_space() {
+                    insufficient if insufficient < shard_len => Err(ZdbError::new_storage_size(
+                        db.connection_info().address().clone(),
+                        shard_len,
+                        ns_info.free_space(),
                     )),
                     _ => Ok(db),
                 }
@@ -470,15 +471,12 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
         let mut dbs = Vec::new();
         for db in join_all(handles).await {
             match db? {
-                Err(e) => {
-                    if let Some(zdbe) = e.zdb_error() {
-                        debug!("could not connect to 0-db: {}", zdbe);
-                        cfg.remove_shard(zdbe.address());
-                        failed_shards += 1;
-                    }
+                Err(zdbe) => {
+                    debug!("could not connect to 0-db: {}", zdbe);
+                    cfg.remove_shard(zdbe.address());
+                    failed_shards += 1;
                 }
-                Ok(db) => dbs.push(db),
-                // no error so healthy db backend
+                Ok(db) => dbs.push(db), // no error so healthy db backend
             }
         }
 
