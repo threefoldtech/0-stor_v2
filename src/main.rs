@@ -489,7 +489,6 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
         debug!("Backend config failed");
     };
 
-    // TODO
     trace!("store shards in backends");
 
     let mut metadata = MetaData::new(
@@ -508,7 +507,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
                 shard_idx,
                 shard.checksum(),
                 keys,
-                db.connection_info().await.clone(),
+                db.connection_info().clone(),
             ))
         }));
     }
