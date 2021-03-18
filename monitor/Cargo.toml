@@ -12,7 +12,7 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "fs", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "fs", "macros", "time"] }
 log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
 log = { version = "0.4", features = ["release_max_level_debug"] }
 toml = "0.5"
