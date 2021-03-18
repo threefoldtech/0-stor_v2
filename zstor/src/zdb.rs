@@ -38,7 +38,7 @@ impl fmt::Debug for Zdb {
 }
 
 /// Connection info for a 0-db (namespace).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZdbConnectionInfo {
     address: SocketAddr,
     namespace: Option<String>,
