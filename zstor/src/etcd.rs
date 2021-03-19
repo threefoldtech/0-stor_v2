@@ -187,8 +187,8 @@ impl Etcd {
             })?
             .kvs()
         {
-            // if the key is not a str it is a rogue key
-            if let Ok(ks) = kv.key_str() {
+            // if the value is not a str it is a rogue key
+            if let Ok(ks) = kv.value_str() {
                 data.push(ks.into());
             }
         }
