@@ -1,9 +1,10 @@
 use crate::meta::MetaData;
+use crate::zdb::ZdbConnectionInfo;
 use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
 };
-use etcd_client::{Client, ConnectOptions};
+use etcd_client::{Client, ConnectOptions, GetOptions};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -58,6 +59,11 @@ impl Etcd {
 
     /// Save the metadata for the file identified by `path` with a given prefix
     pub async fn save_meta(&mut self, path: &PathBuf, meta: &MetaData) -> EtcdResult<()> {
+        self.save_meta_by_key(&self.build_key(path)?, meta).await
+    }
+
+    /// Save the metadata for a given key
+    pub async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> EtcdResult<()> {
         // for now save metadata human readable
         trace!("encoding metadata");
         let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
@@ -65,14 +71,17 @@ impl Etcd {
             internal: InternalError::Meta(Box::new(e)),
         })?;
         // hash
-        let key = self.build_key(path)?;
-        self.write_value(&key, &enc_meta).await
+        self.write_value(key, &enc_meta).await
     }
 
     /// loads the metadata for a given path and prefix
     pub async fn load_meta(&mut self, path: &PathBuf) -> EtcdResult<Option<MetaData>> {
-        let key = self.build_key(path)?;
-        Ok(if let Some(value) = self.read_value(&key).await? {
+        self.load_meta_by_key(&self.build_key(path)?).await
+    }
+
+    /// loads the metadata for a given path and prefix
+    pub async fn load_meta_by_key(&mut self, key: &str) -> EtcdResult<Option<MetaData>> {
+        Ok(if let Some(value) = self.read_value(key).await? {
             Some(toml::from_slice(&value).map_err(|e| EtcdError {
                 kind: EtcdErrorKind::Read,
                 internal: InternalError::Meta(Box::new(e)),
@@ -80,6 +89,50 @@ impl Etcd {
         } else {
             None
         })
+    }
+
+    /// Mark a Zdb backend as replaced based on its connection info
+    pub async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<()> {
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
+        Ok(self.write_value(&key, &[]).await?)
+    }
+
+    /// Check to see if a Zdb backend has been marked as replaced based on its conenction info
+    pub async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<bool> {
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
+        Ok(self.read_value(&key).await?.is_some())
+    }
+
+    /// Get the (key, metadata) for all stored objects
+    pub async fn object_metas(&mut self) -> EtcdResult<Vec<(String, MetaData)>> {
+        let mut data = Vec::new();
+        let end = format!("/{}/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", self.prefix);
+        let opts = GetOptions::new().with_range(end);
+        for kv in self
+            .client
+            .get(
+                &*format!("/{}/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", self.prefix),
+                Some(opts),
+            )
+            .await
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Etcd(e),
+            })?
+            .kvs()
+        {
+            // if the key is not a str it is a rogue key
+            if let Ok(ks) = kv.key_str() {
+                // if metdata decoding fails is is a rogue entry
+                if let Ok(value) = toml::from_slice(kv.value()) {
+                    data.push((ks.to_string(), value));
+                }
+            }
+        }
+
+        Ok(data)
     }
 
     // helper functions to read and write a value
