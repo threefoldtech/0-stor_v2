@@ -70,6 +70,14 @@ enum Cmd {
         /// restore the file.
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: std::path::PathBuf,
+        /// Save data about upload failures in the metadata store
+        ///
+        /// Saves info about a failed upload in the metadata store. The exact data saved is an
+        /// implementation detail. This allows related components to monitor the metadata store to
+        /// detect upload failures and retry at a later time. If the metadata store itself errors,
+        /// no data will be saved.
+        #[structopt(name = "save-failure", long, short)]
+        save_failure: bool,
     },
     /// Rebuild already stored data
     ///
@@ -218,7 +226,10 @@ fn real_main() -> ZstorResult<()> {
         };
 
         match opts.cmd {
-            Cmd::Store { ref file } => {
+            Cmd::Store {
+                ref file,
+                save_failure,
+            } => {
                 // start by canonicalizing the path
                 let file = canonicalize_path(&file)?;
                 trace!("encoding file {:?}", file);
@@ -244,38 +255,85 @@ fn real_main() -> ZstorResult<()> {
                     ));
                 }
 
-                let file_checksum = checksum(&file)?;
-                debug!("file checksum: {}", hex::encode(file_checksum));
+                // TODO: Ideally this would be an async closure, so we can use the `?` operator,
+                // however this is currently unstable: https://github.com/rust-lang/rust/issues/62290
+                {
+                    let file_checksum = checksum(&file)?;
+                    debug!("file checksum: {}", hex::encode(file_checksum));
 
-                // start reading file to encrypt
-                trace!("loading file data");
-                let mut encoding_file = File::open(&file).map_err(|e| {
-                    ZstorError::new_io("could not open file to encode".to_string(), e)
-                })?;
+                    // start reading file to encrypt
+                    trace!("loading file data");
+                    // let mut encoding_file = File::open(&file).map_err(|e| {
+                    //     ZstorError::new_io("could not open file to encode".to_string(), e)
+                    // })?;
+                    let mut encoding_file = match File::open(&file).map_err(|e| {
+                        ZstorError::new_io("could not open file to encode".to_string(), e)
+                    }) {
+                        Ok(ef) => ef,
+                        Err(e) => {
+                            warn!("Saving failure info");
+                            cluster.save_failure(&file).await?;
+                            return Err(e);
+                        }
+                    };
 
-                let compressed = Vec::new();
-                let mut cursor = Cursor::new(compressed);
-                let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
-                let compressed = cursor.into_inner();
-                trace!("compressed size: {} bytes", original_size);
+                    let compressed = Vec::new();
+                    let mut cursor = Cursor::new(compressed);
+                    // let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
+                    let original_size = match Snappy.compress(&mut encoding_file, &mut cursor) {
+                        Ok(size) => size,
+                        Err(e) => {
+                            if save_failure {
+                                warn!("Saving failure info");
+                                cluster.save_failure(&file).await?;
+                            }
+                            return Err(e.into());
+                        }
+                    };
+                    let compressed = cursor.into_inner();
+                    trace!("compressed size: {} bytes", original_size);
 
-                let encryptor = AESGCM::new(cfg.encryption().key().clone());
-                let encrypted = encryptor.encrypt(&compressed)?;
-                trace!("encrypted size: {} bytes", encrypted.len());
+                    let encryptor = AESGCM::new(cfg.encryption().key().clone());
+                    //let encrypted = encryptor.encrypt(&compressed)?;
+                    let encrypted = match encryptor.encrypt(&compressed) {
+                        Ok(enc) => enc,
+                        Err(e) => {
+                            if save_failure {
+                                warn!("Saving failure info");
+                                cluster.save_failure(&file).await?;
+                            }
+                            return Err(e.into());
+                        }
+                    };
+                    trace!("encrypted size: {} bytes", encrypted.len());
 
-                let metadata = store_data(encrypted, file_checksum, &cfg).await?;
-                cluster.save_meta(&file, &metadata).await?;
-                info!(
-                    "Stored file {:?} ({} bytes) to {}",
-                    file.as_path(),
-                    original_size,
-                    metadata
-                        .shards()
-                        .iter()
-                        .map(|si| si.zdb().address().to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
+                    // let metadata = store_data(encrypted, file_checksum, &cfg).await?;
+                    let metadata = match store_data(encrypted, file_checksum, &cfg).await {
+                        Ok(meta) => meta,
+                        Err(e) => {
+                            if save_failure {
+                                warn!("Saving failure info");
+                                cluster.save_failure(&file).await?;
+                            }
+                            return Err(e.into());
+                        }
+                    };
+
+                    // failure to save metadata to cluster would also mean we can't save the
+                    // failure info, so don't even try
+                    cluster.save_meta(&file, &metadata).await?;
+                    info!(
+                        "Stored file {:?} ({} bytes) to {}",
+                        file.as_path(),
+                        original_size,
+                        metadata
+                            .shards()
+                            .iter()
+                            .map(|si| si.zdb().address().to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                }
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(file).await?.ok_or_else(|| {

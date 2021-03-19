@@ -135,6 +135,88 @@ impl Etcd {
         Ok(data)
     }
 
+    /// Save info about a failed upload under the failures key
+    pub async fn save_failure(&mut self, path: &PathBuf) -> EtcdResult<()> {
+        let abs_path = canonicalize(path)?;
+        let key = format!(
+            "/{}/upload_failures/{}",
+            self.prefix,
+            self.build_failure_key(&abs_path)?
+        );
+
+        // unwrap here is safe as we already validated that to_str() returns some when building the
+        // failure key
+        Ok(self
+            .write_value(&key, abs_path.to_str().unwrap().as_bytes())
+            .await?)
+    }
+
+    /// Delete info about a failed upload from the failure key
+    pub async fn delete_failure(&mut self, path: &PathBuf) -> EtcdResult<()> {
+        let abs_path = canonicalize(path)?;
+        let key = format!(
+            "/{}/upload_failures/{}",
+            self.prefix,
+            self.build_failure_key(&abs_path)?
+        );
+
+        Ok(self.delete_value(&key).await?)
+    }
+
+    /// Get all the paths of files which failed to upload
+    pub async fn get_failures(&mut self) -> EtcdResult<Vec<PathBuf>> {
+        let mut data = Vec::new();
+        let end = format!(
+            "/{}/upload_failure/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            self.prefix
+        );
+        let opts = GetOptions::new().with_range(end);
+        for kv in self
+            .client
+            .get(
+                &*format!(
+                    "/{}/upload_failure/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    self.prefix
+                ),
+                Some(opts),
+            )
+            .await
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Etcd(e),
+            })?
+            .kvs()
+        {
+            // if the key is not a str it is a rogue key
+            if let Ok(ks) = kv.key_str() {
+                data.push(ks.into());
+            }
+        }
+
+        Ok(data)
+    }
+
+    // This does not take into account the virtual root
+    fn build_failure_key(&self, path: &PathBuf) -> EtcdResult<String> {
+        let mut hasher = VarBlake2b::new(16).unwrap();
+        hasher.update(
+            path.as_os_str()
+                .to_str()
+                .ok_or(EtcdError {
+                    kind: EtcdErrorKind::Key,
+                    internal: InternalError::Other(
+                        "could not interpret path as utf-8 str".to_string(),
+                    ),
+                })?
+                .as_bytes(),
+        );
+
+        let mut out = Vec::new();
+        hasher.finalize_variable(|res| out = res.to_vec());
+
+        Ok(hex::encode(out))
+    }
+
     // helper functions to read and write a value
     async fn write_value(&mut self, key: &str, value: &[u8]) -> EtcdResult<()> {
         self.client
@@ -171,30 +253,22 @@ impl Etcd {
             })
     }
 
+    async fn delete_value(&mut self, key: &str) -> EtcdResult<()> {
+        Ok(self
+            .client
+            .delete(key, None)
+            .await
+            .map(|_| ())
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Delete,
+                internal: InternalError::Etcd(e),
+            })?)
+    }
+
     // hash a path using blake2b with 16 bytes of output, and hex encode the result
     // the path is canonicalized before encoding so the full path is used
     fn build_key(&self, path: &PathBuf) -> EtcdResult<String> {
-        // annoyingly, the path needs to exist for this to work. So here's the plan:
-        // first we verify that it is actualy there
-        // if it is, no problem
-        // else, create a temp file, canonicalize that path, and remove the temp file again
-        let canonical_path = match fs::metadata(path) {
-            Ok(_) => path.canonicalize()?,
-            Err(e) => match e.kind() {
-                io::ErrorKind::NotFound => {
-                    fs::File::create(path)?;
-                    let cp = path.canonicalize()?;
-                    fs::remove_file(path)?;
-                    cp
-                }
-                _ => {
-                    return Err(EtcdError {
-                        kind: EtcdErrorKind::Key,
-                        internal: InternalError::IO(e),
-                    })
-                }
-            },
-        };
+        let canonical_path = canonicalize(path)?;
 
         // now strip the virtual_root, if one is set
         let actual_path = if let Some(ref virtual_root) = self.virtual_root {
@@ -234,6 +308,31 @@ impl Etcd {
         let fp = format!("/{}/{}", self.prefix, r);
         debug!("full path: {}", fp);
         Ok(fp)
+    }
+}
+
+/// Canonicalizes a path, even if it does not exist
+fn canonicalize(path: &PathBuf) -> EtcdResult<PathBuf> {
+    // annoyingly, the path needs to exist for this to work. So here's the plan:
+    // first we verify that it is actualy there
+    // if it is, no problem
+    // else, create a temp file, canonicalize that path, and remove the temp file again
+    match fs::metadata(path) {
+        Ok(_) => Ok(path.canonicalize()?),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => {
+                fs::File::create(path)?;
+                let cp = path.canonicalize()?;
+                fs::remove_file(path)?;
+                Ok(cp)
+            }
+            _ => {
+                return Err(EtcdError {
+                    kind: EtcdErrorKind::Key,
+                    internal: InternalError::IO(e),
+                })
+            }
+        },
     }
 }
 
@@ -310,6 +409,8 @@ pub enum EtcdErrorKind {
     Write,
     /// Error while reading data from etcd
     Read,
+    /// Error while deleting data in etcd
+    Delete,
     /// Error while building data key
     Key,
     /// Error while encoding or decoding
@@ -325,6 +426,7 @@ impl fmt::Display for EtcdErrorKind {
                 EtcdErrorKind::Connect => "CONNECT",
                 EtcdErrorKind::Write => "WRITE",
                 EtcdErrorKind::Read => "READ",
+                EtcdErrorKind::Delete => "DELETE",
                 EtcdErrorKind::Key => "KEY",
                 EtcdErrorKind::Meta => "META",
             }
