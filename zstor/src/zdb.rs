@@ -1,3 +1,7 @@
+use blake2::{
+    digest::{Update, VariableOutput},
+    VarBlake2b,
+};
 use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
@@ -59,6 +63,22 @@ impl ZdbConnectionInfo {
     /// Get the address of the 0-db.
     pub fn address(&self) -> &SocketAddr {
         &self.address
+    }
+
+    /// Get a hash of the connection info using the blake2b hash algorithm. The output size is 16
+    /// bytes.
+    pub fn blake2_hash(&self) -> [u8; 16] {
+        let mut hasher = VarBlake2b::new(16).unwrap();
+        hasher.update(self.address.to_string().as_bytes());
+        if let Some(ref ns) = self.namespace {
+            hasher.update(ns.as_bytes());
+        }
+        if let Some(ref password) = self.password {
+            hasher.update(password.as_bytes());
+        }
+        let mut r = Vec::with_capacity(0); // no allocation
+        hasher.finalize_variable(|res| r = res.to_vec());
+        r.try_into().unwrap()
     }
 }
 
@@ -382,19 +402,19 @@ pub struct NsInfo {
     entries: usize,
     public: bool,
     password: bool,
-    data_size_bytes: usize,
-    data_limit_bytes: Option<usize>,
-    index_size_bytes: usize,
+    data_size_bytes: u64,
+    data_limit_bytes: Option<u64>,
+    index_size_bytes: u64,
     mode: ZdbRunMode,
-    index_disk_freespace_bytes: usize,
-    data_disk_freespace_bytes: usize,
+    index_disk_freespace_bytes: u64,
+    data_disk_freespace_bytes: u64,
 }
 
 impl NsInfo {
     /// Get the amount of free space in the namespace. If there is no limit, or the free
     /// space according to the limit is higher than the remaining free disk size, the remainder of
     /// the free disk size is returned.
-    pub fn free_space(&self) -> usize {
+    pub fn free_space(&self) -> u64 {
         if let Some(limit) = self.data_limit_bytes {
             let free_limit = limit - self.data_size_bytes;
             if free_limit < self.data_disk_freespace_bytes {
@@ -403,6 +423,17 @@ impl NsInfo {
         }
 
         return self.data_disk_freespace_bytes;
+    }
+
+    /// Returns the percentage of used data space in this namespace. If no limit is set, the
+    /// percentage is calclated based on the used space of the disk compared to the total space of
+    /// the disk.
+    pub fn data_usage_percentage(&self) -> u8 {
+        if let Some(limit) = self.data_limit_bytes {
+            return (100 * self.data_size_bytes / limit) as u8;
+        }
+        // TODO: this is wrong
+        (100 * self.data_size_bytes / (self.data_size_bytes + self.data_disk_freespace_bytes)) as u8
     }
 }
 

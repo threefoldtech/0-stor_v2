@@ -84,7 +84,14 @@ enum Cmd {
         /// config. The new metadata is then used to replace the old metadata in the metadata
         /// store.
         #[structopt(name = "file", long, short, parse(from_os_str))]
-        file: std::path::PathBuf,
+        file: Option<std::path::PathBuf>,
+        /// Raw key to reconstruct
+        ///
+        /// The raw key to reconstruct. If this argument is given, the metadata store is checked
+        /// for this key. If it exists, the data will be reconstructed according to the new policy,
+        /// and the old metadata is replaced with the new metadata.
+        #[structopt(name = "key", long, short)]
+        key: Option<String>,
     },
     /// Load encoded data
     ///
@@ -331,17 +338,39 @@ fn real_main() -> ZstorResult<()> {
                         .join(",")
                 );
             }
-            Cmd::Rebuild { ref file } => {
-                let old_metadata = cluster.load_meta(file).await?.ok_or_else(|| {
-                    ZstorError::new_io(
-                        "no metadata found for file".to_string(),
-                        std::io::Error::from(std::io::ErrorKind::NotFound),
-                    )
-                })?;
+            Cmd::Rebuild { ref file, ref key } => {
+                if file.is_none() && key.is_none() {
+                    panic!("Either `file` or `key` argument must be set");
+                }
+                if file.is_some() && key.is_some() {
+                    panic!("Only one of `file` or `key` argument must be set");
+                }
+                let old_metadata = if let Some(file) = file {
+                    cluster.load_meta(file).await?.ok_or_else(|| {
+                        ZstorError::new_io(
+                            "no metadata found for file".to_string(),
+                            std::io::Error::from(std::io::ErrorKind::NotFound),
+                        )
+                    })?
+                } else if let Some(key) = key {
+                    // key is set so the unwrap is safe
+                    cluster.load_meta_by_key(key).await?.ok_or_else(|| {
+                        ZstorError::new_io(
+                            "no metadata found for file".to_string(),
+                            std::io::Error::from(std::io::ErrorKind::NotFound),
+                        )
+                    })?
+                } else {
+                    unreachable!();
+                };
                 let decoded = recover_data(&old_metadata).await?;
 
                 let metadata = store_data(decoded, *old_metadata.checksum(), &cfg).await?;
-                cluster.save_meta(&file, &metadata).await?;
+                if let Some(file) = file {
+                    cluster.save_meta(&file, &metadata).await?;
+                } else if let Some(key) = key {
+                    cluster.save_meta_by_key(key, &metadata).await?;
+                };
                 info!(
                     "Rebuild file from {} to {}",
                     old_metadata
@@ -494,11 +523,13 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
                 // check space in backend
                 let ns_info = db.ns_info().await?;
                 match ns_info.free_space() {
-                    insufficient if insufficient < shard_len => Err(ZdbError::new_storage_size(
-                        *db.connection_info().address(),
-                        shard_len,
-                        ns_info.free_space(),
-                    )),
+                    insufficient if (insufficient as usize) < shard_len => {
+                        Err(ZdbError::new_storage_size(
+                            *db.connection_info().address(),
+                            shard_len,
+                            ns_info.free_space() as usize,
+                        ))
+                    }
                     _ => Ok(db),
                 }
             }));
