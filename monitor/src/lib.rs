@@ -25,7 +25,7 @@ pub mod config;
 
 pub type MonitorResult<T> = Result<T, MonitorError>;
 
-const BACKEND_MONITOR_INTERVAL_DURATION: u64 = 60 * 1; // 60 seconds => 1 minute
+const BACKEND_MONITOR_INTERVAL_DURATION: u64 = 60; // 60 seconds => 1 minute
 const BACKEND_MONITOR_INTERVAL: Duration = Duration::from_secs(BACKEND_MONITOR_INTERVAL_DURATION);
 const REPAIR_BACKLOG_RETRY_INTERVAL_DURATION: u64 = 60 * 5; // 5 minutes
 const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
@@ -207,7 +207,7 @@ impl Monitor {
     async fn spawn_repairer(&self, mut rx: UnboundedReceiver<String>) -> JoinHandle<()> {
         let config = self.cfg.clone();
         tokio::spawn(async move {
-            let mut ticker = interval(BACKEND_MONITOR_INTERVAL);
+            let mut ticker = interval(REPAIR_BACKLOG_RETRY_INTERVAL);
             let mut repair_backlog = Vec::new();
             loop {
                 select! {
