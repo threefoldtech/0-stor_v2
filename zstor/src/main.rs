@@ -36,7 +36,7 @@ struct Opts {
     /// Path to the config file to use for this invocation.
     #[structopt(
         name = "config",
-        default_value = "config.toml",
+        default_value = "zstor_config.toml",
         long,
         short,
         parse(from_os_str)
