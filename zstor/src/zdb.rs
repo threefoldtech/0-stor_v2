@@ -565,3 +565,70 @@ impl fmt::Display for ZdbErrorKind {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{NsInfo, ZdbRunMode};
+
+    #[test]
+    fn test_unused_ns_usage_percentage() {
+        let ns_info = prep_limited_ns_info(0, true);
+
+        assert_eq!(ns_info.data_usage_percentage(), 0);
+    }
+
+    #[test]
+    fn test_filled_ns_usage_percentage() {
+        let ns_info = prep_limited_ns_info(10 * 1 << 30, true);
+
+        assert_eq!(ns_info.data_usage_percentage(), 100);
+    }
+
+    #[test]
+    fn test_half_filled_ns_usage_percentage() {
+        let ns_info = prep_limited_ns_info(5 * 1 << 30, true);
+
+        assert_eq!(ns_info.data_usage_percentage(), 50);
+    }
+
+    #[test]
+    fn test_ns_filled_one_third_usage_percentage() {
+        let ns_info = prep_limited_ns_info(3_579_139_413, true);
+
+        assert_eq!(ns_info.data_usage_percentage(), 33);
+    }
+
+    #[test]
+    fn test_ns_filled_two_third_usage_percentage() {
+        let ns_info = prep_limited_ns_info(7_158_278_827, true);
+
+        assert_eq!(ns_info.data_usage_percentage(), 66);
+    }
+
+    #[test]
+    fn test_unlimited_ns_usage_percentage() {
+        let ns_info = prep_limited_ns_info(512 * 1 << 30, false);
+
+        // 512 GiB used + 1TiB free => 1.5 TiB disk of which 512 GiB is used => expected 33% usage
+        assert_eq!(ns_info.data_usage_percentage(), 33);
+    }
+
+    fn prep_limited_ns_info(size: u64, limit: bool) -> NsInfo {
+        NsInfo {
+            name: "".to_string(),
+            entries: 0,
+            public: false,
+            password: false,
+            data_size_bytes: size,
+            data_limit_bytes: if limit {
+                Some(10 * 1 << 30) // 10 GiB
+            } else {
+                None
+            },
+            index_size_bytes: 0,
+            mode: ZdbRunMode::Seq,
+            index_disk_freespace_bytes: 1 << 40, // 1 TiB still free
+            data_disk_freespace_bytes: 1 << 40,  // 1 Tib still free
+        }
+    }
+}
