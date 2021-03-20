@@ -7,10 +7,10 @@ use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::{Filter, Response};
-use std::fs::File;
-use std::io::Read;
 use std::path::PathBuf;
 use structopt::StructOpt;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 use tokio::runtime::Builder;
 use zstor_monitor::config::Config;
 use zstor_monitor::{ErrorKind as MonitorErrorKind, Monitor, MonitorError, MonitorResult};
@@ -120,7 +120,7 @@ fn main() -> MonitorResult<()> {
             .unwrap();
         log4rs::init_config(log_config).unwrap();
 
-        let config = load_config(&args.config)?;
+        let config = load_config(&args.config).await?;
 
         let monitor = Monitor::new(config);
 
@@ -128,12 +128,15 @@ fn main() -> MonitorResult<()> {
     })
 }
 
-pub fn load_config(path: &PathBuf) -> MonitorResult<Config> {
-    let mut cfg_file =
-        File::open(path).map_err(|e| MonitorError::new_io(MonitorErrorKind::Config, e))?;
+pub async fn load_config(path: &PathBuf) -> MonitorResult<Config> {
+    trace!("reading config");
+    let mut cfg_file = File::open(path)
+        .await
+        .map_err(|e| MonitorError::new_io(MonitorErrorKind::Config, e))?;
     let mut cfg_str = String::new();
     cfg_file
         .read_to_string(&mut cfg_str)
+        .await
         .map_err(|e| MonitorError::new_io(MonitorErrorKind::Config, e))?;
 
     let cfg: Config = toml::from_str(&cfg_str)?;
