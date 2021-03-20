@@ -36,7 +36,7 @@ impl BackendState {
 
     pub fn is_readable(&self) -> bool {
         // we still consider unknown state to be readable
-        return *self != BackendState::Unreachable;
+        *self != BackendState::Unreachable
     }
 
     pub fn is_writeable(&self) -> bool {

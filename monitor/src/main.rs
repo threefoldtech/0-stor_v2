@@ -1,5 +1,5 @@
 use log::LevelFilter;
-use log::{debug, error, info, trace, warn};
+use log::{info, trace};
 use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
 };
@@ -12,6 +12,7 @@ use structopt::StructOpt;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::runtime::Builder;
+use tokio::signal;
 use zstor_monitor::config::Config;
 use zstor_monitor::{ErrorKind as MonitorErrorKind, Monitor, MonitorError, MonitorResult};
 
@@ -123,8 +124,18 @@ fn main() -> MonitorResult<()> {
         let config = load_config(&args.config).await?;
 
         let monitor = Monitor::new(config);
+        let (ctx, handle) = monitor.start().await?;
 
-        Ok(monitor.start().await?)
+        // spawn a task to wait for ctrl-c
+        tokio::spawn(async {
+            signal::ctrl_c()
+                .await
+                .expect("failed to listen for SIGINT events");
+            info!("SIGINT received, shutting down");
+            drop(ctx);
+        });
+
+        Ok(handle.await?)
     })
 }
 
