@@ -27,7 +27,7 @@ struct Args {
     /// increases beyond 10MiB.
     #[structopt(
         name = "log_file",
-        default_value = "zstor.log",
+        default_value = "monitor.log",
         long,
         parse(from_os_str)
     )]
