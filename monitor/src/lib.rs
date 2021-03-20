@@ -6,9 +6,10 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::fs::File;
+use tokio::fs::{canonicalize, metadata, read_dir, remove_file, File};
 use tokio::io::{self, AsyncReadExt};
 use tokio::process::Command;
 use tokio::select;
@@ -59,6 +60,81 @@ impl Monitor {
         unimplemented!();
     }
 
+    pub async fn monitor_ns_datasize(
+        &self,
+        ns: String,
+        size_limit: u64,
+        mut rx: Receiver<()>,
+    ) -> JoinHandle<MonitorResult<()>> {
+        let config = self.cfg.clone();
+        let mut dir_path = self.cfg.zdb_data_file_path().clone();
+        dir_path.push(ns);
+
+        tokio::spawn(async move {
+            // steal the backend monitor interval for now, TODO
+            let mut ticker = interval(BACKEND_MONITOR_INTERVAL);
+
+            loop {
+                select! {
+                    _ = rx.recv() => {
+                        info!("shutting down failed write monitor");
+                        return Ok(())
+                    }
+                    _ = ticker.tick() => {
+                        debug!("checking data dir size");
+
+                        let mut entries = match get_dir_entries(&dir_path).await {
+                            Ok(entries) => entries,
+                            Err(e) => {
+                                error!("Couldn't get directory entries for {:?}: {}", dir_path, e);
+                                continue;
+                            }
+                        };
+
+                        let mut dir_size: u64 = entries.iter().map(|(_, meta)| meta.len()).sum();
+
+                        if dir_size < size_limit {
+                            debug!("Directory {:?} is within size limits ({} < {})", dir_path, dir_size, size_limit);
+                            continue
+                        }
+
+                        info!("Data dir size is too large, try to delete");
+                        // sort files based on access time
+                        // small -> large i.e. accessed the longest ago first
+                        // unwraps are safe since the error only occurs if the platform does not
+                        // support `atime`, and we don't implicitly support this functionality on
+                        // those platforms.
+                        entries.sort_by(|(_, meta_1), (_, meta_2)| meta_1.accessed().unwrap().cmp(&meta_2.accessed().unwrap()));
+
+                        for (path, meta) in entries {
+                            debug!("Attempt to delete file {:?} (size: {}, last accessed: {:?})", path, meta.len(), meta.accessed().unwrap());
+                            let removed = match attempt_removal(&path, &config).await {
+                                Ok(removed) => removed,
+                                Err(e) => {
+                                    error!("Could not remove file: {}", e);
+                                    continue
+                                },
+                            };
+                            if removed {
+                                dir_size -= meta.len();
+                                if dir_size < size_limit {
+                                    break
+                                }
+                            }
+                        }
+
+                        if dir_size < size_limit {
+                            info!("Sufficiently reduced data dir ({:?}) size (new size: {})",dir_path ,dir_size);
+                        } else {
+                            warn!("Failed to reduce dir ({:?}) size to acceptable limit (currently {})", dir_path, dir_size);
+                        }
+
+                    }
+                }
+            }
+        })
+    }
+
     async fn monitor_failures(&self, mut rx: Receiver<()>) -> JoinHandle<MonitorResult<()>> {
         let config = self.cfg.clone();
 
@@ -102,7 +178,7 @@ impl Monitor {
                             debug!("Attempting to upload previously failed file {:?}", failed_path);
                             match upload_file(&failed_path, &config).await {
                                 Ok(_) => {
-                                    info!("Succesfully uploaded {:?} after previous failure", failed_path);
+                                    info!("Successfully uploaded {:?} after previous failure", failed_path);
                                     match cluster.delete_failure(&failed_path).await {
                                         Ok(_) => debug!("Removed failed upload of {:?} from metastore", failed_path),
                                         Err(e) => {
@@ -306,6 +382,42 @@ impl Monitor {
     }
 }
 
+async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
+    let dir_meta = metadata(&path).await?;
+    if !dir_meta.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
+
+    let mut entries = read_dir(&path).await?;
+    let mut file_entries = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        // failure to get one files metadata will be considered fatal
+        let meta = entry.metadata().await?;
+        if !meta.is_file() {
+            continue;
+        }
+        file_entries.push((entry.path(), meta));
+    }
+
+    Ok(file_entries)
+}
+
+/// Return true if the file was deleted
+async fn attempt_removal(path: &Path, cfg: &Config) -> MonitorResult<bool> {
+    let path = canonicalize(path)
+        .await
+        .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))?;
+    if !file_is_uploaded(&path, cfg).await? {
+        return Ok(false);
+    }
+
+    // file is uploaded
+    remove_file(&path)
+        .await
+        .map(|_| true)
+        .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))
+}
+
 /// Triggers the zstor binary to perform a rebuild command on the given key.
 async fn rebuild_key(key: &str, cfg: &Config) -> MonitorResult<()> {
     if Command::new(cfg.zstor_bin_path())
@@ -354,6 +466,22 @@ async fn upload_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
             std::io::Error::from(std::io::ErrorKind::Other),
         ))
     }
+}
+
+/// Trigger the zstor binary to perform a check on the file. If true, the file is uploaded
+async fn file_is_uploaded(path: &Path, cfg: &Config) -> MonitorResult<bool> {
+    Ok(Command::new(cfg.zstor_bin_path())
+        .arg("--config")
+        .arg(cfg.zstor_config_path())
+        .arg("check")
+        .arg("-f")
+        .arg(path.as_os_str())
+        .spawn()
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .wait()
+        .await
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .success())
 }
 
 async fn read_zstor_config(cfg_path: &Path) -> MonitorResult<ZStorConfig> {
@@ -449,6 +577,7 @@ pub enum ErrorKind {
     Zstor,
     Meta,
     Exec,
+    Fs,
 }
 
 impl fmt::Display for ErrorKind {
@@ -462,6 +591,7 @@ impl fmt::Display for ErrorKind {
                 ErrorKind::Zstor => "0-stor operation error",
                 ErrorKind::Meta => "Metadata",
                 ErrorKind::Exec => "Executing system binary",
+                ErrorKind::Fs => "Filesystem error",
             }
         )
     }
