@@ -9,12 +9,12 @@ use std::fmt;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::fs::{canonicalize, metadata, read_dir, remove_file, File};
+use tokio::fs::{self, File};
 use tokio::io::{self, AsyncReadExt};
 use tokio::process::Command;
 use tokio::select;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc::{channel, unbounded_channel, UnboundedReceiver};
+use tokio::sync::broadcast::{channel, Receiver};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::interval;
 use zstor_v2::config::{Config as ZStorConfig, Meta};
@@ -35,6 +35,9 @@ const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
 const MAX_CONCURRENT_CONNECTIONS: usize = 10;
 // TODO: make configurable
 const LOWSPACE_TRESHOLD: u8 = 95; // at this point we consider the shard to be full
+
+const ZDBFS_META: &'static str = "zdbfs-meta";
+const ZDBFS_DATA: &'static str = "zdbfs-data";
 
 pub struct Monitor {
     cfg: Config,
@@ -61,6 +64,58 @@ impl Monitor {
         unimplemented!();
     }
 
+    pub async fn recover_index(&self, ns: &str) -> MonitorResult<()> {
+        let mut path = self.cfg.zdb_index_dir_path().clone();
+        path.push(ns);
+
+        debug!("Attempting to recover index data at {:?}", path);
+
+        // try to recover namespace file
+        // TODO: is this always present?
+        let mut namespace_path = path.clone();
+        namespace_path.push("zdb-namespace");
+
+        // TODO: collapse this into separate function and call that
+        if file_is_uploaded(&namespace_path, &self.cfg).await? {
+            debug!("namespace file found in storage, checking local filesystem");
+            // exists on Path is blocking, but it essentially just tests if a `metadata` call
+            // returns ok.
+            if !fs::metadata(&namespace_path).await.is_ok() {
+                info!("index namespace file is encoded and not present locally, attempt recovery");
+                // At this point we know that the file is uploaded and not present locally, so an
+                // error here is terminal for the whole recovery process.
+                download_file(&namespace_path, &self.cfg).await?;
+            }
+        }
+
+        // Recover regular index files
+        let mut file_idx = 0usize;
+        loop {
+            let mut index_path = path.clone();
+            index_path.push(format!("zdb-index-{:05}", file_idx));
+
+            if file_is_uploaded(&namespace_path, &self.cfg).await? {
+                debug!("namespace file found in storage, checking local filesystem");
+                // exists on Path is blocking, but it essentially just tests if a `metadata` call
+                // returns ok.
+                if !fs::metadata(&namespace_path).await.is_ok() {
+                    info!(
+                        "index namespace file is encoded and not present locally, attempt recovery"
+                    );
+                    // At this point we know that the file is uploaded and not present locally, so an
+                    // error here is terminal for the whole recovery process.
+                    download_file(&namespace_path, &self.cfg).await?;
+                }
+            } else {
+                break;
+            }
+
+            file_idx += 1;
+        }
+
+        Ok(())
+    }
+
     pub async fn monitor_ns_datasize(
         &self,
         ns: String,
@@ -68,7 +123,7 @@ impl Monitor {
         mut rx: Receiver<()>,
     ) -> JoinHandle<MonitorResult<()>> {
         let config = self.cfg.clone();
-        let mut dir_path = self.cfg.zdb_data_file_path().clone();
+        let mut dir_path = self.cfg.zdb_data_dir_path().clone();
         dir_path.push(ns);
 
         tokio::spawn(async move {
@@ -384,12 +439,12 @@ impl Monitor {
 }
 
 async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
-    let dir_meta = metadata(&path).await?;
+    let dir_meta = fs::metadata(&path).await?;
     if !dir_meta.is_dir() {
         return Err(io::Error::from(io::ErrorKind::InvalidInput));
     }
 
-    let mut entries = read_dir(&path).await?;
+    let mut entries = fs::read_dir(&path).await?;
     let mut file_entries = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         // failure to get one files metadata will be considered fatal
@@ -405,7 +460,7 @@ async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
 
 /// Return true if the file was deleted
 async fn attempt_removal(path: &Path, cfg: &Config) -> MonitorResult<bool> {
-    let path = canonicalize(path)
+    let path = fs::canonicalize(path)
         .await
         .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))?;
     if !file_is_uploaded(&path, cfg).await? {
@@ -413,7 +468,7 @@ async fn attempt_removal(path: &Path, cfg: &Config) -> MonitorResult<bool> {
     }
 
     // file is uploaded
-    remove_file(&path)
+    fs::remove_file(&path)
         .await
         .map(|_| true)
         .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))
@@ -450,6 +505,31 @@ async fn upload_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
         .arg("--config")
         .arg(cfg.zstor_config_path())
         .arg("store")
+        .arg("-f")
+        .arg(path.as_os_str())
+        .spawn()
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .wait()
+        .await
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .success()
+    {
+        Ok(())
+    } else {
+        // TODO: proper error
+        Err(MonitorError::new_io(
+            ErrorKind::Exec,
+            std::io::Error::from(std::io::ErrorKind::Other),
+        ))
+    }
+}
+
+/// Trigger the zstor binary to try and download a file
+async fn download_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
+    if Command::new(cfg.zstor_bin_path())
+        .arg("--config")
+        .arg(cfg.zstor_config_path())
+        .arg("retrieve")
         .arg("-f")
         .arg(path.as_os_str())
         .spawn()

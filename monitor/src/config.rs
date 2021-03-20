@@ -24,11 +24,11 @@ pub struct VdcConfig {
 }
 
 impl Config {
-    pub fn zdb_index_file_path(&self) -> &PathBuf {
+    pub fn zdb_index_dir_path(&self) -> &PathBuf {
         &self.zdb_index_dir_path
     }
 
-    pub fn zdb_data_file_path(&self) -> &PathBuf {
+    pub fn zdb_data_dir_path(&self) -> &PathBuf {
         &self.zdb_data_dir_path
     }
 
