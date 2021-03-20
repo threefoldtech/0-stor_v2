@@ -7,13 +7,13 @@ pub type CompressorResult<T> = Result<T, CompressorError>;
 
 /// A compression unit allows compressing and later decompressing data.
 pub trait Compressor {
-    /// Compress the given input buffer, returning the compressed data.
+    /// Compress the given input buffer, returning the amount of bytes compressed from the input.
     fn compress(
         &self,
         input: &mut dyn io::Read,
         output: &mut dyn io::Write,
     ) -> CompressorResult<u64>;
-    /// Decompress the given input buffer, returning the decompressed data.
+    /// Decompress the given input buffer, returning the amount of decompressed bytes.
     fn decompress(
         &self,
         input: &mut dyn io::Read,
@@ -102,21 +102,31 @@ impl fmt::Display for CompressorErrorKind {
 mod tests {
     use super::{Compressor, Snappy};
     use rand::Rng;
+    use std::io::Cursor;
 
     #[test]
     fn snappy_roundtrip() {
         let data = rand::thread_rng().gen::<[u8; 16]>();
+        let mut src = Cursor::new(data);
+        let mut dst = Cursor::new(Vec::new());
 
         let comp = Snappy;
-        let comp_res = comp.compress(&data);
-        assert!(comp_res.is_ok());
+        let res = comp.compress(&mut src, &mut dst);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 16);
 
-        let res = comp_res.unwrap();
+        let compressed_data = dst.into_inner();
 
-        let orig_res = comp.decompress(&res);
-        assert!(orig_res.is_ok());
+        let mut src = Cursor::new(compressed_data);
+        let mut dst = Cursor::new(Vec::new());
 
-        let orig = orig_res.unwrap();
+        let res = comp.decompress(&mut src, &mut dst);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 16);
+
+        let orig = dst.into_inner();
+
+        assert_eq!(orig.len(), 16);
 
         assert_eq!(&orig, &data);
     }
