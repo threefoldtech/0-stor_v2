@@ -433,6 +433,15 @@ impl From<EtcdError> for MonitorError {
     }
 }
 
+impl From<toml::de::Error> for MonitorError {
+    fn from(e: toml::de::Error) -> Self {
+        MonitorError {
+            kind: ErrorKind::Config,
+            internal: InternalError::Format(e),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ErrorKind {
     Config,
