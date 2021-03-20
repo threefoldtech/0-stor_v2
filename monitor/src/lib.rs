@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{self, AsyncReadExt};
@@ -59,7 +59,70 @@ impl Monitor {
         unimplemented!();
     }
 
-    pub async fn monitor_backends(&self, mut rx: Receiver<()>) -> JoinHandle<MonitorResult<()>> {
+    async fn monitor_failures(&self, mut rx: Receiver<()>) -> JoinHandle<MonitorResult<()>> {
+        let config = self.cfg.clone();
+
+        tokio::spawn(async move {
+            let mut ticker = interval(REPAIR_BACKLOG_RETRY_INTERVAL);
+
+            loop {
+                select! {
+                    _ = rx.recv() => {
+                        info!("shutting down failed write monitor");
+                        return Ok(())
+                    }
+                    _ = ticker.tick() => {
+                        debug!("Checking for failed uploads");
+                        // read zstor config
+                        let zstor_config = match read_zstor_config(config.zstor_config_path()).await {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                error!("could not read zstor config: {}", e);
+                                continue
+                            }
+                        };
+
+                        // connect to meta store
+                        let mut cluster = match zstor_config.meta() {
+                            Meta::ETCD(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
+                                Ok(cluster) => cluster,
+                                Err(e) => {error!("could not create metadata cluster: {}", e); continue},
+                            },
+                        };
+
+                        let failures = match cluster.get_failures().await {
+                            Ok(failures) => failures,
+                            Err(e) => {
+                                error!("Could not get failed uploads from metastore: {}", e);
+                                continue
+                            }
+                        };
+
+                        for failed_path in failures {
+                            debug!("Attempting to upload previously failed file {:?}", failed_path);
+                            match upload_file(&failed_path, &config).await {
+                                Ok(_) => {
+                                    info!("Succesfully uploaded {:?} after previous failure", failed_path);
+                                    match cluster.delete_failure(&failed_path).await {
+                                        Ok(_) => debug!("Removed failed upload of {:?} from metastore", failed_path),
+                                        Err(e) => {
+                                            error!("Could not delete failed upload of {:?} from metastore: {}", failed_path, e);
+                                        },
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("Could not upload {:?}: {}", failed_path, e);
+                                    continue
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn monitor_backends(&self, mut rx: Receiver<()>) -> JoinHandle<MonitorResult<()>> {
         let config = self.cfg.clone();
         let (repairer_tx, repairer_rx) = unbounded_channel::<String>();
         let repair_handle = self.spawn_repairer(repairer_rx).await;
@@ -82,7 +145,7 @@ impl Monitor {
                         return Ok(())
                     }
                     _ = ticker.tick() => {
-                        debug!("reading zstor config at {:?}", config.zstor_config_path());
+                        debug!("Checking health of known backends");
                         let zstor_config = match read_zstor_config(config.zstor_config_path()).await {
                             Ok(cfg) => cfg,
                             Err(e) => {
@@ -268,7 +331,33 @@ async fn rebuild_key(key: &str, cfg: &Config) -> MonitorResult<()> {
     }
 }
 
+/// Trigger the zstor binary to try and upload a file
+async fn upload_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
+    if Command::new(cfg.zstor_bin_path())
+        .arg("--config")
+        .arg(cfg.zstor_config_path())
+        .arg("store")
+        .arg("-f")
+        .arg(path.as_os_str())
+        .spawn()
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .wait()
+        .await
+        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
+        .success()
+    {
+        Ok(())
+    } else {
+        // TODO: proper error
+        Err(MonitorError::new_io(
+            ErrorKind::Exec,
+            std::io::Error::from(std::io::ErrorKind::Other),
+        ))
+    }
+}
+
 async fn read_zstor_config(cfg_path: &Path) -> MonitorResult<ZStorConfig> {
+    debug!("reading zstor config at {:?}", cfg_path);
     let mut zstor_config_file = File::open(cfg_path)
         .await
         .map_err(|e| MonitorError::new_io(ErrorKind::Config, e))?;
