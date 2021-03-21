@@ -136,35 +136,48 @@ impl Etcd {
     }
 
     /// Save info about a failed upload under the failures key
-    pub async fn save_failure(&mut self, path: &PathBuf) -> EtcdResult<()> {
-        let abs_path = canonicalize(path)?;
+    pub async fn save_failure(
+        &mut self,
+        data_path: &PathBuf,
+        key_dir_path: &Option<PathBuf>,
+        should_delete: bool,
+    ) -> EtcdResult<()> {
+        let abs_data_path = canonicalize(data_path)?;
         let key = format!(
             "/{}/upload_failures/{}",
             self.prefix,
-            self.build_failure_key(&abs_path)?
+            self.build_failure_key(&abs_data_path)?
         );
+
+        let meta = toml::to_vec(&FailureMeta {
+            data_path: abs_data_path,
+            key_dir_path: match key_dir_path {
+                None => None,
+                Some(kp) => Some(canonicalize(kp)?),
+            },
+            should_delete,
+        })
+        // unwrap here is fine since an error here is a programming error
+        .unwrap();
 
         // unwrap here is safe as we already validated that to_str() returns some when building the
         // failure key
-        Ok(self
-            .write_value(&key, abs_path.to_str().unwrap().as_bytes())
-            .await?)
+        Ok(self.write_value(&key, &meta).await?)
     }
 
     /// Delete info about a failed upload from the failure key
-    pub async fn delete_failure(&mut self, path: &PathBuf) -> EtcdResult<()> {
-        let abs_path = canonicalize(path)?;
+    pub async fn delete_failure(&mut self, fm: &FailureMeta) -> EtcdResult<()> {
         let key = format!(
             "/{}/upload_failures/{}",
             self.prefix,
-            self.build_failure_key(&abs_path)?
+            self.build_failure_key(&fm.data_path)?
         );
 
         Ok(self.delete_value(&key).await?)
     }
 
     /// Get all the paths of files which failed to upload
-    pub async fn get_failures(&mut self) -> EtcdResult<Vec<PathBuf>> {
+    pub async fn get_failures(&mut self) -> EtcdResult<Vec<FailureMeta>> {
         let mut data = Vec::new();
         let end = format!(
             "/{}/upload_failure/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
@@ -187,10 +200,10 @@ impl Etcd {
             })?
             .kvs()
         {
-            // if the value is not a str it is a rogue key
-            if let Ok(ks) = kv.value_str() {
-                data.push(ks.into());
-            }
+            // if the value is not a FailureMeta in toml format it is a rogue key
+            if let Ok(fm) = toml::from_slice(kv.value()) {
+                data.push(fm)
+            };
         }
 
         Ok(data)
@@ -350,6 +363,31 @@ impl EtcdConfig {
             username,
             password,
         }
+    }
+}
+
+/// Information about a failed invocation of zstor
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FailureMeta {
+    data_path: PathBuf,
+    key_dir_path: Option<PathBuf>,
+    should_delete: bool,
+}
+
+impl FailureMeta {
+    /// Returns the path to the data file used for uploading
+    pub fn data_path(&self) -> &PathBuf {
+        &self.data_path
+    }
+
+    /// Returns the path to the key dir, it is was set
+    pub fn key_dir_path(&self) -> &Option<PathBuf> {
+        &self.key_dir_path
+    }
+
+    /// Returns if the should-delete flag was set
+    pub fn should_delete(&self) -> bool {
+        self.should_delete
     }
 }
 
