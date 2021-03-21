@@ -10,8 +10,8 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::{Filter, Response};
 use std::convert::TryInto;
-use std::fs::File;
-use std::io::{Cursor, Read};
+use std::fs::{self, File};
+use std::io::{self, Cursor, Read};
 use std::path::PathBuf;
 use structopt::StructOpt;
 use tokio::runtime::Builder;
@@ -63,14 +63,28 @@ enum Cmd {
     /// The data is compressed and encrypted according to the config before being encoded. Successful
     /// termination of this command means all shars have been written.
     Store {
-        /// Path to the file to store
+        /// Path to the file or directory to store
         ///
-        /// The path to the file to store. The path is used to create a metadata key (by hashing
+        /// The path to the file or directory to store. In case it is a path:
+        /// The path is used to create a metadata key (by hashing
         /// the full path). If a file is encoded at `path`, and then a new file is encoded for the
         /// same `path`. The old file metadata is overwritten and you will no longer be able to
         /// restore the file.
+        ///
+        /// In case path is a directory, an attempt will be made to store all files in the
+        /// directory. Only files in the directory are stored, i.e. there is on descending into
+        /// subdirectories. In this mode, errors encoding files are none fatal, and an effort is
+        /// made to continue encoding. If any or all files fail to upload but the program, the exit
+        /// code is still 0 (succes).
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: PathBuf,
+        /// Upload the file as if it was located in the directory at the given path
+        ///
+        /// The metadata storage key is computed as if the file is part of the given directory. The
+        /// file can later be recovered by retrieving it with this path + the file name. The
+        /// directory passed to this flag MUST exist on the system.
+        #[structopt(name = "key-path", long, short, parse(from_os_str))]
+        key_path: Option<PathBuf>,
         /// Save data about upload failures in the metadata store
         ///
         /// Saves info about a failed upload in the metadata store. The exact data saved is an
@@ -235,56 +249,38 @@ fn real_main() -> ZstorResult<()> {
 
         match opts.cmd {
             Cmd::Store {
-                ref file,
+                file,
+                key_path,
                 save_failure,
                 delete,
             } => {
-                // start by canonicalizing the path
-                let file = canonicalize_path(&file)?;
-                trace!("encoding file {:?}", file);
-                // make sure file is in root dir
-                if let Some(ref root) = cfg.virtual_root() {
-                    if !file.starts_with(root) {
-                        return Err(ZstorError::new_io(
-                            format!(
-                            "attempting to store file which is not in the file tree rooted at {}",
-                            root.to_string_lossy()),
-                            std::io::Error::from(std::io::ErrorKind::InvalidData),
-                        ));
+                if file.is_file() {
+                    handle_file_upload(&mut cluster, &file, &key_path, save_failure, delete, &cfg)
+                        .await?;
+                } else if file.is_dir() {
+                    for entry in get_dir_entries(&file).map_err(|e| {
+                        ZstorError::new_io(format!("Could not read dir entries in {:?}", file), e)
+                    })? {
+                        if let Err(e) = handle_file_upload(
+                            &mut cluster,
+                            &entry,
+                            &key_path,
+                            save_failure,
+                            delete,
+                            &cfg,
+                        )
+                        .await
+                        {
+                            error!("Could not upload file {:?}: {}", entry, e);
+                            continue;
+                        }
                     }
-                }
-
-                if !std::fs::metadata(&file)
-                    .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
-                    .is_file()
-                {
+                } else {
                     return Err(ZstorError::new_io(
-                        "only files can be stored".to_string(),
+                        "Unknown file type".to_string(),
                         std::io::Error::from(std::io::ErrorKind::InvalidData),
                     ));
                 }
-
-                // TODO: Ideally this would be an async closure, so we can use the `?` operator,
-                // however this is currently unstable: https://github.com/rust-lang/rust/issues/62290
-                if let Err(e) = save_file(&mut cluster, &file, &cfg).await {
-                    error!("Could not save file {:?}: {}", file, e);
-                    if save_failure {
-                        debug!("Attempt to save upload failure data");
-                        if let Err(e2) = cluster.save_failure(&file).await {
-                            error!("Could not save failure metadata: {}", e2);
-                        };
-                    }
-                } else {
-                    if delete {
-                        debug!(
-                            "Attempting to delete file {:?} after successful upload",
-                            file
-                        );
-                        if let Err(e) = std::fs::remove_file(&file) {
-                            warn!("Could not delete uploaded file: {}", e);
-                        }
-                    }
-                };
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
@@ -450,25 +446,128 @@ fn real_main() -> ZstorResult<()> {
     })
 }
 
-async fn save_file(cluster: &mut Etcd, file: &PathBuf, cfg: &Config) -> ZstorResult<()> {
-    let file_checksum = checksum(&file)?;
+// TODO: Async version
+fn get_dir_entries(dir: &PathBuf) -> io::Result<Vec<PathBuf>> {
+    let mut dir_entries = Vec::new();
+    for dir_entry in fs::read_dir(&dir)? {
+        let entry = dir_entry?;
+        let ft = entry.file_type()?;
+
+        if !ft.is_file() {
+            debug!(
+                "Skippin entry {:?} for upload as it is not a file",
+                entry.path(),
+            );
+        }
+
+        dir_entries.push(entry.path());
+    }
+
+    Ok(dir_entries)
+}
+
+async fn handle_file_upload(
+    mut cluster: &mut Etcd,
+    data_file: &PathBuf,
+    key_path: &Option<PathBuf>,
+    save_failure: bool,
+    delete: bool,
+    cfg: &Config,
+) -> ZstorResult<()> {
+    let (data_file_path, mut key_dir_path) = match key_path {
+        Some(kp) => (data_file.clone(), kp.clone()),
+        None => {
+            let dfp = data_file.clone();
+            let mut key_dir = data_file.clone();
+            if !key_dir.pop() {
+                return Err(ZstorError::new_io(
+                    "Could not remove file name to get parent dir name".to_string(),
+                    std::io::Error::from(std::io::ErrorKind::InvalidData),
+                ));
+            }
+            (dfp, key_dir)
+        }
+    };
+
+    if data_file_path.file_name().is_none() {
+        return Err(ZstorError::new_io(
+            "Could not get file name of data file".to_string(),
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ));
+    }
+
+    // check above makes unwrap here safe
+    key_dir_path.push(data_file_path.file_name().unwrap());
+
+    // canonicalize the key path
+    let key_file_path = canonicalize_path(&key_dir_path)?;
+    debug!(
+        "encoding file {:?} with key path {:?}",
+        data_file_path, key_file_path
+    );
+
+    // make sure key path is in root dir
+    if let Some(ref root) = cfg.virtual_root() {
+        if !key_file_path.starts_with(root) {
+            return Err(ZstorError::new_io(
+                format!(
+                    "attempting to store file which is not in the file tree rooted at {}",
+                    root.to_string_lossy()
+                ),
+                std::io::Error::from(std::io::ErrorKind::InvalidData),
+            ));
+        }
+    }
+
+    if !std::fs::metadata(&data_file_path)
+        .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
+        .is_file()
+    {
+        return Err(ZstorError::new_io(
+            "only files can be stored".to_string(),
+            std::io::Error::from(std::io::ErrorKind::InvalidData),
+        ));
+    }
+
+    if let Err(e) = save_file(&mut cluster, &data_file_path, &key_file_path, &cfg).await {
+        error!("Could not save file {:?}: {}", data_file_path, e);
+        if save_failure {
+            debug!("Attempt to save upload failure data");
+            //if let Err(e2) = cluster.save_failure(&dat_file_path, &key_file_path).await {
+            if let Err(e2) = cluster.save_failure(&data_file_path).await {
+                error!("Could not save failure metadata: {}", e2);
+            };
+        }
+        // return the original error
+        return Err(e);
+    } else {
+        if delete {
+            debug!(
+                "Attempting to delete file {:?} after successful upload",
+                data_file_path
+            );
+            if let Err(e) = std::fs::remove_file(&data_file_path) {
+                warn!("Could not delete uploaded file: {}", e);
+            }
+        }
+    };
+
+    Ok(())
+}
+
+async fn save_file(
+    cluster: &mut Etcd,
+    data_file: &PathBuf,
+    key_file: &PathBuf,
+    cfg: &Config,
+) -> ZstorResult<()> {
+    let file_checksum = checksum(&data_file)?;
     debug!("file checksum: {}", hex::encode(file_checksum));
 
     // start reading file to encrypt
     trace!("loading file data");
-    // let mut encoding_file = File::open(&file).map_err(|e| {
-    //     ZstorError::new_io("could not open file to encode".to_string(), e)
-    // })?;
-    let mut encoding_file = match File::open(&file)
-        .map_err(|e| ZstorError::new_io("could not open file to encode".to_string(), e))
-    {
-        Ok(ef) => ef,
-        Err(e) => {
-            warn!("Saving failure info");
-            cluster.save_failure(&file).await?;
-            return Err(e);
-        }
-    };
+    let mut encoding_file = File::open(&data_file)
+        .map_err(|e| ZstorError::new_io("could not open file to encode".to_string(), e))?;
 
     let compressed = Vec::new();
     let mut cursor = Cursor::new(compressed);
@@ -482,12 +581,11 @@ async fn save_file(cluster: &mut Etcd, file: &PathBuf, cfg: &Config) -> ZstorRes
 
     let metadata = store_data(encrypted, file_checksum, &cfg).await?;
 
-    // failure to save metadata to cluster would also mean we can't save the
-    // failure info, so don't even try
-    cluster.save_meta(&file, &metadata).await?;
+    cluster.save_meta(&key_file, &metadata).await?;
     info!(
-        "Stored file {:?} ({} bytes) to {}",
-        file.as_path(),
+        "Stored file {:?} as file {:?} ({} bytes) to {}",
+        data_file,
+        key_file,
         original_size,
         metadata
             .shards()
@@ -676,7 +774,7 @@ fn canonicalize_path(path: &PathBuf) -> ZstorResult<PathBuf> {
             .map_err(|e| ZstorError::new_io("could not canonicalize path".to_string(), e))?,
         Err(e) => match e.kind() {
             std::io::ErrorKind::NotFound => {
-                std::fs::File::create(path)
+                File::create(path)
                     .map_err(|e| ZstorError::new_io("could not create temp file".to_string(), e))?;
                 let cp = path.canonicalize().map_err(|e| {
                     ZstorError::new_io("could not canonicalize path".to_string(), e)
