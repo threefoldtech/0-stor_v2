@@ -56,8 +56,13 @@ impl Monitor {
         // tasks are spawned to avoid blocking on exits.
         let rx_factory = tx.clone();
 
-        self.recover_index(ZDBFS_META).await?;
-        self.recover_index(ZDBFS_DATA).await?;
+        // TODO: Should an error here be fatal?
+        if let Err(e) = self.recover_index(ZDBFS_META).await {
+            error!("Could not recover {} index: {}", ZDBFS_META, e);
+        }
+        if let Err(e) = self.recover_index(ZDBFS_DATA).await {
+            error!("Could not recover {} index: {}", ZDBFS_DATA, e);
+        }
 
         let config = self.cfg.clone();
 
