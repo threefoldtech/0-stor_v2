@@ -470,6 +470,7 @@ fn get_dir_entries(dir: &PathBuf) -> io::Result<Vec<PathBuf>> {
                 "Skippin entry {:?} for upload as it is not a file",
                 entry.path(),
             );
+            continue;
         }
 
         dir_entries.push(entry.path());
@@ -574,7 +575,11 @@ async fn save_file(
     cfg: &Config,
 ) -> ZstorResult<()> {
     let file_checksum = checksum(&data_file)?;
-    debug!("file checksum: {}", hex::encode(file_checksum));
+    debug!(
+        "file checksum: {} ({:?})",
+        hex::encode(file_checksum),
+        data_file
+    );
 
     // start reading file to encrypt
     trace!("loading file data");
