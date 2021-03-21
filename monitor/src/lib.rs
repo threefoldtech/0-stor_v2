@@ -33,8 +33,6 @@ const REPAIR_BACKLOG_RETRY_INTERVAL_DURATION: u64 = 60 * 5; // 5 minutes
 const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
     Duration::from_secs(REPAIR_BACKLOG_RETRY_INTERVAL_DURATION);
 const MAX_CONCURRENT_CONNECTIONS: usize = 10;
-// TODO: make configurable
-const LOWSPACE_TRESHOLD: u8 = 95; // at this point we consider the shard to be full
 
 const ZDBFS_META: &str = "zdbfs-meta";
 const ZDBFS_DATA: &str = "zdbfs-data";
@@ -360,7 +358,7 @@ async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                                 }
                             };
 
-                            if info.data_usage_percentage() < LOWSPACE_TRESHOLD {
+                            if info.data_usage_percentage() < config.zdb_namespace_fill_treshold() {
                                 warn!("backend {} has a high fill rate ({}%)", backend.address(), info.data_usage_percentage());
                                 backends.entry(backend).and_modify(|bs| bs.mark_lowspace(info.data_usage_percentage()));
                             } else {
