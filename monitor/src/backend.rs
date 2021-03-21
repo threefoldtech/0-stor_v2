@@ -1,3 +1,4 @@
+use log::debug;
 use std::time::{Duration, Instant};
 
 // Amount of time a backend can be unreachable before it is actually considered unreachable
@@ -18,7 +19,9 @@ pub enum BackendState {
 impl BackendState {
     pub fn mark_unreachable(&mut self) {
         match self {
+            BackendState::Unreachable => {}
             BackendState::Unknown(since) if since.elapsed() >= MISSING_DURATION => {
+                debug!("Backend state changed to unreachable");
                 *self = BackendState::Unreachable;
             }
             BackendState::Unknown(since) if since.elapsed() < MISSING_DURATION => (),
