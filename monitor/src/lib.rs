@@ -413,7 +413,7 @@ async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                             if !backends[backend].is_writeable() {
                                 debug!("attempt to replace backend {}", backend.address());
                                 // replace backend
-                                let res = match vdc_client.post(format!("{}//api/controller/zdb/add", vdc_config.url()))
+                                let res = match vdc_client.post(format!("{}/api/controller/zdb/add", vdc_config.url()))
                                     .json(&VdcZdbAddReqBody {
                                         password: vdc_config.password().to_string(),
                                         capacity: vdc_config.new_size(),
