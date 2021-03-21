@@ -404,7 +404,7 @@ async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                     }
 
                     if let Some(vdc_config) = config.vdc_config() {
-                        debug!("attempt to replace unwriteable clusters if needed");
+                        debug!("attempt to replace unwriteable data backends if needed");
                         let vdc_client = reqwest::Client::new();
                         for backend in backends.keys() {
                             if cluster.is_replaced(backend).await? {
