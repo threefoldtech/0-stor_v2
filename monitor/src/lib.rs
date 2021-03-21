@@ -364,10 +364,11 @@ async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                                 }
                             };
 
-                            if info.data_usage_percentage() < config.zdb_namespace_fill_treshold() {
+                            if info.data_usage_percentage() > config.zdb_namespace_fill_treshold() {
                                 warn!("backend {} has a high fill rate ({}%)", backend.address(), info.data_usage_percentage());
                                 backends.entry(backend).and_modify(|bs| bs.mark_lowspace(info.data_usage_percentage()));
                             } else {
+                                debug!("backend {} is healthy!", backend.address());
                                 backends.entry(backend).and_modify(BackendState::mark_healthy);
                             }
                         }
