@@ -8,6 +8,7 @@ use std::error;
 use std::fmt;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::fs::{self, File};
 use tokio::io::{self, AsyncReadExt};
@@ -402,13 +403,14 @@ async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                     }
 
                     if let Some(vdc_config) = config.vdc_config() {
-                        debug!("attempt to replace unwriteable clusters");
+                        debug!("attempt to replace unwriteable clusters if needed");
                         let vdc_client = reqwest::Client::new();
                         for backend in backends.keys() {
                             if cluster.is_replaced(backend).await? {
                                 continue
                             }
                             if !backends[backend].is_writeable() {
+                                debug!("attempt to replace backend {}", backend.address());
                                 // replace backend
                                 let res = match vdc_client.post(format!("{}//api/controller/zdb/add", vdc_config.url()))
                                     .json(&VdcZdbAddReqBody {
@@ -523,6 +525,9 @@ async fn rebuild_key(key: &str, cfg: &Config) -> MonitorResult<()> {
         .arg("rebuild")
         .arg("-k")
         .arg(key)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
         .wait()
@@ -548,6 +553,9 @@ async fn upload_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
         .arg("store")
         .arg("-f")
         .arg(path.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
         .wait()
@@ -573,6 +581,9 @@ async fn download_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
         .arg("retrieve")
         .arg("-f")
         .arg(path.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
         .wait()
@@ -598,6 +609,9 @@ async fn file_is_uploaded(path: &Path, cfg: &Config) -> MonitorResult<bool> {
         .arg("check")
         .arg("-f")
         .arg(path.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
         .wait()
