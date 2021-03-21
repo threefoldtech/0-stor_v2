@@ -12,6 +12,7 @@ use log4rs::filter::{Filter, Response};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Cursor, Read};
+use std::path::PathBuf;
 use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
@@ -41,7 +42,7 @@ struct Opts {
         short,
         parse(from_os_str)
     )]
-    config: std::path::PathBuf,
+    config: PathBuf,
     /// Path to the log file to use. The logfile will automatically roll over if the size
     /// increases beyond 10MiB.
     #[structopt(
@@ -50,7 +51,7 @@ struct Opts {
         long,
         parse(from_os_str)
     )]
-    log_file: std::path::PathBuf,
+    log_file: PathBuf,
     #[structopt(subcommand)]
     cmd: Cmd,
 }
@@ -69,7 +70,7 @@ enum Cmd {
         /// same `path`. The old file metadata is overwritten and you will no longer be able to
         /// restore the file.
         #[structopt(name = "file", long, short, parse(from_os_str))]
-        file: std::path::PathBuf,
+        file: PathBuf,
         /// Save data about upload failures in the metadata store
         ///
         /// Saves info about a failed upload in the metadata store. The exact data saved is an
@@ -78,6 +79,13 @@ enum Cmd {
         /// no data will be saved.
         #[structopt(name = "save-failure", long, short)]
         save_failure: bool,
+        /// Deletes files after a successful upload
+        ///
+        /// Deletes the file after a successful upload. Deletion is done on a "best effort" basis.
+        /// Failure to delete the file is not considered an error, and should this happen, the
+        /// program will still return exitcode 0 (success).
+        #[structopt(name = "delete", long, short)]
+        delete: bool,
     },
     /// Rebuild already stored data
     ///
@@ -92,7 +100,7 @@ enum Cmd {
         /// config. The new metadata is then used to replace the old metadata in the metadata
         /// store.
         #[structopt(name = "file", long, short, parse(from_os_str))]
-        file: Option<std::path::PathBuf>,
+        file: Option<PathBuf>,
         /// Raw key to reconstruct
         ///
         /// The raw key to reconstruct. If this argument is given, the metadata store is checked
@@ -110,7 +118,7 @@ enum Cmd {
         ///
         /// The original path which was used to store the file.
         #[structopt(name = "file", long, short, parse(from_os_str))]
-        file: std::path::PathBuf,
+        file: PathBuf,
     },
     /// Check if a file exists in the backend
     ///
@@ -121,7 +129,7 @@ enum Cmd {
         ///
         /// The original path which was used to store the file.
         #[structopt(name = "file", long, short, parse(from_os_str))]
-        file: std::path::PathBuf,
+        file: PathBuf,
     },
     /// Test the configuration and backends
     ///
@@ -229,6 +237,7 @@ fn real_main() -> ZstorResult<()> {
             Cmd::Store {
                 ref file,
                 save_failure,
+                delete,
             } => {
                 // start by canonicalizing the path
                 let file = canonicalize_path(&file)?;
@@ -257,83 +266,25 @@ fn real_main() -> ZstorResult<()> {
 
                 // TODO: Ideally this would be an async closure, so we can use the `?` operator,
                 // however this is currently unstable: https://github.com/rust-lang/rust/issues/62290
-                {
-                    let file_checksum = checksum(&file)?;
-                    debug!("file checksum: {}", hex::encode(file_checksum));
-
-                    // start reading file to encrypt
-                    trace!("loading file data");
-                    // let mut encoding_file = File::open(&file).map_err(|e| {
-                    //     ZstorError::new_io("could not open file to encode".to_string(), e)
-                    // })?;
-                    let mut encoding_file = match File::open(&file).map_err(|e| {
-                        ZstorError::new_io("could not open file to encode".to_string(), e)
-                    }) {
-                        Ok(ef) => ef,
-                        Err(e) => {
-                            warn!("Saving failure info");
-                            cluster.save_failure(&file).await?;
-                            return Err(e);
+                if let Err(e) = save_file(&mut cluster, &file, &cfg).await {
+                    error!("Could not save file {:?}: {}", file, e);
+                    if save_failure {
+                        debug!("Attempt to save upload failure data");
+                        if let Err(e2) = cluster.save_failure(&file).await {
+                            error!("Could not save failure metadata: {}", e2);
+                        };
+                    }
+                } else {
+                    if delete {
+                        debug!(
+                            "Attempting to delete file {:?} after successful upload",
+                            file
+                        );
+                        if let Err(e) = std::fs::remove_file(&file) {
+                            warn!("Could not delete uploaded file: {}", e);
                         }
-                    };
-
-                    let compressed = Vec::new();
-                    let mut cursor = Cursor::new(compressed);
-                    // let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
-                    let original_size = match Snappy.compress(&mut encoding_file, &mut cursor) {
-                        Ok(size) => size,
-                        Err(e) => {
-                            if save_failure {
-                                warn!("Saving failure info");
-                                cluster.save_failure(&file).await?;
-                            }
-                            return Err(e.into());
-                        }
-                    };
-                    let compressed = cursor.into_inner();
-                    trace!("compressed size: {} bytes", original_size);
-
-                    let encryptor = AESGCM::new(cfg.encryption().key().clone());
-                    //let encrypted = encryptor.encrypt(&compressed)?;
-                    let encrypted = match encryptor.encrypt(&compressed) {
-                        Ok(enc) => enc,
-                        Err(e) => {
-                            if save_failure {
-                                warn!("Saving failure info");
-                                cluster.save_failure(&file).await?;
-                            }
-                            return Err(e.into());
-                        }
-                    };
-                    trace!("encrypted size: {} bytes", encrypted.len());
-
-                    // let metadata = store_data(encrypted, file_checksum, &cfg).await?;
-                    let metadata = match store_data(encrypted, file_checksum, &cfg).await {
-                        Ok(meta) => meta,
-                        Err(e) => {
-                            if save_failure {
-                                warn!("Saving failure info");
-                                cluster.save_failure(&file).await?;
-                            }
-                            return Err(e.into());
-                        }
-                    };
-
-                    // failure to save metadata to cluster would also mean we can't save the
-                    // failure info, so don't even try
-                    cluster.save_meta(&file, &metadata).await?;
-                    info!(
-                        "Stored file {:?} ({} bytes) to {}",
-                        file.as_path(),
-                        original_size,
-                        metadata
-                            .shards()
-                            .iter()
-                            .map(|si| si.zdb().address().to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    );
-                }
+                    }
+                };
             }
             Cmd::Retrieve { ref file } => {
                 let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
@@ -499,6 +450,56 @@ fn real_main() -> ZstorResult<()> {
     })
 }
 
+async fn save_file(cluster: &mut Etcd, file: &PathBuf, cfg: &Config) -> ZstorResult<()> {
+    let file_checksum = checksum(&file)?;
+    debug!("file checksum: {}", hex::encode(file_checksum));
+
+    // start reading file to encrypt
+    trace!("loading file data");
+    // let mut encoding_file = File::open(&file).map_err(|e| {
+    //     ZstorError::new_io("could not open file to encode".to_string(), e)
+    // })?;
+    let mut encoding_file = match File::open(&file)
+        .map_err(|e| ZstorError::new_io("could not open file to encode".to_string(), e))
+    {
+        Ok(ef) => ef,
+        Err(e) => {
+            warn!("Saving failure info");
+            cluster.save_failure(&file).await?;
+            return Err(e);
+        }
+    };
+
+    let compressed = Vec::new();
+    let mut cursor = Cursor::new(compressed);
+    let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
+    let compressed = cursor.into_inner();
+    trace!("compressed size: {} bytes", original_size);
+
+    let encryptor = AESGCM::new(cfg.encryption().key().clone());
+    let encrypted = encryptor.encrypt(&compressed)?;
+    trace!("encrypted size: {} bytes", encrypted.len());
+
+    let metadata = store_data(encrypted, file_checksum, &cfg).await?;
+
+    // failure to save metadata to cluster would also mean we can't save the
+    // failure info, so don't even try
+    cluster.save_meta(&file, &metadata).await?;
+    info!(
+        "Stored file {:?} ({} bytes) to {}",
+        file.as_path(),
+        original_size,
+        metadata
+            .shards()
+            .iter()
+            .map(|si| si.zdb().address().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    Ok(())
+}
+
 async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
     // attempt to retrieve all shards
     let mut shard_loads: Vec<JoinHandle<(usize, Result<(_, _), ZstorError>)>> =
@@ -644,7 +645,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
     Ok(metadata)
 }
 
-fn read_cfg(config: &std::path::PathBuf) -> ZstorResult<Config> {
+fn read_cfg(config: &PathBuf) -> ZstorResult<Config> {
     trace!("opening config file {:?}", config);
     let mut cfg_file = File::open(config)
         .map_err(|e| ZstorError::new_io("could not open config file".to_string(), e))?;
@@ -664,7 +665,7 @@ fn read_cfg(config: &std::path::PathBuf) -> ZstorResult<Config> {
 /// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
 /// work on files which don't exist by creating a dummy file if the file does not exist,
 /// canonicalizing the path, and removing the dummy file.
-fn canonicalize_path(path: &std::path::PathBuf) -> ZstorResult<std::path::PathBuf> {
+fn canonicalize_path(path: &PathBuf) -> ZstorResult<PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
     // first we verify that it is actualy there
     // if it is, no problem
@@ -695,7 +696,7 @@ fn canonicalize_path(path: &std::path::PathBuf) -> ZstorResult<std::path::PathBu
 }
 
 /// Get a 16 byte blake2b checksum of a file
-fn checksum(file: &std::path::PathBuf) -> ZstorResult<Checksum> {
+fn checksum(file: &PathBuf) -> ZstorResult<Checksum> {
     trace!("getting file checksum");
     let mut file =
         File::open(file).map_err(|e| ZstorError::new_io("could not open file".to_string(), e))?;
