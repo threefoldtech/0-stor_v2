@@ -3,6 +3,8 @@ Cargo.lock
 
 config.toml
 config.toml.bak
+zstor_config.toml
+zstor_config.toml.bak
 zstor.log
 monitor.log
 monitor_config.toml
