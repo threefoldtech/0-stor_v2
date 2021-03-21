@@ -161,3 +161,36 @@ in the working directory.
 
 `./target/debug/zstor_v2 rebuild -f file.txt`
 
+
+## Monitor config
+
+```
+# directory where zdb stores the index directories
+zdb_index_dir_path = "/tmp/zdb/zdb-index"
+# directory where zdb stores the data directories
+zdb_data_dir_path = "/tmp/zdb/zdb-index"
+# path to the config file for the zstor binary
+zstor_config_path = "tmp/zstor_config.toml"
+# path to the acutal zstor binary
+zstor_bin_path = "/tmp/zstor"
+# Optional maximum size of the zdb data directory, in MiB. If the sum of all
+# files in this directory goes above this trehshold, the least recently
+# accessed data file which is already uploaded will be removed, untill the
+# size is reduced bellow the treshold or no more files can be deleted.
+# If not set, the data dir will not be monitored
+max_zdb_data_dir_size = 51200
+# Trreshold before a backend is marked as filled by the monitor.
+# If this treshold is reached, a new backend will be requested in the
+# eVDC controller, if configured below. If not set, a default of 95% is
+# used.
+zdb_namespace_fill_treshold = 90
+
+# Optional info for the eVDC controller. If given, the monitor will try
+# to request new backends when it detects that a backend is unreachable
+# or filled above the treshold rate.
+[vdc_config]
+url = "https://some.evdc.tech"
+password = "supersecurepassword"
+# Size of the new backend to request, in GB
+new_size = 20
+```
