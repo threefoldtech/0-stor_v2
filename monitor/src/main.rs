@@ -108,7 +108,7 @@ fn main() -> MonitorResult<()> {
             .appender(
                 Appender::builder()
                     .filter(Box::new(ModuleFilter {
-                        module: "zstor_v2".to_string(),
+                        module: "zstor_monitor".to_string(),
                     }))
                     .build("logfile", Box::new(log_file)),
             )
