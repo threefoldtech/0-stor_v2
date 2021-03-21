@@ -547,7 +547,10 @@ async fn handle_file_upload(
         if save_failure {
             debug!("Attempt to save upload failure data");
             //if let Err(e2) = cluster.save_failure(&dat_file_path, &key_file_path).await {
-            if let Err(e2) = cluster.save_failure(&data_file_path).await {
+            if let Err(e2) = cluster
+                .save_failure(&data_file_path, key_path, delete)
+                .await
+            {
                 error!("Could not save failure metadata: {}", e2);
             };
         }

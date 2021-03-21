@@ -275,20 +275,20 @@ async fn monitor_failures(mut rx: Receiver<()>, config: Config) -> JoinHandle<Mo
                         }
                     };
 
-                    for failed_path in failures {
-                        debug!("Attempting to upload previously failed file {:?}", failed_path);
-                        match upload_file(&failed_path, &config).await {
+                    for failure_data in failures {
+                        debug!("Attempting to upload previously failed file {:?}", failure_data.data_path());
+                        match upload_file(&failure_data.data_path(), failure_data.key_dir_path(), failure_data.should_delete(), &config).await {
                             Ok(_) => {
-                                info!("Successfully uploaded {:?} after previous failure", failed_path);
-                                match cluster.delete_failure(&failed_path).await {
-                                    Ok(_) => debug!("Removed failed upload of {:?} from metastore", failed_path),
+                                info!("Successfully uploaded {:?} after previous failure", failure_data.data_path());
+                                match cluster.delete_failure(&failure_data).await {
+                                    Ok(_) => debug!("Removed failed upload of {:?} from metastore", failure_data.data_path()),
                                     Err(e) => {
-                                        error!("Could not delete failed upload of {:?} from metastore: {}", failed_path, e);
+                                        error!("Could not delete failed upload of {:?} from metastore: {}", failure_data.data_path(), e);
                                     },
                                 }
                             },
                             Err(e) => {
-                                error!("Could not upload {:?}: {}", failed_path, e);
+                                error!("Could not upload {:?}: {}", failure_data.data_path(), e);
                                 continue
                             }
                         }
@@ -546,13 +546,25 @@ async fn rebuild_key(key: &str, cfg: &Config) -> MonitorResult<()> {
 }
 
 /// Trigger the zstor binary to try and upload a file
-async fn upload_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
-    if Command::new(cfg.zstor_bin_path())
-        .arg("--config")
+async fn upload_file(
+    data_path: &PathBuf,
+    key_path: &Option<PathBuf>,
+    should_delete: bool,
+    cfg: &Config,
+) -> MonitorResult<()> {
+    let mut cmd = Command::new(cfg.zstor_bin_path());
+    cmd.arg("--config")
         .arg(cfg.zstor_config_path())
-        .arg("store")
-        .arg("-f")
-        .arg(path.as_os_str())
+        .arg("store");
+    if should_delete {
+        cmd.arg("--delete");
+    }
+    if let Some(kp) = key_path {
+        cmd.arg("--key-path").arg(kp);
+    };
+    if cmd
+        .arg("--file")
+        .arg(data_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
