@@ -85,6 +85,13 @@ enum Cmd {
         /// directory passed to this flag MUST exist on the system.
         #[structopt(name = "key-path", long, short, parse(from_os_str))]
         key_path: Option<PathBuf>,
+        /// Exits if a file can't be uploaded in directory upload mode
+        ///
+        /// The regular behavior when uploading a directory is to simply log errors and proceed
+        /// with the next file. If this flag is set, an error when uploading will be fatal and
+        /// cause the process to exit with a non-zero exit code.
+        #[structopt(name = "error-on-failure", long, short)]
+        error_on_failure: bool,
         /// Save data about upload failures in the metadata store
         ///
         /// Saves info about a failed upload in the metadata store. The exact data saved is an
@@ -252,6 +259,7 @@ fn real_main() -> ZstorResult<()> {
                 file,
                 key_path,
                 save_failure,
+                error_on_failure,
                 delete,
             } => {
                 if file.is_file() {
@@ -272,7 +280,11 @@ fn real_main() -> ZstorResult<()> {
                         .await
                         {
                             error!("Could not upload file {:?}: {}", entry, e);
-                            continue;
+                            if error_on_failure {
+                                return Err(e);
+                            } else {
+                                continue;
+                            }
                         }
                     }
                 } else {
