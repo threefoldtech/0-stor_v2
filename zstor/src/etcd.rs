@@ -319,7 +319,7 @@ impl Etcd {
         hasher.finalize_variable(|resp| r = hex::encode(resp));
         trace!("hashed path: {}", r);
         let fp = format!("/{}/{}", self.prefix, r);
-        debug!("full path: {}", fp);
+        debug!("full meta path: {}", fp);
         Ok(fp)
     }
 }
