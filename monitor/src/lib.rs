@@ -1,44 +1,29 @@
-use backend::BackendState;
 use config::Config;
 use futures::future::join_all;
-use log::{debug, error, info, warn};
-use serde::Serialize;
-use std::collections::HashMap;
+use log::{debug, error, info};
+use monitors::{monitor_backends, monitor_failed_writes, monitor_ns_datasize};
 use std::error;
 use std::fmt;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
 use tokio::fs::{self, File};
 use tokio::io::{self, AsyncReadExt};
 use tokio::process::Command;
-use tokio::select;
-use tokio::sync::broadcast::{channel, Receiver, Sender};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::broadcast::{channel, Sender};
 use tokio::task::{JoinError, JoinHandle};
-use tokio::time::interval;
-use zstor_v2::config::{Config as ZStorConfig, Meta};
-use zstor_v2::etcd::{Etcd, EtcdError};
-use zstor_v2::zdb::{Zdb, ZdbConnectionInfo};
+use zstor_v2::config::Config as ZStorConfig;
+use zstor_v2::etcd::EtcdError;
 use zstor_v2::ZstorError;
 
 pub mod backend;
 pub mod config;
+pub mod monitors;
 
 pub type MonitorResult<T> = Result<T, MonitorError>;
 
-const BACKEND_MONITOR_INTERVAL_DURATION: u64 = 60; // 60 seconds => 1 minute
-const BACKEND_MONITOR_INTERVAL: Duration = Duration::from_secs(BACKEND_MONITOR_INTERVAL_DURATION);
-const REPAIR_BACKLOG_RETRY_INTERVAL_DURATION: u64 = 60 * 5; // 5 minutes
-const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
-    Duration::from_secs(REPAIR_BACKLOG_RETRY_INTERVAL_DURATION);
-const MAX_CONCURRENT_CONNECTIONS: usize = 10;
-
 const ZDBFS_META: &str = "zdbfs-meta";
 const ZDBFS_DATA: &str = "zdbfs-data";
-
-const MI_B: u64 = 1 << 20;
 
 pub struct Monitor {
     cfg: Config,
@@ -77,7 +62,7 @@ impl Monitor {
             let rxc = rx_factory.subscribe();
             let cfge = config.clone();
             handles.push(tokio::spawn(async {
-                monitor_failures(rxc, cfge).await.await
+                monitor_failed_writes(rxc, cfge).await.await
             }));
             if config.max_zdb_data_dir_size().is_some() {
                 let rxc = rx_factory.subscribe();
@@ -152,334 +137,6 @@ impl Monitor {
 
         Ok(())
     }
-}
-
-/// Monitor a data file dir and attempt to keep it within a certain size.
-///
-/// Returns None if the config does not have a limit set, otherwise returns the JoinHandle for
-/// the actual monitoring task.
-pub async fn monitor_ns_datasize(
-    mut rx: Receiver<()>,
-    ns: String,
-    config: Config,
-) -> Option<JoinHandle<MonitorResult<()>>> {
-    let size_limit = match config.max_zdb_data_dir_size() {
-        None => {
-            warn!("No size limit set in config, abort monitoring data dir size");
-            return None;
-        }
-        Some(limit) => limit as u64 * MI_B,
-    };
-    let mut dir_path = config.zdb_data_dir_path().clone();
-    dir_path.push(ns);
-
-    Some(tokio::spawn(async move {
-        // steal the backend monitor interval for now, TODO
-        let mut ticker = interval(BACKEND_MONITOR_INTERVAL);
-
-        loop {
-            select! {
-                _ = rx.recv() => {
-                    info!("shutting down failed write monitor");
-                    return Ok(())
-                }
-                _ = ticker.tick() => {
-                    debug!("checking data dir size");
-
-                    let mut entries = match get_dir_entries(&dir_path).await {
-                        Ok(entries) => entries,
-                        Err(e) => {
-                            error!("Couldn't get directory entries for {:?}: {}", dir_path, e);
-                            continue;
-                        }
-                    };
-
-                    let mut dir_size: u64 = entries.iter().map(|(_, meta)| meta.len()).sum();
-
-                    if dir_size < size_limit {
-                        debug!("Directory {:?} is within size limits ({} < {})", dir_path, dir_size, size_limit);
-                        continue
-                    }
-
-                    info!("Data dir size is too large, try to delete");
-                    // sort files based on access time
-                    // small -> large i.e. accessed the longest ago first
-                    // unwraps are safe since the error only occurs if the platform does not
-                    // support `atime`, and we don't implicitly support this functionality on
-                    // those platforms.
-                    entries.sort_by(|(_, meta_1), (_, meta_2)| meta_1.accessed().unwrap().cmp(&meta_2.accessed().unwrap()));
-
-                    for (path, meta) in entries {
-                        debug!("Attempt to delete file {:?} (size: {}, last accessed: {:?})", path, meta.len(), meta.accessed().unwrap());
-                        let removed = match attempt_removal(&path, &config).await {
-                            Ok(removed) => removed,
-                            Err(e) => {
-                                error!("Could not remove file: {}", e);
-                                continue
-                            },
-                        };
-                        if removed {
-                            dir_size -= meta.len();
-                            if dir_size < size_limit {
-                                break
-                            }
-                        }
-                    }
-
-                    if dir_size < size_limit {
-                        info!("Sufficiently reduced data dir ({:?}) size (new size: {})",dir_path ,dir_size);
-                    } else {
-                        warn!("Failed to reduce dir ({:?}) size to acceptable limit (currently {})", dir_path, dir_size);
-                    }
-
-                }
-            }
-        }
-    }))
-}
-
-async fn monitor_failures(mut rx: Receiver<()>, config: Config) -> JoinHandle<MonitorResult<()>> {
-    tokio::spawn(async move {
-        let mut ticker = interval(REPAIR_BACKLOG_RETRY_INTERVAL);
-
-        loop {
-            select! {
-                _ = rx.recv() => {
-                    info!("shutting down failed write monitor");
-                    return Ok(())
-                }
-                _ = ticker.tick() => {
-                    debug!("Checking for failed uploads");
-                    // read zstor config
-                    let zstor_config = match read_zstor_config(config.zstor_config_path()).await {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            error!("could not read zstor config: {}", e);
-                            continue
-                        }
-                    };
-
-                    // connect to meta store
-                    let mut cluster = match zstor_config.meta() {
-                        Meta::ETCD(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
-                            Ok(cluster) => cluster,
-                            Err(e) => {error!("could not create metadata cluster: {}", e); continue},
-                        },
-                    };
-
-                    let failures = match cluster.get_failures().await {
-                        Ok(failures) => failures,
-                        Err(e) => {
-                            error!("Could not get failed uploads from metastore: {}", e);
-                            continue
-                        }
-                    };
-
-                    for failure_data in failures {
-                        debug!("Attempting to upload previously failed file {:?}", failure_data.data_path());
-                        match upload_file(&failure_data.data_path(), failure_data.key_dir_path(), failure_data.should_delete(), &config).await {
-                            Ok(_) => {
-                                info!("Successfully uploaded {:?} after previous failure", failure_data.data_path());
-                                match cluster.delete_failure(&failure_data).await {
-                                    Ok(_) => debug!("Removed failed upload of {:?} from metastore", failure_data.data_path()),
-                                    Err(e) => {
-                                        error!("Could not delete failed upload of {:?} from metastore: {}", failure_data.data_path(), e);
-                                    },
-                                }
-                            },
-                            Err(e) => {
-                                error!("Could not upload {:?}: {}", failure_data.data_path(), e);
-                                continue
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-async fn monitor_backends(mut rx: Receiver<()>, config: Config) -> JoinHandle<MonitorResult<()>> {
-    let (repairer_tx, repairer_rx) = unbounded_channel::<String>();
-    let repair_handle = spawn_repairer(repairer_rx, config.clone()).await;
-
-    tokio::spawn(async move {
-        let mut ticker = interval(BACKEND_MONITOR_INTERVAL);
-        let mut backends = HashMap::<ZdbConnectionInfo, BackendState>::new();
-
-        loop {
-            select! {
-                _ = rx.recv() => {
-                    info!("shutting down backend monitor");
-                    info!("waiting for repair queue shutdown");
-                    drop(repairer_tx);
-                    if let Err(e) = repair_handle.await {
-                        error!("Error detected in repair queue shutdown: {}", e);
-                    } else {
-                        info!("repair queue shutdown completed");
-                    }
-                    return Ok(())
-                }
-                _ = ticker.tick() => {
-                    debug!("Checking health of known backends");
-                    let zstor_config = match read_zstor_config(config.zstor_config_path()).await {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            error!("could not read zstor config: {}", e);
-                            continue
-                        }
-                    };
-
-                   for backend in zstor_config.backends() {
-                       backends
-                           .entry(backend.clone())
-                           .or_insert_with(|| BackendState::Unknown(std::time::Instant::now()));
-                   }
-
-                    let keys = backends.keys().into_iter().cloned().collect::<Vec<_>>();
-                    for backend_group in keys.chunks(MAX_CONCURRENT_CONNECTIONS) {
-                        let mut futs: Vec<JoinHandle<Result<_,(_,ZstorError)>>> = Vec::with_capacity(backend_group.len());
-                        for backend in backend_group {
-                            let backend = backend.clone();
-                            futs.push(tokio::spawn(async move{
-                                // connect to backend and get size
-                                let ns_info = Zdb::new(backend.clone())
-                                    .await
-                                    .map_err(|e| (backend.clone(), e.into()))?
-                                    .ns_info()
-                                    .await
-                                    .map_err(|e| (backend.clone(), e.into()))?;
-
-                                Ok((backend, ns_info))
-
-                            }));
-                        }
-                        for result in join_all(futs).await {
-                            let (backend, info) = match result? {
-                                Ok(succes) => succes,
-                                Err((backend, e)) => {
-                                    warn!("backend {} can not be reached {}", backend.address(), e);
-                                    backends.entry(backend).and_modify(BackendState::mark_unreachable);
-                                    continue;
-                                }
-                            };
-
-                            if info.data_usage_percentage() > config.zdb_namespace_fill_treshold() {
-                                warn!("backend {} has a high fill rate ({}%)", backend.address(), info.data_usage_percentage());
-                                backends.entry(backend).and_modify(|bs| bs.mark_lowspace(info.data_usage_percentage()));
-                            } else {
-                                debug!("backend {} is healthy!", backend.address());
-                                backends.entry(backend).and_modify(BackendState::mark_healthy);
-                            }
-                        }
-                    }
-
-                    let mut cluster = match zstor_config.meta() {
-                        Meta::ETCD(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
-                            Ok(cluster) => cluster,
-                            Err(e) => {error!("could not create metadata cluster: {}", e); continue},
-                        },
-                    };
-
-                    debug!("verifying objects to repair");
-                    for (key, meta) in cluster.object_metas().await? {
-                        let mut should_repair = false;
-                        for shard in meta.shards() {
-                            should_repair = match backends.get(shard.zdb()) {
-                                Some(state) if !state.is_readable() => true,
-                                // backend is readable, nothing to do
-                                Some(_) => {continue},
-                                None => {
-                                    warn!("Object {} has shard on {} which has unknown state", key, shard.zdb().address());
-                                    continue
-                                },
-                            };
-                        }
-                        if should_repair {
-                            // unwrapping here is safe as an error would indicate a programming
-                            // logic error
-                            debug!("Requesting repair of object {}", key);
-                            repairer_tx.send(key).unwrap();
-                        }
-                    }
-
-                    if let Some(vdc_config) = config.vdc_config() {
-                        debug!("attempt to replace unwriteable data backends if needed");
-                        let vdc_client = reqwest::Client::new();
-                        for backend in backends.keys() {
-                            if cluster.is_replaced(backend).await? {
-                                continue
-                            }
-                            if !backends[backend].is_writeable() {
-                                debug!("attempt to replace backend {}", backend.address());
-                                // replace backend
-                                let res = match vdc_client.post(format!("{}/api/controller/zdb/add", vdc_config.url()))
-                                    .json(&VdcZdbAddReqBody {
-                                        password: vdc_config.password().to_string(),
-                                        capacity: vdc_config.new_size(),
-                                    })
-                                    .send()
-                                    .await {
-                                        Ok(res) => res,
-                                        Err(e) => {
-                                            error!("could not contact evdc controller: {}", e);
-                                            continue;
-                                        },
-                                    };
-                                if !res.status().is_success() {
-                                    error!("could not reserve new zdb, unexpected status code ({})", res.status());
-                                    continue
-                                }
-                                // now mark backend as replaced
-                                if let Err(e) = cluster.set_replaced(backend).await {
-                                    error!("could not mark cluster as replaced: {}", e);
-                                    continue
-                                }
-                            }
-                        }
-                    }
-
-                }
-            }
-        }
-    })
-}
-
-async fn spawn_repairer(mut rx: UnboundedReceiver<String>, config: Config) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut ticker = interval(REPAIR_BACKLOG_RETRY_INTERVAL);
-        let mut repair_backlog = Vec::new();
-        loop {
-            select! {
-                key = rx.recv() => {
-                    let key = match key {
-                        None => {
-                            info!("shutting down repairer");
-                            return
-                        },
-                        Some(key) => key,
-                    };
-                    // attempt rebuild
-                    if let Err(e) = rebuild_key(&key, &config).await {
-                        error!("Could not rebuild item {}: {}", key, e);
-                        repair_backlog.push(key);
-                        continue
-                    };
-                }
-                _ = ticker.tick() => {
-                    debug!("Processing repair backlog");
-                    for key in std::mem::replace(&mut repair_backlog, Vec::new()).drain(..) {
-                        debug!("Trying to rebuild key {}, which is in the repair backlog", key);
-                        if let Err(e) = rebuild_key(&key, &config).await {
-                            error!("Could not rebuild item {}: {}", key, e);
-                            repair_backlog.push(key);
-                            continue
-                        };
-                    }
-                }
-            }
-        }
-    })
 }
 
 async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
@@ -769,10 +426,4 @@ impl fmt::Display for InternalError {
             }
         )
     }
-}
-
-#[derive(Serialize)]
-struct VdcZdbAddReqBody {
-    password: String,
-    capacity: usize,
 }
