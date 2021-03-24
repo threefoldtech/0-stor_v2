@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::zstor::SingleZstor;
 use crate::MonitorResult;
 use log::{debug, error, info, warn};
 use std::time::Duration;
@@ -18,6 +19,7 @@ const MI_B: u64 = 1 << 20;
 pub async fn monitor_ns_datasize(
     mut rx: Receiver<()>,
     ns: String,
+    zstor: SingleZstor,
     config: Config,
 ) -> Option<JoinHandle<MonitorResult<()>>> {
     let size_limit = match config.max_zdb_data_dir_size() {
@@ -68,7 +70,7 @@ pub async fn monitor_ns_datasize(
 
                     for (path, meta) in entries {
                         debug!("Attempt to delete file {:?} (size: {}, last accessed: {:?})", path, meta.len(), meta.accessed().unwrap());
-                        let removed = match crate::attempt_removal(&path, &config).await {
+                        let removed = match crate::attempt_removal(&path, &zstor).await {
                             Ok(removed) => removed,
                             Err(e) => {
                                 error!("Could not remove file: {}", e);

@@ -1,5 +1,6 @@
 use crate::backend::BackendState;
 use crate::config::Config;
+use crate::zstor::SingleZstor;
 use crate::MonitorResult;
 use futures::future::join_all;
 use log::{debug, error, info, warn};
@@ -25,10 +26,11 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 10;
 
 pub async fn monitor_backends(
     mut rx: Receiver<()>,
+    zstor: SingleZstor,
     config: Config,
 ) -> JoinHandle<MonitorResult<()>> {
     let (repairer_tx, repairer_rx) = unbounded_channel::<String>();
-    let repair_handle = spawn_repairer(repairer_rx, config.clone()).await;
+    let repair_handle = spawn_repairer(repairer_rx, zstor).await;
 
     tokio::spawn(async move {
         let mut ticker = interval(BACKEND_MONITOR_INTERVAL);
@@ -172,7 +174,7 @@ pub async fn monitor_backends(
     })
 }
 
-async fn spawn_repairer(mut rx: UnboundedReceiver<String>, config: Config) -> JoinHandle<()> {
+async fn spawn_repairer(mut rx: UnboundedReceiver<String>, zstor: SingleZstor) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = interval(REPAIR_BACKLOG_RETRY_INTERVAL);
         let mut repair_backlog = Vec::new();
@@ -187,7 +189,7 @@ async fn spawn_repairer(mut rx: UnboundedReceiver<String>, config: Config) -> Jo
                         Some(key) => key,
                     };
                     // attempt rebuild
-                    if let Err(e) = crate::rebuild_key(&key, &config).await {
+                    if let Err(e) = zstor.rebuild_key(&key).await {
                         error!("Could not rebuild item {}: {}", key, e);
                         repair_backlog.push(key);
                         continue
@@ -197,7 +199,7 @@ async fn spawn_repairer(mut rx: UnboundedReceiver<String>, config: Config) -> Jo
                     debug!("Processing repair backlog");
                     for key in std::mem::replace(&mut repair_backlog, Vec::new()).drain(..) {
                         debug!("Trying to rebuild key {}, which is in the repair backlog", key);
-                        if let Err(e) = crate::rebuild_key(&key, &config).await {
+                        if let Err(e) = zstor.rebuild_key(&key).await {
                             error!("Could not rebuild item {}: {}", key, e);
                             repair_backlog.push(key);
                             continue

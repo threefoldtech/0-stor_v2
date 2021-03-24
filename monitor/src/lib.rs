@@ -6,12 +6,11 @@ use std::error;
 use std::fmt;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use tokio::fs::{self, File};
 use tokio::io::{self, AsyncReadExt};
-use tokio::process::Command;
 use tokio::sync::broadcast::{channel, Sender};
 use tokio::task::{JoinError, JoinHandle};
+use zstor::{SingleZstor, ZstorBinError};
 use zstor_v2::config::Config as ZStorConfig;
 use zstor_v2::etcd::EtcdError;
 use zstor_v2::ZstorError;
@@ -19,6 +18,7 @@ use zstor_v2::ZstorError;
 pub mod backend;
 pub mod config;
 pub mod monitors;
+pub mod zstor;
 
 pub type MonitorResult<T> = Result<T, MonitorError>;
 
@@ -42,32 +42,39 @@ impl Monitor {
         // tasks are spawned to avoid blocking on exits.
         let rx_factory = tx.clone();
 
+        let zstor = SingleZstor::new(zstor::Zstor::new(
+            self.cfg.zstor_bin_path().to_path_buf(),
+            self.cfg.zstor_config_path().to_path_buf(),
+        ));
+
         // TODO: Should an error here be fatal?
-        if let Err(e) = self.recover_index(ZDBFS_META).await {
+        if let Err(e) = self.recover_index(ZDBFS_META, zstor.clone()).await {
             error!("Could not recover {} index: {}", ZDBFS_META, e);
         }
-        if let Err(e) = self.recover_index(ZDBFS_DATA).await {
+        if let Err(e) = self.recover_index(ZDBFS_DATA, zstor.clone()).await {
             error!("Could not recover {} index: {}", ZDBFS_DATA, e);
         }
 
-        let config = self.cfg.clone();
+        let config = self.cfg;
 
         let handle = tokio::spawn(async move {
             let mut handles = Vec::new();
             let rxc = rx_factory.subscribe();
             let cfge = config.clone();
+            let zstore = zstor.clone();
             handles.push(tokio::spawn(async {
-                monitor_backends(rxc, cfge).await.await
+                monitor_backends(rxc, zstore, cfge).await.await
             }));
             let rxc = rx_factory.subscribe();
             let cfge = config.clone();
+            let zstore = zstor.clone();
             handles.push(tokio::spawn(async {
-                monitor_failed_writes(rxc, cfge).await.await
+                monitor_failed_writes(rxc, zstore, cfge).await.await
             }));
             if config.max_zdb_data_dir_size().is_some() {
                 let rxc = rx_factory.subscribe();
                 handles.push(tokio::spawn(async {
-                    monitor_ns_datasize(rxc, ZDBFS_DATA.to_string(), config)
+                    monitor_ns_datasize(rxc, ZDBFS_DATA.to_string(), zstor, config)
                         .await
                         .unwrap()
                         .await
@@ -86,7 +93,7 @@ impl Monitor {
         Ok((tx, handle))
     }
 
-    pub async fn recover_index(&self, ns: &str) -> MonitorResult<()> {
+    pub async fn recover_index(&self, ns: &str, zstor: SingleZstor) -> MonitorResult<()> {
         let mut path = self.cfg.zdb_index_dir_path().clone();
         path.push(ns);
 
@@ -98,7 +105,7 @@ impl Monitor {
         namespace_path.push("zdb-namespace");
 
         // TODO: collapse this into separate function and call that
-        if file_is_uploaded(&namespace_path, &self.cfg).await? {
+        if zstor.file_is_uploaded(&namespace_path).await? {
             debug!("namespace file found in storage, checking local filesystem");
             // exists on Path is blocking, but it essentially just tests if a `metadata` call
             // returns ok.
@@ -106,7 +113,7 @@ impl Monitor {
                 info!("index namespace file is encoded and not present locally, attempt recovery");
                 // At this point we know that the file is uploaded and not present locally, so an
                 // error here is terminal for the whole recovery process.
-                download_file(&namespace_path, &self.cfg).await?;
+                zstor.download_file(&namespace_path).await?;
             }
         }
 
@@ -116,7 +123,7 @@ impl Monitor {
             let mut index_path = path.clone();
             index_path.push(format!("zdb-index-{:05}", file_idx));
 
-            if file_is_uploaded(&namespace_path, &self.cfg).await? {
+            if zstor.file_is_uploaded(&namespace_path).await? {
                 debug!("namespace file found in storage, checking local filesystem");
                 // exists on Path is blocking, but it essentially just tests if a `metadata` call
                 // returns ok.
@@ -126,7 +133,7 @@ impl Monitor {
                     );
                     // At this point we know that the file is uploaded and not present locally, so an
                     // error here is terminal for the whole recovery process.
-                    download_file(&namespace_path, &self.cfg).await?;
+                    zstor.download_file(&namespace_path).await?;
                 }
             } else {
                 break;
@@ -160,11 +167,11 @@ async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
 }
 
 /// Return true if the file was deleted
-async fn attempt_removal(path: &Path, cfg: &Config) -> MonitorResult<bool> {
+async fn attempt_removal(path: &Path, zstor: &SingleZstor) -> MonitorResult<bool> {
     let path = fs::canonicalize(path)
         .await
         .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))?;
-    if !file_is_uploaded(&path, cfg).await? {
+    if !zstor.file_is_uploaded(&path).await? {
         return Ok(false);
     }
 
@@ -173,121 +180,6 @@ async fn attempt_removal(path: &Path, cfg: &Config) -> MonitorResult<bool> {
         .await
         .map(|_| true)
         .map_err(|e| MonitorError::new_io(ErrorKind::Fs, e))
-}
-
-/// Triggers the zstor binary to perform a rebuild command on the given key.
-async fn rebuild_key(key: &str, cfg: &Config) -> MonitorResult<()> {
-    if Command::new(cfg.zstor_bin_path())
-        .arg("--config")
-        .arg(cfg.zstor_config_path())
-        .arg("rebuild")
-        .arg("-k")
-        .arg(key)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .wait()
-        .await
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .success()
-    {
-        Ok(())
-    } else {
-        // TODO: proper error
-        Err(MonitorError::new_io(
-            ErrorKind::Exec,
-            std::io::Error::from(std::io::ErrorKind::Other),
-        ))
-    }
-}
-
-/// Trigger the zstor binary to try and upload a file
-async fn upload_file(
-    data_path: &PathBuf,
-    key_path: &Option<PathBuf>,
-    should_delete: bool,
-    cfg: &Config,
-) -> MonitorResult<()> {
-    let mut cmd = Command::new(cfg.zstor_bin_path());
-    cmd.arg("--config")
-        .arg(cfg.zstor_config_path())
-        .arg("store");
-    if should_delete {
-        cmd.arg("--delete");
-    }
-    if let Some(kp) = key_path {
-        cmd.arg("--key-path").arg(kp);
-    };
-    if cmd
-        .arg("--file")
-        .arg(data_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .wait()
-        .await
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .success()
-    {
-        Ok(())
-    } else {
-        // TODO: proper error
-        Err(MonitorError::new_io(
-            ErrorKind::Exec,
-            std::io::Error::from(std::io::ErrorKind::Other),
-        ))
-    }
-}
-
-/// Trigger the zstor binary to try and download a file
-async fn download_file(path: &PathBuf, cfg: &Config) -> MonitorResult<()> {
-    if Command::new(cfg.zstor_bin_path())
-        .arg("--config")
-        .arg(cfg.zstor_config_path())
-        .arg("retrieve")
-        .arg("-f")
-        .arg(path.as_os_str())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .wait()
-        .await
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .success()
-    {
-        Ok(())
-    } else {
-        // TODO: proper error
-        Err(MonitorError::new_io(
-            ErrorKind::Exec,
-            std::io::Error::from(std::io::ErrorKind::Other),
-        ))
-    }
-}
-
-/// Trigger the zstor binary to perform a check on the file. If true, the file is uploaded
-async fn file_is_uploaded(path: &Path, cfg: &Config) -> MonitorResult<bool> {
-    Ok(Command::new(cfg.zstor_bin_path())
-        .arg("--config")
-        .arg(cfg.zstor_config_path())
-        .arg("check")
-        .arg("-f")
-        .arg(path.as_os_str())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .wait()
-        .await
-        .map_err(|e| MonitorError::new_io(ErrorKind::Exec, e))?
-        .success())
 }
 
 async fn read_zstor_config(cfg_path: &Path) -> MonitorResult<ZStorConfig> {
@@ -327,6 +219,7 @@ impl error::Error for MonitorError {
             InternalError::Task(ref e) => Some(e),
             InternalError::Zstor(ref e) => Some(e),
             InternalError::Etcd(ref e) => Some(e),
+            InternalError::ZstorBin(ref e) => Some(e),
         }
     }
 }
@@ -376,6 +269,15 @@ impl From<toml::de::Error> for MonitorError {
     }
 }
 
+impl From<ZstorBinError> for MonitorError {
+    fn from(e: ZstorBinError) -> Self {
+        MonitorError {
+            kind: ErrorKind::Exec,
+            internal: InternalError::ZstorBin(e),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ErrorKind {
     Config,
@@ -410,6 +312,7 @@ pub enum InternalError {
     Task(tokio::task::JoinError),
     Zstor(ZstorError),
     Etcd(EtcdError),
+    ZstorBin(ZstorBinError),
 }
 
 impl fmt::Display for InternalError {
@@ -423,6 +326,7 @@ impl fmt::Display for InternalError {
                 InternalError::Task(ref e) => e,
                 InternalError::Zstor(ref e) => e,
                 InternalError::Etcd(ref e) => e,
+                InternalError::ZstorBin(ref e) => e,
             }
         )
     }

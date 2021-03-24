@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::read_zstor_config;
+use crate::zstor::SingleZstor;
 use crate::MonitorResult;
 use log::{debug, error, info};
 use std::time::Duration;
@@ -16,6 +17,7 @@ const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
 
 pub async fn monitor_failed_writes(
     mut rx: Receiver<()>,
+    zstor: SingleZstor,
     config: Config,
 ) -> JoinHandle<MonitorResult<()>> {
     tokio::spawn(async move {
@@ -56,7 +58,10 @@ pub async fn monitor_failed_writes(
 
                     for failure_data in failures {
                         debug!("Attempting to upload previously failed file {:?}", failure_data.data_path());
-                        match crate::upload_file(&failure_data.data_path(), failure_data.key_dir_path(), failure_data.should_delete(), &config).await {
+                        match zstor.upload_file(&failure_data.data_path(), match failure_data.key_dir_path() {
+                            Some(ref fd) => Some(fd),
+                            None => None,
+                        }, failure_data.should_delete()).await {
                             Ok(_) => {
                                 info!("Successfully uploaded {:?} after previous failure", failure_data.data_path());
                                 match cluster.delete_failure(&failure_data).await {
