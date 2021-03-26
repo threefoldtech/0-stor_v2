@@ -2,7 +2,7 @@
 members = [
 	"zstor",
 	"monitor",
-	"explorer_client",
+	"grid_explorer_client",
 ]
 
 [profile.release]
