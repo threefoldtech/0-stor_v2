@@ -2,6 +2,7 @@
 members = [
 	"zstor",
 	"monitor",
+	"explorer_client",
 ]
 
 [profile.release]
