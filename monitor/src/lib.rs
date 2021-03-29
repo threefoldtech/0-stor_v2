@@ -193,7 +193,7 @@ impl fmt::Display for MonitorError {
 impl error::Error for MonitorError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self.internal {
-            InternalError::IO(ref e) => Some(e),
+            InternalError::Io(ref e) => Some(e),
             InternalError::Format(ref e) => Some(e),
             InternalError::Task(ref e) => Some(e),
             InternalError::Zstor(ref e) => Some(e),
@@ -207,7 +207,7 @@ impl MonitorError {
     pub fn new_io(kind: ErrorKind, e: io::Error) -> Self {
         MonitorError {
             kind,
-            internal: InternalError::IO(e),
+            internal: InternalError::Io(e),
         }
     }
 }
@@ -286,7 +286,7 @@ impl fmt::Display for ErrorKind {
 
 #[derive(Debug)]
 pub enum InternalError {
-    IO(io::Error),
+    Io(io::Error),
     Format(toml::de::Error),
     Task(tokio::task::JoinError),
     Zstor(ZstorError),
@@ -300,7 +300,7 @@ impl fmt::Display for InternalError {
             f,
             "{}",
             match self {
-                InternalError::IO(ref e) => e as &dyn fmt::Display,
+                InternalError::Io(ref e) => e as &dyn fmt::Display,
                 InternalError::Format(ref e) => e,
                 InternalError::Task(ref e) => e,
                 InternalError::Zstor(ref e) => e,

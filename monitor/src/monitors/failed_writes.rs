@@ -58,10 +58,7 @@ pub async fn monitor_failed_writes(
 
                     for failure_data in failures {
                         debug!("Attempting to upload previously failed file {:?}", failure_data.data_path());
-                        match zstor.upload_file(&failure_data.data_path(), match failure_data.key_dir_path() {
-                            Some(ref fd) => Some(fd),
-                            None => None,
-                        }, failure_data.should_delete()).await {
+                        match zstor.upload_file(&failure_data.data_path(), failure_data.key_dir_path().as_ref(), failure_data.should_delete()).await {
                             Ok(_) => {
                                 info!("Successfully uploaded {:?} after previous failure", failure_data.data_path());
                                 match cluster.delete_failure(&failure_data).await {

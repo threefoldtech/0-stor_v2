@@ -7,7 +7,7 @@ use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::{Filter, Response};
-use std::path::PathBuf;
+use std::path::Path;
 use structopt::StructOpt;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -139,7 +139,7 @@ fn main() -> MonitorResult<()> {
     })
 }
 
-pub async fn load_config(path: &PathBuf) -> MonitorResult<Config> {
+pub async fn load_config(path: &Path) -> MonitorResult<Config> {
     trace!("reading config");
     let mut cfg_file = File::open(path)
         .await

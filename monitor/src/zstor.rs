@@ -1,5 +1,6 @@
 use futures::lock::Mutex;
 use std::error;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -25,10 +26,10 @@ impl SingleZstor {
         self.internal.lock().await.rebuild_key(key).await
     }
 
-    pub async fn upload_file(
+    pub async fn upload_file<T: AsRef<OsStr>>(
         &self,
         data_path: &Path,
-        key_path: Option<&Path>,
+        key_path: Option<T>,
         should_delete: bool,
     ) -> ZstorBinResult<()> {
         self.internal
@@ -96,10 +97,10 @@ impl Zstor {
     }
 
     /// Trigger the zstor binary to try and upload a file
-    pub async fn upload_file(
+    pub async fn upload_file<T: AsRef<OsStr>>(
         &mut self,
         data_path: &Path,
-        key_path: Option<&Path>,
+        key_path: Option<T>,
         should_delete: bool,
     ) -> ZstorBinResult<()> {
         let mut cmd = self.base_command();
@@ -196,7 +197,7 @@ impl fmt::Display for ZstorBinError {
 impl error::Error for ZstorBinError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self.internal {
-            InternalError::IO(ref e) => Some(e),
+            InternalError::Io(ref e) => Some(e),
             InternalError::Message(_) => None,
         }
     }
@@ -204,7 +205,7 @@ impl error::Error for ZstorBinError {
 
 #[derive(Debug)]
 pub enum ErrorKind {
-    IO,
+    Io,
     Runtime,
 }
 
@@ -214,7 +215,7 @@ impl fmt::Display for ErrorKind {
             f,
             "{}",
             match self {
-                ErrorKind::IO => "I/O",
+                ErrorKind::Io => "I/O",
                 ErrorKind::Runtime => "Runtime",
             }
         )
@@ -223,7 +224,7 @@ impl fmt::Display for ErrorKind {
 
 #[derive(Debug)]
 enum InternalError {
-    IO(std::io::Error),
+    Io(std::io::Error),
     Message(String),
 }
 
@@ -233,7 +234,7 @@ impl fmt::Display for InternalError {
             f,
             "{}",
             match self {
-                InternalError::IO(ref e) => e as &dyn fmt::Display,
+                InternalError::Io(ref e) => e as &dyn fmt::Display,
                 InternalError::Message(ref e) => e,
             }
         )
@@ -243,8 +244,8 @@ impl fmt::Display for InternalError {
 impl From<io::Error> for ZstorBinError {
     fn from(e: io::Error) -> Self {
         ZstorBinError {
-            kind: ErrorKind::IO,
-            internal: InternalError::IO(e),
+            kind: ErrorKind::Io,
+            internal: InternalError::Io(e),
         }
     }
 }
