@@ -4,8 +4,7 @@ use log::{debug, error, info};
 use monitors::{monitor_backends, monitor_failed_writes, monitor_ns_datasize};
 use std::error;
 use std::fmt;
-use std::fs::Metadata;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs::{self, File};
 use tokio::io::{self, AsyncReadExt};
 use tokio::sync::broadcast::{channel, Sender};
@@ -144,26 +143,6 @@ impl Monitor {
 
         Ok(())
     }
-}
-
-async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
-    let dir_meta = fs::metadata(&path).await?;
-    if !dir_meta.is_dir() {
-        return Err(io::Error::from(io::ErrorKind::InvalidInput));
-    }
-
-    let mut entries = fs::read_dir(&path).await?;
-    let mut file_entries = Vec::new();
-    while let Some(entry) = entries.next_entry().await? {
-        // failure to get one files metadata will be considered fatal
-        let meta = entry.metadata().await?;
-        if !meta.is_file() {
-            continue;
-        }
-        file_entries.push((entry.path(), meta));
-    }
-
-    Ok(file_entries)
 }
 
 /// Return true if the file was deleted

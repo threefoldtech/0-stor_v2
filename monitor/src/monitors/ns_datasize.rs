@@ -2,7 +2,11 @@ use crate::config::Config;
 use crate::zstor::SingleZstor;
 use crate::MonitorResult;
 use log::{debug, error, info, warn};
+use std::fs::Metadata;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::fs;
+use tokio::io;
 use tokio::select;
 use tokio::sync::broadcast::Receiver;
 use tokio::task::JoinHandle;
@@ -45,7 +49,7 @@ pub async fn monitor_ns_datasize(
                 _ = ticker.tick() => {
                     debug!("checking data dir size");
 
-                    let mut entries = match crate::get_dir_entries(&dir_path).await {
+                    let mut entries = match get_dir_entries(&dir_path).await {
                         Ok(entries) => entries,
                         Err(e) => {
                             error!("Couldn't get directory entries for {:?}: {}", dir_path, e);
@@ -95,4 +99,24 @@ pub async fn monitor_ns_datasize(
             }
         }
     }))
+}
+
+async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
+    let dir_meta = fs::metadata(&path).await?;
+    if !dir_meta.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
+
+    let mut entries = fs::read_dir(&path).await?;
+    let mut file_entries = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        // failure to get one files metadata will be considered fatal
+        let meta = entry.metadata().await?;
+        if !meta.is_file() {
+            continue;
+        }
+        file_entries.push((entry.path(), meta));
+    }
+
+    Ok(file_entries)
 }
