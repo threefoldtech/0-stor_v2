@@ -6,14 +6,27 @@ use stellar_base::network::Network;
 use stellar_base::operations::Operation;
 use stellar_base::transaction::{Transaction, MIN_BASE_FEE};
 use stellar_base::xdr::XDRSerialize;
-use stellar_base::error::Error;
+use stellar_horizon::api;
+use stellar_horizon::client::{HorizonClient, HorizonHttpClient};
 use super::reservation;
 
-pub fn pay_capacity_pool(keypair: KeyPair, escrow_information: reservation::EscrowInformation) -> Result<String, Error> {
-    let destination: PublicKey = PublicKey::from_account_id(escrow_information.address.as_str())?;
+impl From<stellar_base::error::Error> for super::ExplorerError {
+    fn from(err: stellar_base::error::Error) -> super::ExplorerError {
+        super::ExplorerError::StellarError(err)
+    }
+}
 
-    let amount_in_stroops = Stroops::new(escrow_information.amount);
-    let payment_amount = Amount::from_stroops(&amount_in_stroops)?;
+impl From<stellar_horizon::error::Error> for super::ExplorerError {
+    fn from(err: stellar_horizon::error::Error) -> super::ExplorerError {
+        super::ExplorerError::HorizonError(err)
+    }
+}
+
+pub async fn pay_capacity_pool(keypair: KeyPair, capacity_pool_information: reservation::CapacityPoolCreateResponse) -> Result<String, super::ExplorerError> {
+    let destination: PublicKey = PublicKey::from_account_id(capacity_pool_information.escrow_information.address.as_str())?;
+
+    let amount_in_stroops = Stroops::new(capacity_pool_information.escrow_information.amount);
+    let payment_amount = Amount::from_stroops(&amount_in_stroops)?;    
 
     let payment = Operation::new_payment()
         .with_destination(destination.clone())
@@ -21,8 +34,16 @@ pub fn pay_capacity_pool(keypair: KeyPair, escrow_information: reservation::Escr
         .with_asset(Asset::new_native())
         .build()?;
 
-    let mut tx = Transaction::builder(keypair.public_key().clone(), 1234, MIN_BASE_FEE)
-        .with_memo(Memo::new_id(7483792))
+    let client = HorizonHttpClient::new_from_str("https://horizon.stellar.org")?;
+    let request = api::accounts::single(&keypair.public_key().clone());
+    let (_headers, response) = client.request(request).await?;
+
+    let sequence = response.sequence.parse::<i64>().unwrap();
+
+    // memo should be "p-reservation_id"
+    let memo = Memo::new_text(format!("p-{:?}", capacity_pool_information.id))?;
+    let mut tx = Transaction::builder(keypair.public_key().clone(), sequence, MIN_BASE_FEE)
+        .with_memo(memo)
         .add_operation(payment)
         .into_transaction()?;
 

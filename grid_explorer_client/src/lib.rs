@@ -9,7 +9,8 @@ use stellar_base::crypto::{KeyPair};
 pub enum ExplorerError {
     ExplorerClientError(String),
     Reqwest(reqwest::Error),
-    StellarError(stellar_base::error::Error)
+    StellarError(stellar_base::error::Error),
+    HorizonError(stellar_horizon::error::Error)
 }
 
 #[derive(Debug)]
@@ -36,12 +37,6 @@ impl From<String> for ExplorerError {
 impl From<reqwest::Error> for ExplorerError {
     fn from(err: reqwest::Error) -> ExplorerError {
         ExplorerError::Reqwest(err)
-    }
-}
-
-impl From<stellar_base::error::Error> for ExplorerError {
-    fn from(err: stellar_base::error::Error) -> ExplorerError {
-        ExplorerError::StellarError(err)
     }
 }
 
@@ -133,7 +128,7 @@ impl ExplorerClient {
             .json::<reservation::CapacityPoolCreateResponse>()
             .await?;
 
-        stellar::pay_capacity_pool(self.user.keypair.clone(), resp.escrow_information)?;
+        stellar::pay_capacity_pool(self.user.keypair.clone(), resp).await?;
 
         Ok(true)
     }
