@@ -161,8 +161,30 @@ in the working directory.
 
 `./target/debug/zstor_v2 rebuild -f file.txt`
 
+## Monitor
 
-## Monitor config
+The aim of the monitor is to provide basic health check features.
+Currently there are 3 checks:
+
+- Failed writes of a zstor binary, if the `store` command was given the
+	flag to enable this. If so, the monitor will continuously retry the
+	upload until it succeeds.
+- Health of known backends. If a backend becomes unreachable for some
+	time, it is considered to be dead. Similarly, the amount of
+	available space is periodically checked, to see if it is above
+	a certain treshold. If an eVDC controller is configured, the first
+	time a backend becomes degraded, a new one will be requested from
+	the controller.
+- Space of the local 0-db. If a space limit is configured, there are
+	periodic checks to make sure the limit is not exceeded. If it is,
+	uploaded data files will be removed until the used space is within
+	the requested limit again.
+
+There are no special options to run the monitor. All functionality is
+configured through the configuration file. An example with documentation
+is provided below.
+
+### Monitor config
 
 ```
 # directory where zdb stores the index directories
