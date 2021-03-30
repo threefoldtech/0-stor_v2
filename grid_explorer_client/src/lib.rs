@@ -1,13 +1,27 @@
 mod types;
 mod workload;
+mod reservation;
+mod identity;
+use stellar_base::crypto::KeyPair;
 
 pub struct ExplorerClient {
-    pub url: String
+    pub url: String,
+    pub user: identity::Identity
 }
 
-pub fn new_explorer_client(url: String) -> ExplorerClient {
+pub fn new_explorer_client(url: String, secret: &str, user_id: i64) -> ExplorerClient {
+    let keypair = KeyPair::from_secret_seed(&secret).unwrap();
+
+    let user = identity::Identity {
+        user_id,
+        email: String::from(""),
+        name: String::from(""),
+        keypair
+    };
+
     ExplorerClient{
-        url: url
+        url,
+        user
     }
 }
 
@@ -49,6 +63,45 @@ impl ExplorerClient {
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<workload::Workload>()
+            .await?)
+    }
+
+    pub async fn create_capacity_pool(&self, data_reservation: reservation::ReservationData) -> Result<bool, reqwest::Error> {
+        let json = serde_json::to_string(&data_reservation).unwrap();
+        
+        let customer_signature = self.user.signHex(json.clone());
+
+        let reservation = reservation::Reservation{
+            id: 0,
+            data_reservation,
+            customer_tid: self.user.get_id(),
+            json,
+            customer_signature,
+            sponsor_signature: String::from(""),
+            sponsor_tid: 0
+        };
+
+        let data = serde_json::to_string(&reservation).unwrap();
+
+        let url = format!("{url}/api/v1/reservations/pools", url=self.url); 
+        let resp = reqwest::Client::new()
+            .post(url)
+            .json(&data)
+            .send()
+            .await?
+            .json::<reservation::CapacityPoolCreateResponse>()
+            .await?;
+
+        println!("{:?}", resp.escrow_information);
+        
+        Ok(true)
+    }
+
+    pub async fn pool_get_by_id(&self, id: i64) -> Result<reservation::PoolData, reqwest::Error> {
+        let url = format!("{url}/api/v1/reservations/pools/{id}", url=self.url, id=id); 
+        Ok(reqwest::get(url.as_str())
+            .await?
+            .json::<reservation::PoolData>()
             .await?)
     }
 }
