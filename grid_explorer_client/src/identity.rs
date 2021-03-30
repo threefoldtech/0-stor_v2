@@ -4,7 +4,6 @@ pub struct Identity {
     pub name: String,
     pub email: String,
     pub user_id: i64,
-    pub keypair: KeyPair,
 }
 
 impl Identity {

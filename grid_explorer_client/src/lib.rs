@@ -41,29 +41,35 @@ impl From<reqwest::Error> for ExplorerError {
 }
 
 pub struct ExplorerClient {
-    pub url: String,
-    pub user: identity::Identity
+    pub network: &'static str,
+    pub user: identity::Identity,
+    pub stellar_client: stellar::StellarClient
 }
 
-pub fn new_explorer_client(url: String, secret: &str, user_id: i64) -> ExplorerClient {
+pub fn new_explorer_client(network: &'static str, secret: &str, user_id: i64) -> ExplorerClient {
     let keypair = KeyPair::from_secret_seed(&secret).unwrap();
 
     let user = identity::Identity {
         user_id,
         email: String::from(""),
         name: String::from(""),
+    };
+    
+    let stellar_client = stellar::StellarClient {
+        network,
         keypair
     };
 
     ExplorerClient{
-        url,
-        user
+        network,
+        user,
+        stellar_client
     }
 }
 
 impl ExplorerClient {
     pub async fn nodes_get(&self) -> Result<Vec<types::Node>, ExplorerError> {
-        let url = format!("{url}/api/v1/nodes", url=self.url); 
+        let url = format!("{url}/api/v1/nodes", url=self.get_url()); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<Vec<types::Node>>()
@@ -71,7 +77,7 @@ impl ExplorerClient {
     }
 
     pub async fn node_get_by_id(&self, id: String) -> Result<types::Node, ExplorerError> {
-        let url = format!("{url}/api/v1/nodes/{id}", url=self.url, id=id); 
+        let url = format!("{url}/api/v1/nodes/{id}", url=self.get_url(), id=id); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<types::Node>()
@@ -79,7 +85,7 @@ impl ExplorerClient {
     }
 
     pub async fn farms_get(&self) -> Result<Vec<types::Farm>, ExplorerError> {
-        let url = format!("{url}/api/v1/farms", url=self.url); 
+        let url = format!("{url}/api/v1/farms", url=self.get_url()); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<Vec<types::Farm>>()
@@ -87,7 +93,7 @@ impl ExplorerClient {
     }
 
     pub async fn farm_get_by_id(&self, id: i64) -> Result<types::Farm, ExplorerError> {
-        let url = format!("{url}/api/v1/farms/{id}", url=self.url, id=id); 
+        let url = format!("{url}/api/v1/farms/{id}", url=self.get_url(), id=id); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<types::Farm>()
@@ -95,7 +101,7 @@ impl ExplorerClient {
     }
 
     pub async fn workload_get_by_id(&self, id: i64) -> Result<workload::Workload, ExplorerError> {
-        let url = format!("{url}/api/v1/reservations/workloads/{id}", url=self.url, id=id); 
+        let url = format!("{url}/api/v1/reservations/workloads/{id}", url=self.get_url(), id=id); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<workload::Workload>()
@@ -119,7 +125,7 @@ impl ExplorerClient {
 
         let data = serde_json::to_string(&reservation).unwrap();
 
-        let url = format!("{url}/api/v1/reservations/pools", url=self.url); 
+        let url = format!("{url}/api/v1/reservations/pools", url=self.get_url()); 
         let resp = reqwest::Client::new()
             .post(url)
             .json(&data)
@@ -128,11 +134,11 @@ impl ExplorerClient {
             .json::<reservation::CapacityPoolCreateResponse>()
             .await?;
 
-        stellar::pay_capacity_pool(self.user.keypair.clone(), resp).await
+        self.stellar_client.pay_capacity_pool(resp).await
     }
 
     pub async fn pool_get_by_id(&self, id: i64) -> Result<reservation::PoolData, ExplorerError> {
-        let url = format!("{url}/api/v1/reservations/pools/{id}", url=self.url, id=id); 
+        let url = format!("{url}/api/v1/reservations/pools/{id}", url=self.get_url(), id=id); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<reservation::PoolData>()
@@ -140,10 +146,19 @@ impl ExplorerClient {
     }
 
     pub async fn pools_by_owner(&self) -> Result<reservation::PoolData, ExplorerError> {
-        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.url, id=self.user.get_id()); 
+        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user.get_id()); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<reservation::PoolData>()
             .await?)
+    }
+
+    fn get_url(&self) -> &str {
+        match self.network {
+            "mainnet" => "https://explorer.grid.tf",
+            "testnet" => "https://explorer.testnet.grid.tf",
+            "devnet" => "https://explorer.devnet.grid.tf",
+            _ => "https://explorer.grid.tf",
+        }
     }
 }
