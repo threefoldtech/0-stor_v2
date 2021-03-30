@@ -128,9 +128,7 @@ impl ExplorerClient {
             .json::<reservation::CapacityPoolCreateResponse>()
             .await?;
 
-        stellar::pay_capacity_pool(self.user.keypair.clone(), resp).await?;
-
-        Ok(true)
+        stellar::pay_capacity_pool(self.user.keypair.clone(), resp).await
     }
 
     pub async fn pool_get_by_id(&self, id: i64) -> Result<reservation::PoolData, ExplorerError> {
