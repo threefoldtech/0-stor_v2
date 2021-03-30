@@ -23,7 +23,7 @@ impl From<stellar_horizon::error::Error> for super::ExplorerError {
     }
 }
 
-pub async fn pay_capacity_pool(keypair: KeyPair, capacity_pool_information: reservation::CapacityPoolCreateResponse) -> Result<String, super::ExplorerError> {
+pub async fn pay_capacity_pool(keypair: KeyPair, capacity_pool_information: reservation::CapacityPoolCreateResponse) -> Result<bool, super::ExplorerError> {
     let destination: PublicKey = PublicKey::from_account_id(capacity_pool_information.escrow_information.address.as_str())?;
 
     let amount_in_stroops = Stroops::new(capacity_pool_information.escrow_information.amount);
@@ -53,7 +53,9 @@ pub async fn pay_capacity_pool(keypair: KeyPair, capacity_pool_information: rese
         .into_transaction()?;
 
     tx.sign(&keypair, &Network::new_test())?;
-    let xdr = tx.into_envelope().xdr_base64()?;
+    let tx_envelope = tx.into_envelope();
 
-    Ok(xdr)
+    api::transactions::submit(&tx_envelope)?;
+
+    Ok(true)
 }
