@@ -31,7 +31,7 @@ pub async fn pay_capacity_pool(keypair: KeyPair, capacity_pool_information: rese
 
     let tft_asset_string: Vec<&str> = capacity_pool_information.escrow_information.asset.split(":").collect();
     let issuer = PublicKey::from_str(tft_asset_string[1])?;
-    let tft_asset = Asset::new_credit(tft_asset_string[1], issuer)?;
+    let tft_asset = Asset::new_credit(tft_asset_string[0], issuer)?;
 
     let payment = Operation::new_payment()
         .with_destination(destination.clone())
