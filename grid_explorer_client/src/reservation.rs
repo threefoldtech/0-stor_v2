@@ -48,3 +48,8 @@ pub struct PoolData {
     pub node_ids: Vec<String>,
     pub active_workload_ids: Vec<i64>
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ReservationCreateResponse {
+    pub id: i64
+}

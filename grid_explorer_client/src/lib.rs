@@ -4,6 +4,7 @@ mod reservation;
 mod identity;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -151,6 +152,58 @@ impl ExplorerClient {
             .await?
             .json::<reservation::PoolData>()
             .await?)
+    }
+
+    pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
+        let json = serde_json::to_string(&zdb).unwrap();
+        
+        let customer_signature = self.user.sign_hex(json.clone());
+
+        let start = SystemTime::now();
+        let since_the_epoch = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
+
+        let workload = workload::Workload {
+            workload_id: 1,
+            node_id,
+            pool_id,
+            reference: String::from(""),
+            description: String::from(""),
+
+            signing_request_provision: workload::SigningRequest::default(),
+            signing_request_delete: workload::SigningRequest::default(),
+
+            id: 1,
+            json: Some(json),
+            customer_tid: self.user.get_id(),
+            customer_signature,
+
+            next_action: workload::NextAction::Create,
+            
+            version: 1,
+            metadata: String::from(""),
+            epoch: since_the_epoch.as_secs(),
+
+            result: None,
+
+            data: workload::WorkloadData::ZDB(zdb),
+
+            workload_type: workload::WorkloadType::WorkloadTypeZDB,
+        };
+
+        let data = serde_json::to_string(&workload).unwrap();
+
+        let url = format!("{url}/api/v1/workloads", url=self.get_url()); 
+        let resp = reqwest::Client::new()
+            .post(url)
+            .json(&data)
+            .send()
+            .await?
+            .json::<reservation::ReservationCreateResponse>()
+            .await?;
+
+        Ok(resp.id)
     }
 
     fn get_url(&self) -> &str {

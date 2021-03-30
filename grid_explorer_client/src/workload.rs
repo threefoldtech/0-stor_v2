@@ -23,7 +23,7 @@ pub struct Workload {
     // signatures_provision
 
     pub version: i64,
-    pub epoch: i64,
+    pub epoch: u64,
     pub metadata: String,
 
     pub result: Option<WorkloadResult>,
@@ -34,7 +34,7 @@ pub struct Workload {
     pub data: WorkloadData
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SigningRequest {
     signers: Option<Vec<i64>>,
     quorum_min: i64
