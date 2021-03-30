@@ -12,7 +12,7 @@ impl Identity {
         self.user_id
     }
 
-    pub fn signHex(&self, json: String) -> String {
+    pub fn sign_hex(&self, json: String) -> String {
         unimplemented!()
     }
 }
