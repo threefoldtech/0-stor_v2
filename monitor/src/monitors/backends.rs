@@ -104,7 +104,7 @@ pub async fn monitor_backends(
                     }
 
                     let mut cluster = match zstor_config.meta() {
-                        Meta::ETCD(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
+                        Meta::Etcd(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
                             Ok(cluster) => cluster,
                             Err(e) => {error!("could not create metadata cluster: {}", e); continue},
                         },

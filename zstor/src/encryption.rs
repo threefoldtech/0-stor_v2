@@ -25,12 +25,12 @@ pub trait Encryptor {
 
 /// An implementation of the AES encryption algorithm running in GCM mode.
 #[derive(Debug, Clone)]
-pub struct AESGCM {
+pub struct AesGcm {
     /// the key to use for encrypting and decrypting.
     key: SymmetricKey,
 }
 
-impl AESGCM {
+impl AesGcm {
     /// Create a new instance of the [`AESGCM`] encryptor, using the provided key for all
     /// operations.
     pub fn new(key: SymmetricKey) -> Self {
@@ -38,7 +38,7 @@ impl AESGCM {
     }
 }
 
-impl Encryptor for AESGCM {
+impl Encryptor for AesGcm {
     fn encrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>> {
         let key = GenericArray::from_slice(&self.key[..]);
         let cipher = aes_gcm::Aes256Gcm::new(key);
@@ -177,13 +177,13 @@ impl fmt::Display for EncryptionErrorKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Encryptor, SymmetricKey, AESGCM};
+    use super::{AesGcm, Encryptor, SymmetricKey};
     use rand::Rng;
 
     #[test]
     fn aesgcm_roundtrip() {
         let key = SymmetricKey::new(rand::thread_rng().gen::<[u8; 32]>());
-        let enc = AESGCM::new(key);
+        let enc = AesGcm::new(key);
 
         let data = rand::thread_rng().gen::<[u8; 16]>();
 

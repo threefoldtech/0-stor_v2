@@ -7,7 +7,7 @@ use blake2::{
 use etcd_client::{Client, ConnectOptions, GetOptions};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
 /// Result type of all etcd operations
@@ -58,7 +58,7 @@ impl Etcd {
     }
 
     /// Save the metadata for the file identified by `path` with a given prefix
-    pub async fn save_meta(&mut self, path: &PathBuf, meta: &MetaData) -> EtcdResult<()> {
+    pub async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> EtcdResult<()> {
         self.save_meta_by_key(&self.build_key(path)?, meta).await
     }
 
@@ -75,7 +75,7 @@ impl Etcd {
     }
 
     /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&mut self, path: &PathBuf) -> EtcdResult<Option<MetaData>> {
+    pub async fn load_meta(&mut self, path: &Path) -> EtcdResult<Option<MetaData>> {
         self.load_meta_by_key(&self.build_key(path)?).await
     }
 
@@ -138,7 +138,7 @@ impl Etcd {
     /// Save info about a failed upload under the failures key
     pub async fn save_failure(
         &mut self,
-        data_path: &PathBuf,
+        data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
     ) -> EtcdResult<()> {
@@ -210,7 +210,7 @@ impl Etcd {
     }
 
     // This does not take into account the virtual root
-    fn build_failure_key(&self, path: &PathBuf) -> EtcdResult<String> {
+    fn build_failure_key(&self, path: &Path) -> EtcdResult<String> {
         let mut hasher = VarBlake2b::new(16).unwrap();
         hasher.update(
             path.as_os_str()
@@ -280,7 +280,7 @@ impl Etcd {
 
     // hash a path using blake2b with 16 bytes of output, and hex encode the result
     // the path is canonicalized before encoding so the full path is used
-    fn build_key(&self, path: &PathBuf) -> EtcdResult<String> {
+    fn build_key(&self, path: &Path) -> EtcdResult<String> {
         let canonical_path = canonicalize(path)?;
 
         // now strip the virtual_root, if one is set
@@ -325,7 +325,7 @@ impl Etcd {
 }
 
 /// Canonicalizes a path, even if it does not exist
-fn canonicalize(path: &PathBuf) -> EtcdResult<PathBuf> {
+fn canonicalize(path: &Path) -> EtcdResult<PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
     // first we verify that it is actualy there
     // if it is, no problem
@@ -339,12 +339,10 @@ fn canonicalize(path: &PathBuf) -> EtcdResult<PathBuf> {
                 fs::remove_file(path)?;
                 Ok(cp)
             }
-            _ => {
-                return Err(EtcdError {
-                    kind: EtcdErrorKind::Key,
-                    internal: InternalError::IO(e),
-                })
-            }
+            _ => Err(EtcdError {
+                kind: EtcdErrorKind::Key,
+                internal: InternalError::Io(e),
+            }),
         },
     }
 }
@@ -409,7 +407,7 @@ impl std::error::Error for EtcdError {
         match self.internal {
             InternalError::Etcd(ref e) => Some(e),
             InternalError::Meta(ref e) => Some(&**e),
-            InternalError::IO(ref e) => Some(e),
+            InternalError::Io(ref e) => Some(e),
             InternalError::Other(_) => None,
         }
     }
@@ -419,7 +417,7 @@ impl std::error::Error for EtcdError {
 enum InternalError {
     Etcd(etcd_client::Error),
     Meta(Box<dyn std::error::Error + Send>),
-    IO(io::Error),
+    Io(io::Error),
     Other(String),
 }
 
@@ -431,7 +429,7 @@ impl fmt::Display for InternalError {
             match self {
                 InternalError::Etcd(e) => e.to_string(),
                 InternalError::Meta(e) => e.to_string(),
-                InternalError::IO(e) => e.to_string(),
+                InternalError::Io(e) => e.to_string(),
                 InternalError::Other(e) => e.to_string(),
             }
         )
@@ -477,7 +475,7 @@ impl From<io::Error> for EtcdError {
     fn from(e: io::Error) -> Self {
         EtcdError {
             kind: EtcdErrorKind::Key,
-            internal: InternalError::IO(e),
+            internal: InternalError::Io(e),
         }
     }
 }

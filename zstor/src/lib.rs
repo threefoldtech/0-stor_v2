@@ -60,7 +60,7 @@ impl ZstorError {
     /// Create a new ZstorError from an IO error with an additional message.
     pub fn new_io(msg: String, e: std::io::Error) -> Self {
         ZstorError {
-            kind: ZstorErrorKind::LocalIO(msg),
+            kind: ZstorErrorKind::LocalIo(msg),
             internal: InternalError::Other(Box::new(e)),
         }
     }
@@ -119,7 +119,7 @@ pub enum ZstorErrorKind {
     /// from the metadata storage
     Metadata,
     /// An error wile reading or writing to the local storage.
-    LocalIO(String),
+    LocalIo(String),
     /// An error in the configuration,
     Config,
     /// An error while waiting for an asynchronous task to complete.
@@ -137,7 +137,7 @@ impl fmt::Display for ZstorErrorKind {
                 ZstorErrorKind::Encoding => "encoding".to_string(),
                 ZstorErrorKind::Storage => "storage".to_string(),
                 ZstorErrorKind::Metadata => "metadata".to_string(),
-                ZstorErrorKind::LocalIO(msg) => format!("accessing local storage for {}", msg),
+                ZstorErrorKind::LocalIo(msg) => format!("accessing local storage for {}", msg),
                 ZstorErrorKind::Config => "configuration".to_string(),
                 ZstorErrorKind::Async => "waiting for async task completion".to_string(),
             }

@@ -70,7 +70,7 @@ pub struct Compression {
 #[serde(rename_all = "lowercase")]
 pub enum Meta {
     /// Write metadata to an etc cluster
-    ETCD(crate::etcd::EtcdConfig),
+    Etcd(crate::etcd::EtcdConfig),
 }
 
 impl Config {
@@ -433,7 +433,7 @@ mod tests {
                 algorithm: "snappy".into(),
             },
             root: Some(std::path::PathBuf::from("/virtualroot")),
-            meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
+            meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
                 vec![
                     "http://127.0.0.1:2379".to_string(),
                     "http://127.0.0.1:22379".to_string(),
@@ -536,7 +536,7 @@ password = "supersecretpass"
                 algorithm: "snappy".into(),
             },
             root: Some(std::path::PathBuf::from("/virtualroot")),
-            meta: super::Meta::ETCD(crate::etcd::EtcdConfig::new(
+            meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
                 vec![
                     "http://127.0.0.1:2379".to_string(),
                     "http://127.0.0.1:22379".to_string(),

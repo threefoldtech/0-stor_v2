@@ -163,7 +163,7 @@ impl Zdb {
                 .map_err(|_| ZdbError {
                     // try to guess the right kind of failure based on wether we are authenticating
                     // or not
-                    kind: if let Some(_) = &info.password {
+                    kind: if info.password.is_some() {
                         ZdbErrorKind::Auth
                     } else {
                         ZdbErrorKind::Ns
@@ -422,7 +422,7 @@ impl NsInfo {
             }
         }
 
-        return self.data_disk_freespace_bytes;
+        self.data_disk_freespace_bytes
     }
 
     /// Returns the percentage of used data space in this namespace. If no limit is set, the

@@ -12,13 +12,13 @@ use log4rs::filter::{Filter, Response};
 use std::convert::TryInto;
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::{Config, Meta};
-use zstor_v2::encryption::{Encryptor, AESGCM};
+use zstor_v2::encryption::{AesGcm, Encryptor};
 use zstor_v2::erasure::{Encoder, Shard};
 use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
@@ -251,7 +251,7 @@ fn real_main() -> ZstorResult<()> {
 
         // Get from config if not present
         let mut cluster = match cfg.meta() {
-            Meta::ETCD(etcdconf) => Etcd::new(etcdconf, cfg.virtual_root().clone()).await?,
+            Meta::Etcd(etcdconf) => Etcd::new(etcdconf, cfg.virtual_root().clone()).await?,
         };
 
         match opts.cmd {
@@ -303,7 +303,7 @@ fn real_main() -> ZstorResult<()> {
                 })?;
                 let decoded = recover_data(&metadata).await?;
 
-                let encryptor = AESGCM::new(metadata.encryption().key().clone());
+                let encryptor = AesGcm::new(metadata.encryption().key().clone());
                 let decrypted = encryptor.decrypt(&decoded)?;
 
                 // create the file
@@ -459,7 +459,7 @@ fn real_main() -> ZstorResult<()> {
 }
 
 // TODO: Async version
-fn get_dir_entries(dir: &PathBuf) -> io::Result<Vec<PathBuf>> {
+fn get_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut dir_entries = Vec::new();
     for dir_entry in fs::read_dir(&dir)? {
         let entry = dir_entry?;
@@ -481,24 +481,23 @@ fn get_dir_entries(dir: &PathBuf) -> io::Result<Vec<PathBuf>> {
 
 async fn handle_file_upload(
     mut cluster: &mut Etcd,
-    data_file: &PathBuf,
+    data_file: &Path,
     key_path: &Option<PathBuf>,
     save_failure: bool,
     delete: bool,
     cfg: &Config,
 ) -> ZstorResult<()> {
     let (data_file_path, mut key_dir_path) = match key_path {
-        Some(kp) => (data_file.clone(), kp.clone()),
+        Some(ref kp) => (data_file, kp.to_path_buf()),
         None => {
-            let dfp = data_file.clone();
-            let mut key_dir = data_file.clone();
+            let mut key_dir = data_file.to_path_buf();
             if !key_dir.pop() {
                 return Err(ZstorError::new_io(
                     "Could not remove file name to get parent dir name".to_string(),
                     std::io::Error::from(std::io::ErrorKind::InvalidData),
                 ));
             }
-            (dfp, key_dir)
+            (data_file, key_dir)
         }
     };
 
@@ -556,15 +555,13 @@ async fn handle_file_upload(
         }
         // return the original error
         return Err(e);
-    } else {
-        if delete {
-            debug!(
-                "Attempting to delete file {:?} after successful upload",
-                data_file_path
-            );
-            if let Err(e) = std::fs::remove_file(&data_file_path) {
-                warn!("Could not delete uploaded file: {}", e);
-            }
+    } else if delete {
+        debug!(
+            "Attempting to delete file {:?} after successful upload",
+            data_file_path
+        );
+        if let Err(e) = std::fs::remove_file(&data_file_path) {
+            warn!("Could not delete uploaded file: {}", e);
         }
     };
 
@@ -573,11 +570,11 @@ async fn handle_file_upload(
 
 async fn save_file(
     cluster: &mut Etcd,
-    data_file: &PathBuf,
-    key_file: &PathBuf,
+    data_file: &Path,
+    key_file: &Path,
     cfg: &Config,
 ) -> ZstorResult<()> {
-    let file_checksum = checksum(&data_file)?;
+    let file_checksum = checksum(data_file)?;
     debug!(
         "file checksum: {} ({:?})",
         hex::encode(file_checksum),
@@ -595,13 +592,13 @@ async fn save_file(
     let compressed = cursor.into_inner();
     trace!("compressed size: {} bytes", original_size);
 
-    let encryptor = AESGCM::new(cfg.encryption().key().clone());
+    let encryptor = AesGcm::new(cfg.encryption().key().clone());
     let encrypted = encryptor.encrypt(&compressed)?;
     trace!("encrypted size: {} bytes", encrypted.len());
 
     let metadata = store_data(encrypted, file_checksum, &cfg).await?;
 
-    cluster.save_meta(&key_file, &metadata).await?;
+    cluster.save_meta(key_file, &metadata).await?;
     info!(
         "Stored file {:?} as file {:?} ({} bytes) to {}",
         data_file,
@@ -763,7 +760,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
     Ok(metadata)
 }
 
-fn read_cfg(config: &PathBuf) -> ZstorResult<Config> {
+fn read_cfg(config: &Path) -> ZstorResult<Config> {
     trace!("opening config file {:?}", config);
     let mut cfg_file = File::open(config)
         .map_err(|e| ZstorError::new_io("could not open config file".to_string(), e))?;
@@ -783,7 +780,7 @@ fn read_cfg(config: &PathBuf) -> ZstorResult<Config> {
 /// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
 /// work on files which don't exist by creating a dummy file if the file does not exist,
 /// canonicalizing the path, and removing the dummy file.
-fn canonicalize_path(path: &PathBuf) -> ZstorResult<PathBuf> {
+fn canonicalize_path(path: &Path) -> ZstorResult<PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
     // first we verify that it is actualy there
     // if it is, no problem
@@ -814,7 +811,7 @@ fn canonicalize_path(path: &PathBuf) -> ZstorResult<PathBuf> {
 }
 
 /// Get a 16 byte blake2b checksum of a file
-fn checksum(file: &PathBuf) -> ZstorResult<Checksum> {
+fn checksum(file: &Path) -> ZstorResult<Checksum> {
     trace!("getting file checksum");
     let mut file =
         File::open(file).map_err(|e| ZstorError::new_io("could not open file".to_string(), e))?;
