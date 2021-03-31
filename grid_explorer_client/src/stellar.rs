@@ -67,15 +67,13 @@ impl StellarClient {
 
     fn get_network(&self) -> Network {
         match self.network {
-            "mainnet" => Network::new_public(),
-            _ => Network::new_test()
+            _ => Network::new_public()
         }
     }
 
     fn get_horizon_url(&self) -> &str {
         match self.network {
-            "mainnet" => "https://horizon.stellar.org",
-            _ => "https://horizon.testnet.stellar.org"
+            _ => "https://horizon.stellar.org"
         }
     }
 }
