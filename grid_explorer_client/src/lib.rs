@@ -1,7 +1,7 @@
+pub mod reservation;
+pub mod identity;
 mod types;
 mod workload;
-mod reservation;
-mod identity;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,18 +43,12 @@ impl From<reqwest::Error> for ExplorerError {
 
 pub struct ExplorerClient {
     pub network: &'static str,
-    pub user: identity::Identity,
+    pub user_identity: identity::Identity,
     pub stellar_client: stellar::StellarClient
 }
 
-pub fn new_explorer_client(network: &'static str, secret: &str, user_id: i64) -> ExplorerClient {
+pub fn new_explorer_client(network: &'static str, secret: &str, user_identity: identity::Identity) -> ExplorerClient {
     let keypair = KeyPair::from_secret_seed(&secret).unwrap();
-
-    let user = identity::Identity {
-        user_id,
-        email: String::from(""),
-        name: String::from(""),
-    };
     
     let stellar_client = stellar::StellarClient {
         network,
@@ -63,7 +57,7 @@ pub fn new_explorer_client(network: &'static str, secret: &str, user_id: i64) ->
 
     ExplorerClient{
         network,
-        user,
+        user_identity,
         stellar_client
     }
 }
@@ -110,26 +104,26 @@ impl ExplorerClient {
     }
 
     pub async fn create_capacity_pool(&self, data_reservation: reservation::ReservationData) -> Result<bool, ExplorerError> {
-        let json = serde_json::to_string(&data_reservation).unwrap();
-        
-        let customer_signature = self.user.sign_hex(json.clone());
-
-        let reservation = reservation::Reservation{
+        let mut reservation = reservation::Reservation{
             id: 0,
             data_reservation,
-            customer_tid: self.user.get_id(),
-            json,
-            customer_signature,
+            customer_tid: self.user_identity.get_id(),
+            json: String::from(""),
+            customer_signature: String::from(""),
             sponsor_signature: String::from(""),
             sponsor_tid: 0
         };
 
-        let data = serde_json::to_string(&reservation).unwrap();
+        reservation.json = serde_json::to_string(&reservation.data_reservation).unwrap();
+        
+        let customer_signature = self.user_identity.sign_hex(reservation.json.clone());
+
+        reservation.customer_signature = customer_signature;
 
         let url = format!("{url}/api/v1/reservations/pools", url=self.get_url()); 
         let resp = reqwest::Client::new()
             .post(url)
-            .json(&data)
+            .json(&reservation)
             .send()
             .await?
             .json::<reservation::CapacityPoolCreateResponse>()
@@ -147,7 +141,7 @@ impl ExplorerClient {
     }
 
     pub async fn pools_by_owner(&self) -> Result<reservation::PoolData, ExplorerError> {
-        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user.get_id()); 
+        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user_identity.get_id()); 
         Ok(reqwest::get(url.as_str())
             .await?
             .json::<reservation::PoolData>()
@@ -157,7 +151,7 @@ impl ExplorerClient {
     pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
         let json = serde_json::to_string(&zdb).unwrap();
         
-        let customer_signature = self.user.sign_hex(json.clone());
+        let customer_signature = self.user_identity.sign_hex(json.clone());
 
         let start = SystemTime::now();
         let since_the_epoch = start
@@ -176,7 +170,7 @@ impl ExplorerClient {
 
             id: 1,
             json: Some(json),
-            customer_tid: self.user.get_id(),
+            customer_tid: self.user_identity.get_id(),
             customer_signature,
 
             next_action: workload::NextAction::Create,

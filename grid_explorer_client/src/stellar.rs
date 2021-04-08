@@ -48,10 +48,11 @@ impl StellarClient {
         let request = api::accounts::single(&self.keypair.public_key().clone());
         let (_headers, response) = client.request(request).await?;
     
-        let sequence = response.sequence.parse::<i64>().unwrap();
-    
+        // get sequence number and increment
+        let sequence = response.sequence.parse::<i64>().unwrap() +1;
+
         // memo should be "p-reservation_id"
-        let memo = Memo::new_text(format!("p-{:?}", capacity_pool_information.id))?;
+        let memo = Memo::new_text(format!("p-{:?}", capacity_pool_information.reservation_id))?;
         let mut tx = Transaction::builder(self.keypair.public_key().clone(), sequence, MIN_BASE_FEE)
             .with_memo(memo)
             .add_operation(payment)
@@ -60,9 +61,11 @@ impl StellarClient {
         tx.sign(&self.keypair, &self.get_network())?;
         let tx_envelope = tx.into_envelope();
     
-        api::transactions::submit(&tx_envelope)?;
-    
-        Ok(true)
+        let res = api::transactions::submit(&tx_envelope)?;
+
+        let (_, response) = client.request(res).await?;
+
+        Ok(response.successful)
     }
 
     fn get_network(&self) -> Network {

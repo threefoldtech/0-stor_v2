@@ -23,7 +23,7 @@ pub struct ReservationData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CapacityPoolCreateResponse {
-    pub id: i64,
+    pub reservation_id: i64,
     pub escrow_information: EscrowInformation
 }
 
