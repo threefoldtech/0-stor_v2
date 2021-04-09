@@ -2,7 +2,6 @@
 use bip39::{Mnemonic, Error};
 use std::str::FromStr;
 use ed25519_dalek::{Signer, Keypair, SecretKey, PublicKey, SignatureError};
-use hex;
 
 #[derive(Debug)]
 pub enum IdentityError {
@@ -56,7 +55,7 @@ impl Identity {
         self.user_id
     }
 
-    pub fn sign_hex(&self, json: String) -> String {
-        hex::encode(self.keypair.sign(json.as_bytes()).to_bytes().to_vec())
+    pub fn sign(&self, input: &[u8]) -> [u8; 64] {
+        self.keypair.sign(input).to_bytes()
     }
 }
