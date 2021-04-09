@@ -5,6 +5,7 @@ mod workload;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
 use std::time::{SystemTime, UNIX_EPOCH};
+use hex;
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -116,9 +117,10 @@ impl ExplorerClient {
 
         reservation.json = serde_json::to_string(&reservation.data_reservation).unwrap();
         
-        let customer_signature = self.user_identity.sign_hex(reservation.json.clone());
+        let customer_signature_bytes = self.user_identity.sign(reservation.json.as_bytes());
 
-        reservation.customer_signature = customer_signature;
+        // hex encode the customer signature
+        reservation.customer_signature = hex::encode(customer_signature_bytes.to_vec());
 
         let url = format!("{url}/api/v1/reservations/pools", url=self.get_url()); 
         let resp = reqwest::Client::new()
@@ -151,7 +153,10 @@ impl ExplorerClient {
     pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
         let json = serde_json::to_string(&zdb).unwrap();
         
-        let customer_signature = self.user_identity.sign_hex(json.clone());
+        let customer_signature_bytes = self.user_identity.sign(json.as_bytes());
+
+        // hex encode the customer signature
+        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
 
         let start = SystemTime::now();
         let since_the_epoch = start

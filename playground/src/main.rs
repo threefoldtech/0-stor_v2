@@ -19,8 +19,8 @@ fn main() {
         // farms_get().await;
         // farm_get().await;
         // workload_get().await;
-        pool_get(stellar_secret, user_id, mnemonic).await;
-        // pool_create().await;
+        // pool_get(stellar_secret, user_id, mnemonic).await;
+        pool_create(stellar_secret, user_id, mnemonic).await;
     });
 }
 
