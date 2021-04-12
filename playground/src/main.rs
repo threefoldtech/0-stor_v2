@@ -20,11 +20,13 @@ fn main() {
         // farm_get().await;
         // workload_get().await;
         // pool_get(stellar_secret, user_id, mnemonic).await;
-        pool_create(stellar_secret, user_id, mnemonic).await;
+        // pool_create(stellar_secret, user_id, mnemonic).await;
+        // pools_by_owner(stellar_secret, user_id, mnemonic).await;
+        zdb_create(stellar_secret, user_id, mnemonic).await;
     });
 }
 
-const NETWORK: &str = "testnet";
+const NETWORK: &str = "devnet";
 
 async fn node_get(stellar_secret: String, user_id: i64, mnemonic: String) {
     let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
@@ -131,6 +133,48 @@ async fn pool_create(stellar_secret: String, user_id: i64, mnemonic: String) {
     };
 
     let result = client.create_capacity_pool(data).await;
+    match result {
+        Ok(pool) => {
+            println!("{:?}", pool);
+        },
+        Err(err) => {
+            println!("{:?}", err)
+        }
+    }
+}
+
+async fn pools_by_owner(stellar_secret: String, user_id: i64, mnemonic: String) {
+    let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+
+    let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
+    let result = client.pools_by_owner().await;
+    match result {
+        Ok(pool) => {
+            println!("{:?}", pool);
+        },
+        Err(err) => {
+            println!("{:?}", err)
+        }
+    }
+}
+
+async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) {
+    let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+
+    let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
+
+    let zdb = grid_explorer_client::workload::ZDBInformation {
+        size: 1,
+        mode: grid_explorer_client::workload::ZdbMode::ZDBModeUser,
+        password: String::from(""),
+        disk_type: grid_explorer_client::workload::DiskType::HDD,
+        public: false
+    };
+
+    let pool_id = 20;
+    let node_id = String::from("8zPYak76CXcoZxRoJBjdU69kVjo7XYU1SFE2NEK4UMqn");
+
+    let result = client.create_zdb_reservation(node_id, pool_id, zdb).await;
     match result {
         Ok(pool) => {
             println!("{:?}", pool);

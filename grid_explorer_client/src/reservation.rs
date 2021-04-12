@@ -37,16 +37,16 @@ pub struct EscrowInformation {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PoolData {
     pub pool_id: i64,
-    pub cus: u64,
-    pub sus: u64,
-    pub ipv4us: u64,
+    pub cus: f64,
+    pub sus: f64,
+    pub ipv4us: f64,
     pub last_updated: i64,
     pub active_cu: f64,
     pub active_su: f64,
     pub active_ipv4: f64,
     pub empty_at: i64,
     pub node_ids: Vec<String>,
-    pub active_workload_ids: Vec<i64>
+    pub active_workload_ids: Option<Vec<i64>>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
