@@ -1,11 +1,14 @@
 pub mod reservation;
 pub mod identity;
+pub mod workload;
 mod types;
-mod workload;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
 use std::time::{SystemTime, UNIX_EPOCH};
 use hex;
+use reqwest::header::{HeaderMap, HeaderValue};
+mod auth;
+use chrono::{Utc};
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -142,28 +145,23 @@ impl ExplorerClient {
             .await?)
     }
 
-    pub async fn pools_by_owner(&self) -> Result<reservation::PoolData, ExplorerError> {
-        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user_identity.get_id()); 
+    pub async fn pools_by_owner(&self) -> Result<Vec<reservation::PoolData>, ExplorerError> {
+        let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user_identity.get_id());
         Ok(reqwest::get(url.as_str())
             .await?
-            .json::<reservation::PoolData>()
+            .json::<Vec<reservation::PoolData>>()
             .await?)
     }
 
     pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
-        let json = serde_json::to_string(&zdb).unwrap();
-        
-        let customer_signature_bytes = self.user_identity.sign(json.as_bytes());
-
-        // hex encode the customer signature
-        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
-
         let start = SystemTime::now();
         let since_the_epoch = start
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards");
 
-        let workload = workload::Workload {
+        let zdb_signature_challenge = zdb.signature_challenge();
+        
+        let mut workload = workload::Workload {
             workload_id: 1,
             node_id,
             pool_id,
@@ -174,9 +172,9 @@ impl ExplorerClient {
             signing_request_delete: workload::SigningRequest::default(),
 
             id: 1,
-            json: Some(json),
+            json: Some(String::from("")),
             customer_tid: self.user_identity.get_id(),
-            customer_signature,
+            customer_signature: String::from(""),
 
             next_action: workload::NextAction::Create,
             
@@ -186,23 +184,66 @@ impl ExplorerClient {
 
             result: None,
 
-            data: workload::WorkloadData::ZDB(zdb),
-
             workload_type: workload::WorkloadType::WorkloadTypeZDB,
+
+            data: workload::WorkloadData::ZDB(zdb),
         };
 
-        let data = serde_json::to_string(&workload).unwrap();
+        let mut workload_signature_challenge = workload.signature_challenge();
+        println!("{}", workload_signature_challenge.clone());
+        workload_signature_challenge.push_str(zdb_signature_challenge.as_str());
 
-        let url = format!("{url}/api/v1/workloads", url=self.get_url()); 
+        println!("{}", workload_signature_challenge.clone());
+
+        let json = serde_json::to_string(&workload).unwrap();
+        
+        let customer_signature_bytes = self.user_identity.sign(workload_signature_challenge.as_bytes());
+
+        // hex encode the customer signature
+        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
+
+        workload.customer_signature = customer_signature;
+        workload.json = Some(json);
+
+        let url = format!("{url}/api/v1/reservations/workloads", url=self.get_url()); 
+        
+        let date = Utc::now();
+        let headers = self.construct_headers(date);
+
         let resp = reqwest::Client::new()
             .post(url)
-            .json(&data)
+            .headers(headers)
+            .json(&workload)
             .send()
-            .await?
-            .json::<reservation::ReservationCreateResponse>()
             .await?;
 
-        Ok(resp.id)
+            // .json(&d);
+
+        println!("{:?}", resp.text().await);
+        
+        // println!("{:?}", resp.text().await);
+            // .json::<reservation::ReservationCreateResponse>()
+            // .await?;
+
+        Ok(1)
+    }
+
+    fn construct_headers(&self, date: chrono::DateTime<chrono::Utc>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+
+        let date_str = format!("{}", date.format("%a, %d %b %Y %H:%M:%S GMT"));
+        let header = auth::create_header(&self.user_identity, date, date_str.clone());
+        
+        let sig = HeaderValue::from_str(&header).unwrap();
+        headers.insert("Authorization", sig);
+
+        let id = HeaderValue::from_str(self.user_identity.get_id().to_string().as_str()).unwrap();
+        headers.insert("Threebot-Id",  id);
+
+        let date = HeaderValue::from_str(date_str.as_str()).unwrap();
+        headers.insert("date", date);
+        
+        headers
     }
 
     fn get_url(&self) -> &str {

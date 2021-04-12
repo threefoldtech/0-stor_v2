@@ -34,6 +34,23 @@ pub struct Workload {
     pub data: WorkloadData
 }
 
+impl Workload {
+    pub fn signature_challenge(&self) -> String {
+        let mut concat_string = format!("{}", self.workload_id);
+
+        concat_string.push_str(&format!("{}", self.node_id));
+        concat_string.push_str(&format!("{}", self.pool_id));
+        concat_string.push_str(&format!("{}", self.reference));
+        concat_string.push_str(&format!("{}", self.customer_tid));
+        concat_string.push_str(&format!("{}", self.workload_type.workload_type_as_string()));
+        concat_string.push_str(&format!("{}", self.epoch));
+        concat_string.push_str(&format!("{}", self.description));
+        concat_string.push_str(&format!("{}", self.metadata));
+
+        concat_string
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SigningRequest {
     signers: Option<Vec<i64>>,
@@ -55,6 +72,15 @@ pub enum WorkloadType {
 	WorkloadTypeGateway4To6,
 	WorkloadTypeNetworkResource,
 	WorkloadTypePublicIP
+}
+
+impl WorkloadType {
+    pub fn workload_type_as_string(&self) -> String {
+        match self {
+            WorkloadType::WorkloadTypeZDB => String::from("ZDB"),
+            _ => String::from("NOPE")
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -86,6 +112,19 @@ pub struct ZDBInformation {
     pub password: String,
     pub disk_type: DiskType,
     pub public: bool,
+}
+
+impl ZDBInformation {
+    pub fn signature_challenge(&self) -> String {
+        let mut concat_string = format!("{}", self.size);
+
+        concat_string.push_str(&format!("{}", self.mode.to_string()));
+        concat_string.push_str(&format!("{}", self.password));
+        concat_string.push_str(&format!("{}", self.disk_type.to_string()));
+        concat_string.push_str(&format!("{}", self.public));
+
+        concat_string
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -265,9 +304,27 @@ pub enum ZdbMode {
 	ZDBModeUser
 }
 
+impl ZdbMode {
+    pub fn to_string(&self) -> String {
+        match &self {
+            ZdbMode::ZDBModeUser => String::from("User"),
+            ZdbMode::ZDBModeSeq => String::from("Sequence")
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 pub enum DiskType {
     SSD,
     HDD
+}
+
+impl DiskType {
+    pub fn to_string(&self) -> String {
+        match &self {
+            DiskType::SSD => String::from("SSD"),
+            DiskType::HDD => String::from("HDD")
+        }
+    }
 }
