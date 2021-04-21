@@ -1,6 +1,8 @@
 use crate::config::{Compression, Encryption};
 use crate::zdb::{Key, ZdbConnectionInfo};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
@@ -128,5 +130,82 @@ impl ShardInfo {
     /// Get the checksum of this shard
     pub fn checksum(&self) -> &Checksum {
         &self.checksum
+    }
+}
+
+#[async_trait]
+/// MetaStore defines `something` which can store metadata. The encoding of the metadata is an
+/// internal detail of the metadata storage.
+pub trait MetaStore {
+    /// The concrete error type returned by the metadata storage.
+    type Error: std::error::Error;
+    // type Result<T>: Result<T, Self::Error>;
+
+    /// Save the metadata for the file identified by `path` with a given prefix
+    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), Self::Error>;
+
+    /// Save the metadata for a given key
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), Self::Error>;
+
+    /// loads the metadata for a given path and prefix
+    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, Self::Error>;
+
+    /// loads the metadata for a given path and prefix
+    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, Self::Error>;
+
+    /// Mark a Zdb backend as replaced based on its connection info
+    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), Self::Error>;
+
+    /// Check to see if a Zdb backend has been marked as replaced based on its connection info
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, Self::Error>;
+
+    /// Get the (key, metadata) for all stored objects
+    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, Self::Error>;
+
+    /// Save info about a failed upload under the failures key
+    async fn save_failure(
+        &mut self,
+        data_path: &Path,
+        key_dir_path: &Option<PathBuf>,
+        should_delete: bool,
+    ) -> Result<(), Self::Error>;
+
+    /// Delete info about a failed upload from the failure key
+    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), Self::Error>;
+
+    /// Get all the paths of files which failed to upload
+    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, Self::Error>;
+}
+
+/// Information about a failed invocation of zstor
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FailureMeta {
+    data_path: PathBuf,
+    key_dir_path: Option<PathBuf>,
+    should_delete: bool,
+}
+
+impl FailureMeta {
+    /// Create a new instance of failure metadata
+    pub fn new(data_path: PathBuf, key_dir_path: Option<PathBuf>, should_delete: bool) -> Self {
+        Self {
+            data_path,
+            key_dir_path,
+            should_delete,
+        }
+    }
+    /// Returns the path to the data file used for uploading
+    pub fn data_path(&self) -> &PathBuf {
+        &self.data_path
+    }
+
+    /// Returns the path to the key dir, it is was set
+    pub fn key_dir_path(&self) -> &Option<PathBuf> {
+        &self.key_dir_path
+    }
+
+    /// Returns if the should-delete flag was set
+    pub fn should_delete(&self) -> bool {
+        self.should_delete
     }
 }

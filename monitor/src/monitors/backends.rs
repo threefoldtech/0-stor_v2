@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use zstor_v2::config::Meta;
 use zstor_v2::etcd::Etcd;
+use zstor_v2::meta::MetaStore;
 use zstor_v2::zdb::{Zdb, ZdbConnectionInfo};
 use zstor_v2::ZstorError;
 

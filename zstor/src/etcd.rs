@@ -1,3 +1,4 @@
+use crate::meta::FailureMeta;
 use crate::meta::MetaData;
 use crate::zdb::ZdbConnectionInfo;
 use blake2::{
@@ -55,158 +56,6 @@ impl Etcd {
             prefix: cfg.prefix.clone(),
             virtual_root,
         })
-    }
-
-    /// Save the metadata for the file identified by `path` with a given prefix
-    pub async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> EtcdResult<()> {
-        self.save_meta_by_key(&self.build_key(path)?, meta).await
-    }
-
-    /// Save the metadata for a given key
-    pub async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> EtcdResult<()> {
-        // for now save metadata human readable
-        trace!("encoding metadata");
-        let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
-            kind: EtcdErrorKind::Write,
-            internal: InternalError::Meta(Box::new(e)),
-        })?;
-        // hash
-        self.write_value(key, &enc_meta).await
-    }
-
-    /// loads the metadata for a given path and prefix
-    pub async fn load_meta(&mut self, path: &Path) -> EtcdResult<Option<MetaData>> {
-        self.load_meta_by_key(&self.build_key(path)?).await
-    }
-
-    /// loads the metadata for a given path and prefix
-    pub async fn load_meta_by_key(&mut self, key: &str) -> EtcdResult<Option<MetaData>> {
-        Ok(if let Some(value) = self.read_value(key).await? {
-            Some(toml::from_slice(&value).map_err(|e| EtcdError {
-                kind: EtcdErrorKind::Read,
-                internal: InternalError::Meta(Box::new(e)),
-            })?)
-        } else {
-            None
-        })
-    }
-
-    /// Mark a Zdb backend as replaced based on its connection info
-    pub async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<()> {
-        let hash = hex::encode(ci.blake2_hash());
-        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
-        Ok(self.write_value(&key, &[]).await?)
-    }
-
-    /// Check to see if a Zdb backend has been marked as replaced based on its conenction info
-    pub async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<bool> {
-        let hash = hex::encode(ci.blake2_hash());
-        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
-        Ok(self.read_value(&key).await?.is_some())
-    }
-
-    /// Get the (key, metadata) for all stored objects
-    pub async fn object_metas(&mut self) -> EtcdResult<Vec<(String, MetaData)>> {
-        let mut data = Vec::new();
-        let end = format!("/{}/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", self.prefix);
-        let opts = GetOptions::new().with_range(end);
-        for kv in self
-            .client
-            .get(
-                &*format!("/{}/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", self.prefix),
-                Some(opts),
-            )
-            .await
-            .map_err(|e| EtcdError {
-                kind: EtcdErrorKind::Read,
-                internal: InternalError::Etcd(e),
-            })?
-            .kvs()
-        {
-            // if the key is not a str it is a rogue key
-            if let Ok(ks) = kv.key_str() {
-                // if metdata decoding fails is is a rogue entry
-                if let Ok(value) = toml::from_slice(kv.value()) {
-                    data.push((ks.to_string(), value));
-                }
-            }
-        }
-
-        Ok(data)
-    }
-
-    /// Save info about a failed upload under the failures key
-    pub async fn save_failure(
-        &mut self,
-        data_path: &Path,
-        key_dir_path: &Option<PathBuf>,
-        should_delete: bool,
-    ) -> EtcdResult<()> {
-        let abs_data_path = canonicalize(data_path)?;
-        let key = format!(
-            "/{}/upload_failures/{}",
-            self.prefix,
-            self.build_failure_key(&abs_data_path)?
-        );
-
-        let meta = toml::to_vec(&FailureMeta {
-            data_path: abs_data_path,
-            key_dir_path: match key_dir_path {
-                None => None,
-                Some(kp) => Some(canonicalize(kp)?),
-            },
-            should_delete,
-        })
-        // unwrap here is fine since an error here is a programming error
-        .unwrap();
-
-        // unwrap here is safe as we already validated that to_str() returns some when building the
-        // failure key
-        Ok(self.write_value(&key, &meta).await?)
-    }
-
-    /// Delete info about a failed upload from the failure key
-    pub async fn delete_failure(&mut self, fm: &FailureMeta) -> EtcdResult<()> {
-        let key = format!(
-            "/{}/upload_failures/{}",
-            self.prefix,
-            self.build_failure_key(&fm.data_path)?
-        );
-
-        Ok(self.delete_value(&key).await?)
-    }
-
-    /// Get all the paths of files which failed to upload
-    pub async fn get_failures(&mut self) -> EtcdResult<Vec<FailureMeta>> {
-        let mut data = Vec::new();
-        let end = format!(
-            "/{}/upload_failure/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-            self.prefix
-        );
-        let opts = GetOptions::new().with_range(end);
-        for kv in self
-            .client
-            .get(
-                &*format!(
-                    "/{}/upload_failure/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    self.prefix
-                ),
-                Some(opts),
-            )
-            .await
-            .map_err(|e| EtcdError {
-                kind: EtcdErrorKind::Read,
-                internal: InternalError::Etcd(e),
-            })?
-            .kvs()
-        {
-            // if the value is not a FailureMeta in toml format it is a rogue key
-            if let Ok(fm) = toml::from_slice(kv.value()) {
-                data.push(fm)
-            };
-        }
-
-        Ok(data)
     }
 
     // This does not take into account the virtual root
@@ -324,6 +173,166 @@ impl Etcd {
     }
 }
 
+use crate::meta::MetaStore;
+use async_trait::async_trait;
+
+#[async_trait]
+impl MetaStore for Etcd {
+    type Error = EtcdError;
+
+    /// Save the metadata for the file identified by `path` with a given prefix
+    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> EtcdResult<()> {
+        self.save_meta_by_key(&self.build_key(path)?, meta).await
+    }
+
+    /// Save the metadata for a given key
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> EtcdResult<()> {
+        // for now save metadata human readable
+        trace!("encoding metadata");
+        let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
+            kind: EtcdErrorKind::Write,
+            internal: InternalError::Meta(Box::new(e)),
+        })?;
+        // hash
+        self.write_value(key, &enc_meta).await
+    }
+
+    /// loads the metadata for a given path and prefix
+    async fn load_meta(&mut self, path: &Path) -> EtcdResult<Option<MetaData>> {
+        self.load_meta_by_key(&self.build_key(path)?).await
+    }
+
+    /// loads the metadata for a given path and prefix
+    async fn load_meta_by_key(&mut self, key: &str) -> EtcdResult<Option<MetaData>> {
+        Ok(if let Some(value) = self.read_value(key).await? {
+            Some(toml::from_slice(&value).map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Meta(Box::new(e)),
+            })?)
+        } else {
+            None
+        })
+    }
+
+    /// Mark a Zdb backend as replaced based on its connection info
+    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<()> {
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
+        Ok(self.write_value(&key, &[]).await?)
+    }
+
+    /// Check to see if a Zdb backend has been marked as replaced based on its conenction info
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<bool> {
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
+        Ok(self.read_value(&key).await?.is_some())
+    }
+
+    /// Get the (key, metadata) for all stored objects
+    async fn object_metas(&mut self) -> EtcdResult<Vec<(String, MetaData)>> {
+        let mut data = Vec::new();
+        let end = format!("/{}/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", self.prefix);
+        let opts = GetOptions::new().with_range(end);
+        for kv in self
+            .client
+            .get(
+                &*format!("/{}/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", self.prefix),
+                Some(opts),
+            )
+            .await
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Etcd(e),
+            })?
+            .kvs()
+        {
+            // if the key is not a str it is a rogue key
+            if let Ok(ks) = kv.key_str() {
+                // if metdata decoding fails is is a rogue entry
+                if let Ok(value) = toml::from_slice(kv.value()) {
+                    data.push((ks.to_string(), value));
+                }
+            }
+        }
+
+        Ok(data)
+    }
+
+    /// Save info about a failed upload under the failures key
+    async fn save_failure(
+        &mut self,
+        data_path: &Path,
+        key_dir_path: &Option<PathBuf>,
+        should_delete: bool,
+    ) -> EtcdResult<()> {
+        let abs_data_path = canonicalize(data_path)?;
+        let key = format!(
+            "/{}/upload_failures/{}",
+            self.prefix,
+            self.build_failure_key(&abs_data_path)?
+        );
+
+        let meta = toml::to_vec(&FailureMeta::new(
+            abs_data_path,
+            match key_dir_path {
+                None => None,
+                Some(kp) => Some(canonicalize(kp)?),
+            },
+            should_delete,
+        ))
+        // unwrap here is fine since an error here is a programming error
+        .unwrap();
+
+        // unwrap here is safe as we already validated that to_str() returns some when building the
+        // failure key
+        Ok(self.write_value(&key, &meta).await?)
+    }
+
+    /// Delete info about a failed upload from the failure key
+    async fn delete_failure(&mut self, fm: &FailureMeta) -> EtcdResult<()> {
+        let key = format!(
+            "/{}/upload_failures/{}",
+            self.prefix,
+            self.build_failure_key(&fm.data_path())?
+        );
+
+        Ok(self.delete_value(&key).await?)
+    }
+
+    /// Get all the paths of files which failed to upload
+    async fn get_failures(&mut self) -> EtcdResult<Vec<FailureMeta>> {
+        let mut data = Vec::new();
+        let end = format!(
+            "/{}/upload_failure/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            self.prefix
+        );
+        let opts = GetOptions::new().with_range(end);
+        for kv in self
+            .client
+            .get(
+                &*format!(
+                    "/{}/upload_failure/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    self.prefix
+                ),
+                Some(opts),
+            )
+            .await
+            .map_err(|e| EtcdError {
+                kind: EtcdErrorKind::Read,
+                internal: InternalError::Etcd(e),
+            })?
+            .kvs()
+        {
+            // if the value is not a FailureMeta in toml format it is a rogue key
+            if let Ok(fm) = toml::from_slice(kv.value()) {
+                data.push(fm)
+            };
+        }
+
+        Ok(data)
+    }
+}
+
 /// Canonicalizes a path, even if it does not exist
 fn canonicalize(path: &Path) -> EtcdResult<PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
@@ -361,31 +370,6 @@ impl EtcdConfig {
             username,
             password,
         }
-    }
-}
-
-/// Information about a failed invocation of zstor
-#[derive(Debug, Deserialize, Serialize)]
-pub struct FailureMeta {
-    data_path: PathBuf,
-    key_dir_path: Option<PathBuf>,
-    should_delete: bool,
-}
-
-impl FailureMeta {
-    /// Returns the path to the data file used for uploading
-    pub fn data_path(&self) -> &PathBuf {
-        &self.data_path
-    }
-
-    /// Returns the path to the key dir, it is was set
-    pub fn key_dir_path(&self) -> &Option<PathBuf> {
-        &self.key_dir_path
-    }
-
-    /// Returns if the should-delete flag was set
-    pub fn should_delete(&self) -> bool {
-        self.should_delete
     }
 }
 

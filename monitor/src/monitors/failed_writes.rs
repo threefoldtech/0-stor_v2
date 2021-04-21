@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use zstor_v2::config::Meta;
 use zstor_v2::etcd::Etcd;
+use zstor_v2::meta::MetaStore;
 
 const REPAIR_BACKLOG_RETRY_INTERVAL_DURATION: u64 = 60 * 5; // 5 minutes
 const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =

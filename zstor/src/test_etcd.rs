@@ -5,7 +5,7 @@ use zstor_v2::{
     config::{Compression, Encryption},
     encryption::SymmetricKey,
     etcd,
-    meta::{MetaData, ShardInfo},
+    meta::{MetaData, MetaStore, ShardInfo},
     zdb::ZdbConnectionInfo,
 };
 

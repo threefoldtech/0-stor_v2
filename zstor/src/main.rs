@@ -21,7 +21,7 @@ use zstor_v2::config::{Config, Meta};
 use zstor_v2::encryption::{AesGcm, Encryptor};
 use zstor_v2::erasure::{Encoder, Shard};
 use zstor_v2::etcd::Etcd;
-use zstor_v2::meta::{Checksum, MetaData, ShardInfo, CHECKSUM_LENGTH};
+use zstor_v2::meta::{Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::{Zdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
