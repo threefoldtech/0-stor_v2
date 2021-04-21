@@ -73,7 +73,7 @@ impl ZstorError {
         }
     }
 
-    /// Return a reference to the embedded [`zstor_v2::zdb::ZdbError`], if this error is caused by
+    /// Return a reference to the embedded [`crate::zdb::ZdbError`], if this error is caused by
     /// a ZdbError, or nothing otherwise.
     pub fn zdb_error(&self) -> Option<&ZdbError> {
         match self.internal {

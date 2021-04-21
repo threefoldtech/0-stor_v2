@@ -388,7 +388,7 @@ impl Zdb {
         })
     }
 
-    /// Returns the [`zstor_v2::zdb::ZdbConnectionInfo`] object used to connect to this db.
+    /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
     pub fn connection_info(&self) -> &ZdbConnectionInfo {
         &self.ci
     }

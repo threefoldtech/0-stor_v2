@@ -31,7 +31,7 @@ pub struct AesGcm {
 }
 
 impl AesGcm {
-    /// Create a new instance of the [`AESGCM`] encryptor, using the provided key for all
+    /// Create a new instance of the [`AesGcm`] encryptor, using the provided key for all
     /// operations.
     pub fn new(key: SymmetricKey) -> Self {
         Self { key }
