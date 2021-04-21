@@ -435,10 +435,15 @@ impl NsInfo {
         // TODO: this is wrong
         (100 * self.data_size_bytes / (self.data_size_bytes + self.data_disk_freespace_bytes)) as u8
     }
+
+    /// Get the [`mode`](ZdbRunMode) the 0-db is running in
+    pub fn mode(&self) -> ZdbRunMode {
+        self.mode
+    }
 }
 
 /// The different running modes for a zdb instance
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ZdbRunMode {
     /// Userkey run mode
     User,
