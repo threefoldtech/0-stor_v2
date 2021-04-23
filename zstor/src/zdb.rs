@@ -20,22 +20,35 @@ pub type Key = u32;
 /// The result type as used by this module.
 pub type ZdbResult<T> = Result<T, ZdbError>;
 
-// Max size of a single entry in zdb
+// Max size of a single entry in zdb;
 const MAX_ZDB_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+// Max size of a single entry in zdb;
+const MAX_ZDB_DATA_SIZE: usize = 8 * 1024 * 1024;
 // Max allowed duration for an operation
 // Since max chunk size is 2MiB, 30 seconds would mean a throughput of ~69.9 KB/s
 const ZDB_TIMEOUT: Duration = Duration::from_secs(30);
 
-// TODO impl debug
+/// A connection to a 0-db namespace running in sequential mode
+#[derive(Debug)]
+pub struct SequentialZdb {
+    internal: InternalZdb,
+}
+
+/// A connection to a 0-db namespace running in user-key mode
+#[derive(Debug)]
+pub struct UserKeyZdb {
+    internal: InternalZdb,
+}
+
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
 /// the remote closed). No reconnection is attempted.
-pub struct Zdb {
+struct InternalZdb {
     conn: Connection,
     // connection info tracked to conveniently inspect the remote address and namespace.
     ci: ZdbConnectionInfo,
 }
 
-impl fmt::Debug for Zdb {
+impl fmt::Debug for InternalZdb {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ZDB at {}", self.ci.address)
     }
@@ -82,11 +95,11 @@ impl ZdbConnectionInfo {
     }
 }
 
-impl Zdb {
+impl InternalZdb {
     /// Create a new connection to a zdb instance. The connection is opened and verified by means
     /// of the PING command. If provided, a namespace is also opened. SECURE AUTH is used to
     /// authenticate.
-    pub async fn new(info: ZdbConnectionInfo) -> ZdbResult<Self> {
+    async fn new(info: ZdbConnectionInfo) -> ZdbResult<Self> {
         // It appears there is a small bug in the library when specifying an ipv6 connection
         // String. Although there is some similar behavior to the `redis-cli` tool, there are also
         // valid strings which are outright failing. To work around this, manually construct the
@@ -189,77 +202,74 @@ impl Zdb {
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
     /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
     /// so we internally chunk the data.
-    pub async fn set(&mut self, data: &[u8]) -> ZdbResult<Vec<Key>> {
-        trace!("storing data in zdb (length: {})", data.len());
+    ///
+    /// # Panics
+    ///
+    /// panics if the data len is larger than 8MiB
+    async fn set(&mut self, key: Option<&[u8]>, data: &[u8]) -> ZdbResult<Vec<u8>> {
+        trace!(
+            "storing data in zdb (key: {:?} length: {})",
+            key,
+            data.len()
+        );
 
-        let mut keys =
-            Vec::with_capacity((data.len() as f64 / MAX_ZDB_CHUNK_SIZE as f64).ceil() as usize);
+        assert!(data.len() < MAX_ZDB_DATA_SIZE);
 
-        for chunk in data.chunks(MAX_ZDB_CHUNK_SIZE) {
-            trace!("writing chunk of size {}", chunk.len());
-            let raw_key: Vec<u8> = timeout(
-                ZDB_TIMEOUT,
-                redis::cmd("SET")
-                    .arg::<&[u8]>(&[])
-                    .arg(chunk)
-                    .query_async(&mut self.conn),
-            )
-            .await
-            .map_err(|_| ZdbError {
-                kind: ZdbErrorKind::Write,
-                remote: self.ci.address,
-                internal: ErrorCause::Timeout,
-            })?
-            .map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Write,
-                remote: self.ci.address,
-                internal: ErrorCause::Redis(e),
-            })?;
+        let returned_key: Vec<u8> = timeout(
+            ZDB_TIMEOUT,
+            redis::cmd("SET")
+                .arg::<&[u8]>(match key {
+                    Some(ref key) => key,
+                    None => &[],
+                })
+                .arg(data)
+                .query_async(&mut self.conn),
+        )
+        .await
+        .map_err(|_| ZdbError {
+            kind: ZdbErrorKind::Write,
+            remote: self.ci.address,
+            internal: ErrorCause::Timeout,
+        })?
+        .map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Write,
+            remote: self.ci.address,
+            internal: ErrorCause::Redis(e),
+        })?;
 
-            // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
-            // a key
-            debug_assert!(raw_key.len() == std::mem::size_of::<Key>());
-            keys.push(read_le_key(&raw_key))
-        }
-        Ok(keys)
+        Ok(returned_key)
     }
 
-    /// Retrieve some previously stored data with its keys
-    pub async fn get(&mut self, keys: &[Key]) -> ZdbResult<Option<Vec<u8>>> {
-        let mut data: Vec<u8> = Vec::new();
-        for key in keys {
-            trace!("loading data at key {}", key);
-            data.extend_from_slice(
-                timeout(
-                    ZDB_TIMEOUT,
-                    redis::cmd("GET")
-                        .arg(&key.to_le_bytes())
-                        .query_async::<_, Option<Vec<u8>>>(&mut self.conn),
-                )
-                .await
-                .map_err(|_| ZdbError {
-                    kind: ZdbErrorKind::Read,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Timeout,
-                })?
-                .map_err(|e| ZdbError {
-                    kind: ZdbErrorKind::Read,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Redis(e),
-                })?
-                .ok_or(ZdbError {
-                    kind: ZdbErrorKind::Read,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Other(format!("missing key {}", key)),
-                })?
-                .as_ref(),
-            );
-        }
+    /// Retrieve some previously stored data with its key
+    async fn get(&mut self, key: &[u8]) -> ZdbResult<Option<Vec<u8>>> {
+        trace!("loading data at key {}", hex::encode(key));
+        let data = timeout(
+            ZDB_TIMEOUT,
+            redis::cmd("GET")
+                .arg(key)
+                .query_async::<_, Option<Vec<u8>>>(&mut self.conn),
+        )
+        .await
+        .map_err(|_| ZdbError {
+            kind: ZdbErrorKind::Read,
+            remote: self.ci.address,
+            internal: ErrorCause::Timeout,
+        })?
+        .map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Read,
+            remote: self.ci.address,
+            internal: ErrorCause::Redis(e),
+        })?
+        .ok_or(ZdbError {
+            kind: ZdbErrorKind::Read,
+            remote: self.ci.address,
+            internal: ErrorCause::Other(format!("missing key {}", hex::encode(key))),
+        })?;
         Ok(Some(data))
     }
 
     /// Query info about the namespace.
-    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+    async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
         let list: String = timeout(
             ZDB_TIMEOUT,
             redis::cmd("NSINFO")
@@ -389,8 +399,76 @@ impl Zdb {
     }
 
     /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
-    pub fn connection_info(&self) -> &ZdbConnectionInfo {
+    fn connection_info(&self) -> &ZdbConnectionInfo {
         &self.ci
+    }
+}
+
+impl SequentialZdb {
+    /// Create a new connection to a 0-db namespace running in sequential mode. After the
+    /// connection is established, the namespace is checked to make sure it is indeed running in
+    /// sequential mode.
+    pub async fn new(ci: ZdbConnectionInfo) -> ZdbResult<Self> {
+        let mut internal = InternalZdb::new(ci).await?;
+        let ns_info = internal.ns_info().await?;
+        match ns_info.mode() {
+            ZdbRunMode::Seq => Ok(Self { internal }),
+            mode => Err(ZdbError {
+                kind: ZdbErrorKind::Mode,
+                remote: internal.connection_info().address,
+                internal: ErrorCause::Other(format!(
+                    "expected 0-db namespace to be in sequential mode, but is in {}",
+                    mode
+                )),
+            }),
+        }
+    }
+
+    /// Store some data in the zdb. The generated keys are returned for later retrieval.
+    /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
+    /// so we internally chunk the data.
+    pub async fn set(&mut self, data: &[u8]) -> ZdbResult<Vec<Key>> {
+        let mut keys =
+            Vec::with_capacity((data.len() as f64 / MAX_ZDB_CHUNK_SIZE as f64).ceil() as usize);
+
+        for chunk in data.chunks(MAX_ZDB_CHUNK_SIZE) {
+            trace!("writing chunk of size {}", chunk.len());
+            let raw_key = self.internal.set(None, chunk).await?;
+
+            // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
+            // a key
+            debug_assert!(raw_key.len() == std::mem::size_of::<Key>());
+            keys.push(read_le_key(&raw_key))
+        }
+        Ok(keys)
+    }
+
+    /// Retrieve some previously stored data with its keys
+    pub async fn get(&mut self, keys: &[Key]) -> ZdbResult<Option<Vec<u8>>> {
+        let mut data: Vec<u8> = Vec::new();
+        for key in keys {
+            trace!("loading data at key {}", key);
+            data.extend_from_slice(&self.internal.get(&key.to_le_bytes()).await?.ok_or(
+                ZdbError {
+                    kind: ZdbErrorKind::Read,
+                    remote: self.internal.ci.address,
+                    internal: ErrorCause::Other(format!("missing key {}", key)),
+                },
+            )?);
+        }
+        Ok(Some(data))
+    }
+
+    /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
+    #[inline]
+    pub fn connection_info(&self) -> &ZdbConnectionInfo {
+        self.internal.connection_info()
+    }
+
+    /// Query info about the namespace.
+    #[inline]
+    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+        self.internal.ns_info().await
     }
 }
 
@@ -449,6 +527,15 @@ pub enum ZdbRunMode {
     User,
     /// Sequential run mode
     Seq,
+}
+
+impl fmt::Display for ZdbRunMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ZdbRunMode::Seq => write!(f, "sequential"),
+            ZdbRunMode::User => write!(f, "user-key"),
+        }
+    }
 }
 
 /// Interpret a byteslice as a [`Key`] type. This is a helper function to easily interpret the
@@ -550,6 +637,8 @@ pub enum ZdbErrorKind {
     Format,
     /// The operation timed out
     Timeout,
+    /// The namespace is in an unexpected mode
+    Mode,
 }
 
 impl fmt::Display for ZdbErrorKind {
@@ -566,6 +655,7 @@ impl fmt::Display for ZdbErrorKind {
                 ZdbErrorKind::Read => "READ",
                 ZdbErrorKind::Format => "WRONG FORMAT",
                 ZdbErrorKind::Timeout => "OPERATION TIMEOUT",
+                ZdbErrorKind::Mode => "UNEXPECTED MODE",
             }
         )
     }

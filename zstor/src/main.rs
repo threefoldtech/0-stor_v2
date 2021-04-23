@@ -22,7 +22,7 @@ use zstor_v2::encryption::{AesGcm, Encryptor};
 use zstor_v2::erasure::{Encoder, Shard};
 use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::{Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
-use zstor_v2::zdb::{Zdb, ZdbError, ZdbResult};
+use zstor_v2::zdb::{SequentialZdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 const MIB: u64 = 1 << 20;
@@ -440,7 +440,7 @@ fn real_main() -> ZstorResult<()> {
                     cfg.backends()
                         .into_iter()
                         .cloned()
-                        .map(|ci| tokio::spawn(async move { Zdb::new(ci).await })),
+                        .map(|ci| tokio::spawn(async move { SequentialZdb::new(ci).await })),
                 )
                 .await
                 {
@@ -621,7 +621,7 @@ async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
         Vec::with_capacity(metadata.shards().len());
     for si in metadata.shards().iter().cloned() {
         shard_loads.push(tokio::spawn(async move {
-            let mut db = match Zdb::new(si.zdb().clone()).await {
+            let mut db = match SequentialZdb::new(si.zdb().clone()).await {
                 Ok(ok) => ok,
                 Err(e) => return (si.index(), Err(e.into())),
             };
@@ -693,7 +693,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
 
         for backend in backends {
             handles.push(tokio::spawn(async move {
-                let mut db = Zdb::new(backend.clone()).await?;
+                let mut db = SequentialZdb::new(backend.clone()).await?;
                 // check space in backend
                 let ns_info = db.ns_info().await?;
                 match ns_info.free_space() {

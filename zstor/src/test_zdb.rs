@@ -11,7 +11,7 @@ fn main() {
         SimpleLogger::new().init().unwrap();
         let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9900);
         println!("{}", addr);
-        let mut db = zdb::Zdb::new(zdb::ZdbConnectionInfo::new(addr, None, None))
+        let mut db = zdb::SequentialZdb::new(zdb::ZdbConnectionInfo::new(addr, None, None))
             .await
             .unwrap();
 

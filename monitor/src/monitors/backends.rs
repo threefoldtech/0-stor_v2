@@ -15,7 +15,7 @@ use tokio::time::interval;
 use zstor_v2::config::Meta;
 use zstor_v2::etcd::Etcd;
 use zstor_v2::meta::MetaStore;
-use zstor_v2::zdb::{Zdb, ZdbConnectionInfo};
+use zstor_v2::zdb::{SequentialZdb, ZdbConnectionInfo};
 use zstor_v2::ZstorError;
 
 const BACKEND_MONITOR_INTERVAL_DURATION: u64 = 60; // 60 seconds => 1 minute
@@ -73,7 +73,7 @@ pub async fn monitor_backends(
                             let backend = backend.clone();
                             futs.push(tokio::spawn(async move{
                                 // connect to backend and get size
-                                let ns_info = Zdb::new(backend.clone())
+                                let ns_info = SequentialZdb::new(backend.clone())
                                     .await
                                     .map_err(|e| (backend.clone(), e.into()))?
                                     .ns_info()
