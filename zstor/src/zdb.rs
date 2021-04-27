@@ -472,6 +472,68 @@ impl SequentialZdb {
     }
 }
 
+impl UserKeyZdb {
+    /// Create a new connection to a 0-db namespace running in userkey mode. After the
+    /// connection is established, the namespace is checked to make sure it is indeed running in
+    /// userkey mode.
+    pub async fn new(ci: ZdbConnectionInfo) -> ZdbResult<Self> {
+        let mut internal = InternalZdb::new(ci).await?;
+        let ns_info = internal.ns_info().await?;
+        match ns_info.mode() {
+            ZdbRunMode::User => Ok(Self { internal }),
+            mode => Err(ZdbError {
+                kind: ZdbErrorKind::Mode,
+                remote: internal.connection_info().address,
+                internal: ErrorCause::Other(format!(
+                    "expected 0-db namespace to be in userkey mode, but is in {}",
+                    mode
+                )),
+            }),
+        }
+    }
+
+    /// Store some data in the zdb under the provided key. Data size is limited to 8MiB, anything
+    /// larger will result in an error.
+    pub async fn set<K: AsRef<[u8]>>(&mut self, key: K, data: &[u8]) -> ZdbResult<()> {
+        if data.len() > MAX_ZDB_DATA_SIZE {
+            return Err(ZdbError {
+                kind: ZdbErrorKind::Write,
+                remote: self.connection_info().address,
+                internal: ErrorCause::Other(format!(
+                    "Data size limit is 8MiB, data has length {}",
+                    data.len()
+                )),
+            });
+        }
+        trace!(
+            "writing data  of size {} at key {}",
+            data.len(),
+            hex::encode(key.as_ref())
+        );
+        self.internal.set(Some(key.as_ref()), data).await?;
+
+        Ok(())
+    }
+
+    /// Retrieve some previously stored data from it's key.
+    pub async fn get<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<Option<Vec<u8>>> {
+        trace!("loading data at key {}", hex::encode(key.as_ref()));
+        Ok(self.internal.get(&key.as_ref()).await?)
+    }
+
+    /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
+    #[inline]
+    pub fn connection_info(&self) -> &ZdbConnectionInfo {
+        self.internal.connection_info()
+    }
+
+    /// Query info about the namespace.
+    #[inline]
+    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+        self.internal.ns_info().await
+    }
+}
+
 /// Information about a 0-db namespace, as reported by the db itself.
 // TODO: not complete
 #[derive(Debug)]
