@@ -30,6 +30,8 @@ pub mod meta;
 /// Very basic 0-db client, allowing to connect to a given (password protected) namespace, and
 /// write and read data from it.
 pub mod zdb;
+/// A metadata implementation on top of zdb
+pub mod zdb_meta;
 
 /// Global result type for zstor operations
 pub type ZstorResult<T> = Result<T, ZstorError>;

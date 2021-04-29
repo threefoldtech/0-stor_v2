@@ -40,6 +40,7 @@ gray-codes = "0.1"
 etcd-client = { version = "0.6", features = ["tls", "tls-roots"] }
 log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
 async-trait = "0.1"
+bincode = "1"
 
 [dev-dependencies]
 rand = "0.7"
