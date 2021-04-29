@@ -31,25 +31,13 @@ where
             encryptor,
         }
     }
-}
 
-#[async_trait]
-impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
-    type Error = ZdbMetaStoreError;
-
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), Self::Error> {
-        debug!("Saving metadata for key {}", key);
-        // binary encode data
-        trace!("Binary encoding metadata");
-        let bin_meta = bincode::serialize(meta)?;
-
-        // encrypt metadata
-        trace!("Encrypting metadata");
-        let enc_meta = self.encryptor.encrypt(&bin_meta)?;
-
+    // helper functions to write
+    async fn write_value(&mut self, key: &str, value: Vec<u8>) -> ZdbMetaStoreResult<()> {
+        debug!("writing data to zdb metastore");
         // dispersed encoding
         trace!("Dispersed encoding of metadata");
-        let mut chunks = self.encoder.encode(enc_meta);
+        let mut chunks = self.encoder.encode(value);
 
         // Chunks must be kept in the correct order, but since we don't have any external
         // bookkeeping, we need to add the ordering in the chunk itself. Since we assume the
@@ -66,7 +54,7 @@ impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
         {
             shard.insert(0, shard_idx as u8);
             trace!(
-                "Storing metadata chunk of size {} in backend {} with key {}",
+                "Storing data chunk of size {} in backend {} with key {}",
                 shard.len(),
                 backend.connection_info().address(),
                 key
@@ -79,6 +67,24 @@ impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
         try_join_all(store_requests).await?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
+    type Error = ZdbMetaStoreError;
+
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), Self::Error> {
+        debug!("Saving metadata for key {}", key);
+        // binary encode data
+        trace!("Binary encoding metadata");
+        let bin_meta = bincode::serialize(meta)?;
+
+        // encrypt metadata
+        trace!("Encrypting metadata");
+        let enc_meta = self.encryptor.encrypt(&bin_meta)?;
+
+        self.write_value(key, enc_meta).await
     }
 }
 
