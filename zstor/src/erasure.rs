@@ -121,6 +121,18 @@ impl Encoder {
 
         Ok(data)
     }
+
+    /// Get the amount of data shards used by this encoder
+    #[inline]
+    pub fn data_shards(&self) -> usize {
+        self.data_shards
+    }
+
+    /// Get the amount of parity shards used by this encoder
+    #[inline]
+    pub fn parity_shards(&self) -> usize {
+        self.parity_shards
+    }
 }
 
 impl From<Vec<u8>> for Shard {
