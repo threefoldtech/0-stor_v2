@@ -7,6 +7,7 @@ use log::trace;
 use reed_solomon_erasure::{galois_8::ReedSolomon, Error as RsError};
 use std::convert::TryInto;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 /// Result type for erasur operations.
 pub type ErasureResult<T> = Result<T, EncodingError>;
@@ -47,6 +48,9 @@ impl Encoder {
     /// Erasure encode data using ReedSolomon encoding over the galois 8 field. This returns the
     /// shards created by the encoding. The order of the shards is important to later retrieve
     /// the values
+    // TODO: we can improve this by making a special type which has an ARC to a single vec holding
+    // all the data from all the shards, and start and end indexes per struct. This would also
+    // allow to efficiently set the shard_idx in the shard without a realloc later
     pub fn encode(&self, mut data: Vec<u8>) -> Vec<Shard> {
         trace!("encoding data ({} bytes)", data.len());
         // pkcs7 padding
@@ -119,7 +123,13 @@ impl Encoder {
     }
 }
 
-impl std::ops::Deref for Shard {
+impl From<Vec<u8>> for Shard {
+    fn from(data: Vec<u8>) -> Self {
+        Shard(data)
+    }
+}
+
+impl Deref for Shard {
     type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
@@ -127,9 +137,9 @@ impl std::ops::Deref for Shard {
     }
 }
 
-impl From<Vec<u8>> for Shard {
-    fn from(data: Vec<u8>) -> Self {
-        Shard(data)
+impl DerefMut for Shard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
