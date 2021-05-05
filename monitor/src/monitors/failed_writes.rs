@@ -8,9 +8,7 @@ use tokio::select;
 use tokio::sync::broadcast::Receiver;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use zstor_v2::config::Meta;
-use zstor_v2::etcd::Etcd;
-use zstor_v2::meta::MetaStore;
+use zstor_v2::meta::new_metastore;
 
 const REPAIR_BACKLOG_RETRY_INTERVAL_DURATION: u64 = 60 * 5; // 5 minutes
 const REPAIR_BACKLOG_RETRY_INTERVAL: Duration =
@@ -42,11 +40,9 @@ pub async fn monitor_failed_writes(
                     };
 
                     // connect to meta store
-                    let mut cluster = match zstor_config.meta() {
-                        Meta::Etcd(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
+                    let mut cluster = match new_metastore(&zstor_config).await {
                             Ok(cluster) => cluster,
                             Err(e) => {error!("could not create metadata cluster: {}", e); continue},
-                        },
                     };
 
                     let failures = match cluster.get_failures().await {
