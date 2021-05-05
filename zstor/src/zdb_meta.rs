@@ -2,15 +2,19 @@ use crate::{
     config,
     encryption::{EncryptionError, Encryptor},
     erasure::{Encoder, EncodingError},
-    meta::{FailureMeta, MetaData, MetaStore, MetaStoreError},
+    meta::{canonicalize, FailureMeta, MetaData, MetaStore, MetaStoreError},
     zdb::{UserKeyZdb, ZdbConnectionInfo, ZdbError},
 };
 use async_trait::async_trait;
+use blake2::{
+    digest::{Update, VariableOutput},
+    VarBlake2b,
+};
 use futures::future::{join_all, try_join_all};
 use log::{debug, error, trace, warn};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::path::{Path, PathBuf};
+use std::{fmt, io};
 
 /// Configuration to create a 0-db based metadata store
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +49,7 @@ pub struct ZdbMetaStore<E: Encryptor> {
     backends: Vec<UserKeyZdb>,
     encoder: Encoder,
     encryptor: E,
+    virtual_root: Option<PathBuf>,
 }
 
 impl<E> ZdbMetaStore<E>
@@ -53,11 +58,17 @@ where
 {
     /// Create a new zdb metastorage client. Writing will be done to the provided 0-dbs, encrypting
     /// data with the provided encryptor, and chunking it with the provided encoder.
-    pub fn new(backends: Vec<UserKeyZdb>, encoder: Encoder, encryptor: E) -> Self {
+    pub fn new(
+        backends: Vec<UserKeyZdb>,
+        encoder: Encoder,
+        encryptor: E,
+        virtual_root: Option<PathBuf>,
+    ) -> Self {
         Self {
             backends,
             encoder,
             encryptor,
+            virtual_root,
         }
     }
 
@@ -150,10 +161,53 @@ where
 
         Ok(Some(self.encoder.decode(shards)?))
     }
+
+    // hash a path using blake2b with 16 bytes of output, and hex encode the result
+    // the path is canonicalized before encoding so the full path is used
+    fn build_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
+        let canonical_path = canonicalize(path)?;
+
+        // now strip the virtual_root, if one is set
+        let actual_path = if let Some(ref virtual_root) = self.virtual_root {
+            trace!("stripping path prefix {:?}", virtual_root);
+            canonical_path
+                .strip_prefix(virtual_root)
+                .map_err(|e| ZdbMetaStoreError {
+                    kind: ErrorKind::Key,
+                    internal: InternalError::Other(format!("could not strip path prefix: {}", e)),
+                })?
+        } else {
+            trace!("maintaining path");
+            canonical_path.as_path()
+        };
+
+        trace!("hashing path {:?}", actual_path);
+        // The unwrap here is safe since we know that 16 is a valid output size
+        let mut hasher = VarBlake2b::new(16).unwrap();
+        // TODO: might not need the move to a regular &str
+        hasher.update(
+            actual_path
+                .as_os_str()
+                .to_str()
+                .ok_or(ZdbMetaStoreError {
+                    kind: ErrorKind::Key,
+                    internal: InternalError::Other(
+                        "could not interpret path as utf-8 str".to_string(),
+                    ),
+                })?
+                .as_bytes(),
+        );
+
+        // TODO: is there a better way to do this?
+        let mut r = String::new();
+        hasher.finalize_variable(|resp| r = hex::encode(resp));
+        trace!("hashed path: {}", r);
+        Ok(r)
+    }
 }
 
 #[async_trait]
-impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
+impl<E: Encryptor + Send + Sync> MetaStore for ZdbMetaStore<E> {
     async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError> {
         debug!("Saving metadata for key {}", key);
         // binary encode data
@@ -193,11 +247,11 @@ impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
     }
 
     async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, MetaStoreError> {
-        todo!();
+        Ok(self.load_meta_by_key(&self.build_key(path)?).await?)
     }
 
     async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
-        todo!();
+        Ok(self.save_meta_by_key(&self.build_key(path)?, meta).await?)
     }
 
     async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
@@ -258,6 +312,8 @@ impl std::error::Error for ZdbMetaStoreError {
             InternalError::Encryption(ref e) => Some(e),
             InternalError::Encoding(ref e) => Some(e),
             InternalError::Corruption(ref e) => Some(e),
+            InternalError::Io(ref e) => Some(e),
+            InternalError::Other(_) => None,
         }
     }
 }
@@ -272,6 +328,10 @@ enum ErrorKind {
     Encryption,
     /// An erorr while using dispersed encoding or decoding.
     Encoding,
+    /// An error regarding a key
+    Key,
+    /// An otherwise unspecified Io error
+    Io,
 }
 
 impl fmt::Display for ErrorKind {
@@ -284,6 +344,8 @@ impl fmt::Display for ErrorKind {
                 ErrorKind::Serialize => "SERIALIZATION",
                 ErrorKind::Encryption => "ENCRYPTION",
                 ErrorKind::Encoding => "ENCODING",
+                ErrorKind::Key => "KEY",
+                ErrorKind::Io => "IO",
             }
         )
     }
@@ -296,6 +358,8 @@ enum InternalError {
     Encryption(EncryptionError),
     Encoding(EncodingError),
     Corruption(CorruptedKey),
+    Io(io::Error),
+    Other(String),
 }
 
 impl fmt::Display for InternalError {
@@ -309,6 +373,8 @@ impl fmt::Display for InternalError {
                 InternalError::Encryption(ref e) => e,
                 InternalError::Encoding(ref e) => e,
                 InternalError::Corruption(ref e) => e,
+                InternalError::Io(ref e) => e,
+                InternalError::Other(ref e) => e,
             }
         )
     }
@@ -346,6 +412,15 @@ impl From<EncodingError> for ZdbMetaStoreError {
         ZdbMetaStoreError {
             kind: ErrorKind::Encoding,
             internal: InternalError::Encoding(e),
+        }
+    }
+}
+
+impl From<io::Error> for ZdbMetaStoreError {
+    fn from(e: io::Error) -> Self {
+        ZdbMetaStoreError {
+            kind: ErrorKind::Io,
+            internal: InternalError::Io(e),
         }
     }
 }
