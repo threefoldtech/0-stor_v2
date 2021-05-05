@@ -1,7 +1,12 @@
-use crate::config::{Compression, Encryption};
-use crate::zdb::{Key, ZdbConnectionInfo};
+use crate::config::{self, Compression, Encryption};
+use crate::encryption;
+use crate::etcd::Etcd;
+use crate::zdb::{Key, UserKeyZdb, ZdbConnectionInfo};
+use crate::zdb_meta::ZdbMetaStore;
 use async_trait::async_trait;
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// The length of file and shard checksums
@@ -137,30 +142,26 @@ impl ShardInfo {
 /// MetaStore defines `something` which can store metadata. The encoding of the metadata is an
 /// internal detail of the metadata storage.
 pub trait MetaStore {
-    /// The concrete error type returned by the metadata storage.
-    type Error: std::error::Error;
-    // type Result<T>: Result<T, Self::Error>;
-
     /// Save the metadata for the file identified by `path` with a given prefix
-    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), Self::Error>;
+    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError>;
 
     /// Save the metadata for a given key
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), Self::Error>;
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError>;
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, Self::Error>;
+    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, MetaStoreError>;
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, Self::Error>;
+    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, MetaStoreError>;
 
     /// Mark a Zdb backend as replaced based on its connection info
-    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), Self::Error>;
+    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError>;
 
     /// Check to see if a Zdb backend has been marked as replaced based on its connection info
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, Self::Error>;
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects
-    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, Self::Error>;
+    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;
 
     /// Save info about a failed upload under the failures key
     async fn save_failure(
@@ -168,13 +169,67 @@ pub trait MetaStore {
         data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), MetaStoreError>;
 
     /// Delete info about a failed upload from the failure key
-    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), Self::Error>;
+    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError>;
 
     /// Get all the paths of files which failed to upload
-    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, Self::Error>;
+    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError>;
+}
+
+/// A high lvl error returned by the metadata store
+#[derive(Debug)]
+pub struct MetaStoreError {
+    error: Box<dyn std::error::Error + Send>,
+}
+
+impl MetaStoreError {
+    /// Create a new metastore error which wraps an existing error
+    pub fn new(error: Box<dyn std::error::Error + Send>) -> Self {
+        Self { error }
+    }
+}
+
+impl fmt::Display for MetaStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl std::error::Error for MetaStoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.error)
+    }
+}
+
+/// The result type for the metastore interface
+pub type MetaStoreResult<T> = Result<T, MetaStoreError>;
+
+/// Create a new metastore for the provided config
+pub async fn new_metastore(cfg: &config::Config) -> MetaStoreResult<Box<dyn MetaStore>> {
+    match cfg.meta() {
+        config::Meta::Etcd(etcd_cfg) => {
+            let store = Etcd::new(&etcd_cfg, cfg.virtual_root().clone()).await?;
+            Ok(Box::new(store))
+        }
+        config::Meta::Zdb(zdb_cfg) => {
+            let backends = try_join_all(
+                zdb_cfg
+                    .backends()
+                    .iter()
+                    .map(|ci| UserKeyZdb::new(ci.clone())),
+            )
+            .await?;
+            let encryptor = match cfg.encryption().algorithm() {
+                "AES" => encryption::AesGcm::new(cfg.encryption().key().clone()),
+                _ => panic!("Unknown metadata encryption algorithm"),
+            };
+            let encoder = zdb_cfg.encoder();
+            let store = ZdbMetaStore::new(backends, encoder, encryptor);
+            Ok(Box::new(store))
+        }
+    }
 }
 
 /// Information about a failed invocation of zstor

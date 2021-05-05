@@ -1,6 +1,6 @@
-use crate::meta::FailureMeta;
-use crate::meta::MetaData;
+use crate::meta::{FailureMeta, MetaData, MetaStore, MetaStoreError, MetaStoreResult};
 use crate::zdb::ZdbConnectionInfo;
+use async_trait::async_trait;
 use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
@@ -173,20 +173,15 @@ impl Etcd {
     }
 }
 
-use crate::meta::MetaStore;
-use async_trait::async_trait;
-
 #[async_trait]
 impl MetaStore for Etcd {
-    type Error = EtcdError;
-
     /// Save the metadata for the file identified by `path` with a given prefix
-    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> EtcdResult<()> {
-        self.save_meta_by_key(&self.build_key(path)?, meta).await
+    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> MetaStoreResult<()> {
+        Ok(self.save_meta_by_key(&self.build_key(path)?, meta).await?)
     }
 
     /// Save the metadata for a given key
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> EtcdResult<()> {
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> MetaStoreResult<()> {
         // for now save metadata human readable
         trace!("encoding metadata");
         let enc_meta = toml::to_vec(meta).map_err(|e| EtcdError {
@@ -194,16 +189,16 @@ impl MetaStore for Etcd {
             internal: InternalError::Meta(Box::new(e)),
         })?;
         // hash
-        self.write_value(key, &enc_meta).await
+        Ok(self.write_value(key, &enc_meta).await?)
     }
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta(&mut self, path: &Path) -> EtcdResult<Option<MetaData>> {
-        self.load_meta_by_key(&self.build_key(path)?).await
+    async fn load_meta(&mut self, path: &Path) -> MetaStoreResult<Option<MetaData>> {
+        Ok(self.load_meta_by_key(&self.build_key(path)?).await?)
     }
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta_by_key(&mut self, key: &str) -> EtcdResult<Option<MetaData>> {
+    async fn load_meta_by_key(&mut self, key: &str) -> MetaStoreResult<Option<MetaData>> {
         Ok(if let Some(value) = self.read_value(key).await? {
             Some(toml::from_slice(&value).map_err(|e| EtcdError {
                 kind: EtcdErrorKind::Read,
@@ -215,21 +210,21 @@ impl MetaStore for Etcd {
     }
 
     /// Mark a Zdb backend as replaced based on its connection info
-    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<()> {
+    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> MetaStoreResult<()> {
         let hash = hex::encode(ci.blake2_hash());
         let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.write_value(&key, &[]).await?)
     }
 
     /// Check to see if a Zdb backend has been marked as replaced based on its conenction info
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> EtcdResult<bool> {
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> MetaStoreResult<bool> {
         let hash = hex::encode(ci.blake2_hash());
         let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.read_value(&key).await?.is_some())
     }
 
     /// Get the (key, metadata) for all stored objects
-    async fn object_metas(&mut self) -> EtcdResult<Vec<(String, MetaData)>> {
+    async fn object_metas(&mut self) -> MetaStoreResult<Vec<(String, MetaData)>> {
         let mut data = Vec::new();
         let end = format!("/{}/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", self.prefix);
         let opts = GetOptions::new().with_range(end);
@@ -264,7 +259,7 @@ impl MetaStore for Etcd {
         data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
-    ) -> EtcdResult<()> {
+    ) -> MetaStoreResult<()> {
         let abs_data_path = canonicalize(data_path)?;
         let key = format!(
             "/{}/upload_failures/{}",
@@ -289,7 +284,7 @@ impl MetaStore for Etcd {
     }
 
     /// Delete info about a failed upload from the failure key
-    async fn delete_failure(&mut self, fm: &FailureMeta) -> EtcdResult<()> {
+    async fn delete_failure(&mut self, fm: &FailureMeta) -> MetaStoreResult<()> {
         let key = format!(
             "/{}/upload_failures/{}",
             self.prefix,
@@ -300,7 +295,7 @@ impl MetaStore for Etcd {
     }
 
     /// Get all the paths of files which failed to upload
-    async fn get_failures(&mut self) -> EtcdResult<Vec<FailureMeta>> {
+    async fn get_failures(&mut self) -> MetaStoreResult<Vec<FailureMeta>> {
         let mut data = Vec::new();
         let end = format!(
             "/{}/upload_failure/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
@@ -461,5 +456,11 @@ impl From<io::Error> for EtcdError {
             kind: EtcdErrorKind::Key,
             internal: InternalError::Io(e),
         }
+    }
+}
+
+impl From<EtcdError> for MetaStoreError {
+    fn from(e: EtcdError) -> Self {
+        Self::new(Box::new(e))
     }
 }
