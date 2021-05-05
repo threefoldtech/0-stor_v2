@@ -1,4 +1,6 @@
-use crate::meta::{FailureMeta, MetaData, MetaStore, MetaStoreError, MetaStoreResult};
+use crate::meta::{
+    canonicalize, FailureMeta, MetaData, MetaStore, MetaStoreError, MetaStoreResult,
+};
 use crate::zdb::ZdbConnectionInfo;
 use async_trait::async_trait;
 use blake2::{
@@ -9,7 +11,7 @@ use etcd_client::{Client, ConnectOptions, GetOptions};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::{fmt, fs, io};
+use std::{fmt, io};
 
 /// Result type of all etcd operations
 pub type EtcdResult<T> = Result<T, EtcdError>;
@@ -260,7 +262,7 @@ impl MetaStore for Etcd {
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
     ) -> MetaStoreResult<()> {
-        let abs_data_path = canonicalize(data_path)?;
+        let abs_data_path = canonicalize(data_path).map_err(EtcdError::from)?;
         let key = format!(
             "/{}/upload_failures/{}",
             self.prefix,
@@ -271,7 +273,7 @@ impl MetaStore for Etcd {
             abs_data_path,
             match key_dir_path {
                 None => None,
-                Some(kp) => Some(canonicalize(kp)?),
+                Some(kp) => Some(canonicalize(kp).map_err(EtcdError::from)?),
             },
             should_delete,
         ))
@@ -325,29 +327,6 @@ impl MetaStore for Etcd {
         }
 
         Ok(data)
-    }
-}
-
-/// Canonicalizes a path, even if it does not exist
-fn canonicalize(path: &Path) -> EtcdResult<PathBuf> {
-    // annoyingly, the path needs to exist for this to work. So here's the plan:
-    // first we verify that it is actualy there
-    // if it is, no problem
-    // else, create a temp file, canonicalize that path, and remove the temp file again
-    match fs::metadata(path) {
-        Ok(_) => Ok(path.canonicalize()?),
-        Err(e) => match e.kind() {
-            io::ErrorKind::NotFound => {
-                fs::File::create(path)?;
-                let cp = path.canonicalize()?;
-                fs::remove_file(path)?;
-                Ok(cp)
-            }
-            _ => Err(EtcdError {
-                kind: EtcdErrorKind::Key,
-                internal: InternalError::Io(e),
-            }),
-        },
     }
 }
 
