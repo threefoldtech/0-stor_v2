@@ -12,9 +12,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use zstor_v2::config::Meta;
-use zstor_v2::etcd::Etcd;
-use zstor_v2::meta::MetaStore;
+use zstor_v2::meta::new_metastore;
 use zstor_v2::zdb::{SequentialZdb, ZdbConnectionInfo};
 use zstor_v2::ZstorError;
 
@@ -104,11 +102,9 @@ pub async fn monitor_backends(
                         }
                     }
 
-                    let mut cluster = match zstor_config.meta() {
-                        Meta::Etcd(etcdconf) => match Etcd::new(etcdconf, zstor_config.virtual_root().clone()).await {
+                    let mut cluster = match new_metastore(&zstor_config).await {
                             Ok(cluster) => cluster,
                             Err(e) => {error!("could not create metadata cluster: {}", e); continue},
-                        },
                     };
 
                     debug!("verifying objects to repair");
