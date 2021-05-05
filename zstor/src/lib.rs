@@ -11,6 +11,7 @@ use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
 use etcd::EtcdError;
+use meta::MetaStoreError;
 use std::fmt;
 use tokio::task::JoinError;
 use zdb::ZdbError;
@@ -205,6 +206,15 @@ impl From<JoinError> for ZstorError {
     fn from(e: JoinError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Async,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<MetaStoreError> for ZstorError {
+    fn from(e: MetaStoreError) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Metadata,
             internal: InternalError::Other(Box::new(e)),
         }
     }

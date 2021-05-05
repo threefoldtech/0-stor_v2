@@ -17,11 +17,10 @@ use structopt::StructOpt;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use zstor_v2::compression::{Compressor, Snappy};
-use zstor_v2::config::{Config, Meta};
+use zstor_v2::config::Config;
 use zstor_v2::encryption::{AesGcm, Encryptor};
 use zstor_v2::erasure::{Encoder, Shard};
-use zstor_v2::etcd::Etcd;
-use zstor_v2::meta::{Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
+use zstor_v2::meta::{new_metastore, Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::{SequentialZdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
@@ -250,9 +249,7 @@ fn real_main() -> ZstorResult<()> {
         let cfg = read_cfg(&opts.config)?;
 
         // Get from config if not present
-        let mut cluster = match cfg.meta() {
-            Meta::Etcd(etcdconf) => Etcd::new(etcdconf, cfg.virtual_root().clone()).await?,
-        };
+        let mut cluster = new_metastore(&cfg).await?;
 
         match opts.cmd {
             Cmd::Store {
@@ -263,14 +260,14 @@ fn real_main() -> ZstorResult<()> {
                 delete,
             } => {
                 if file.is_file() {
-                    handle_file_upload(&mut cluster, &file, &key_path, save_failure, delete, &cfg)
+                    handle_file_upload(&mut *cluster, &file, &key_path, save_failure, delete, &cfg)
                         .await?;
                 } else if file.is_dir() {
                     for entry in get_dir_entries(&file).map_err(|e| {
                         ZstorError::new_io(format!("Could not read dir entries in {:?}", file), e)
                     })? {
                         if let Err(e) = handle_file_upload(
-                            &mut cluster,
+                            &mut *cluster,
                             &entry,
                             &key_path,
                             save_failure,
@@ -480,7 +477,7 @@ fn get_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 async fn handle_file_upload(
-    mut cluster: &mut Etcd,
+    cluster: &mut dyn MetaStore,
     data_file: &Path,
     key_path: &Option<PathBuf>,
     save_failure: bool,
@@ -541,7 +538,7 @@ async fn handle_file_upload(
         ));
     }
 
-    if let Err(e) = save_file(&mut cluster, &data_file_path, &key_file_path, &cfg).await {
+    if let Err(e) = save_file(cluster, &data_file_path, &key_file_path, &cfg).await {
         error!("Could not save file {:?}: {}", data_file_path, e);
         if save_failure {
             debug!("Attempt to save upload failure data");
@@ -569,7 +566,7 @@ async fn handle_file_upload(
 }
 
 async fn save_file(
-    cluster: &mut Etcd,
+    cluster: &mut dyn MetaStore,
     data_file: &Path,
     key_file: &Path,
     cfg: &Config,

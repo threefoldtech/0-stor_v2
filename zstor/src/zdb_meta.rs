@@ -1,14 +1,42 @@
 use crate::{
+    config,
     encryption::{EncryptionError, Encryptor},
     erasure::{Encoder, EncodingError},
-    meta::{FailureMeta, MetaData, MetaStore},
+    meta::{FailureMeta, MetaData, MetaStore, MetaStoreError},
     zdb::{UserKeyZdb, ZdbConnectionInfo, ZdbError},
 };
 use async_trait::async_trait;
 use futures::future::{join_all, try_join_all};
 use log::{debug, error, trace, warn};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+/// Configuration to create a 0-db based metadata store
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZdbMetaStoreConfig {
+    data_shards: usize,
+    parity_shards: usize,
+    encryption: config::Encryption,
+    backends: Vec<ZdbConnectionInfo>,
+}
+
+impl ZdbMetaStoreConfig {
+    /// Get the connection info for all the specified backends.
+    pub fn backends(&self) -> &[ZdbConnectionInfo] {
+        &self.backends
+    }
+
+    /// Build an encoder from the config.
+    pub fn encoder(&self) -> Encoder {
+        Encoder::new(self.data_shards, self.parity_shards)
+    }
+
+    /// Get the encryption configuration from the config
+    pub fn encryption(&self) -> &config::Encryption {
+        &self.encryption
+    }
+}
 
 /// ZdbMetaStore stores data in multiple 0-db, encrypted, with dispersed encoding
 pub struct ZdbMetaStore<E: Encryptor> {
@@ -126,22 +154,23 @@ where
 
 #[async_trait]
 impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
-    type Error = ZdbMetaStoreError;
-
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), Self::Error> {
+    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError> {
         debug!("Saving metadata for key {}", key);
         // binary encode data
         trace!("Binary encoding metadata");
-        let bin_meta = bincode::serialize(meta)?;
+        let bin_meta = bincode::serialize(meta).map_err(ZdbMetaStoreError::from)?;
 
         // encrypt metadata
         trace!("Encrypting metadata");
-        let enc_meta = self.encryptor.encrypt(&bin_meta)?;
+        let enc_meta = self
+            .encryptor
+            .encrypt(&bin_meta)
+            .map_err(ZdbMetaStoreError::from)?;
 
-        self.write_value(key, enc_meta).await
+        Ok(self.write_value(key, enc_meta).await?)
     }
 
-    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, Self::Error> {
+    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, MetaStoreError> {
         debug!("Loading metadata for key {}", key);
 
         // read data back
@@ -152,25 +181,30 @@ impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
 
         // decrypt metadata
         trace!("Decrypting metadata");
-        let dec_meta = self.encryptor.decrypt(&read)?;
+        let dec_meta = self
+            .encryptor
+            .decrypt(&read)
+            .map_err(ZdbMetaStoreError::from)?;
 
         trace!("Binary decoding metadata");
-        Ok(Some(bincode::deserialize(&dec_meta)?))
+        Ok(Some(
+            bincode::deserialize(&dec_meta).map_err(ZdbMetaStoreError::from)?,
+        ))
     }
 
-    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, Self::Error> {
+    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, MetaStoreError> {
         todo!();
     }
 
-    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), Self::Error> {
+    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
         todo!();
     }
 
-    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, Self::Error> {
+    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
         todo!();
     }
 
-    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), Self::Error> {
+    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
         todo!();
     }
 
@@ -179,19 +213,19 @@ impl<E: Encryptor + Send> MetaStore for ZdbMetaStore<E> {
         data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), MetaStoreError> {
         todo!();
     }
 
-    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), Self::Error> {
+    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
         todo!();
     }
 
-    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, Self::Error> {
+    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError> {
         todo!();
     }
 
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, Self::Error> {
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
         todo!();
     }
 }
@@ -330,3 +364,9 @@ impl fmt::Display for CorruptedKey {
 }
 
 impl std::error::Error for CorruptedKey {}
+
+impl From<ZdbMetaStoreError> for MetaStoreError {
+    fn from(e: ZdbMetaStoreError) -> Self {
+        Self::new(Box::new(e))
+    }
+}
