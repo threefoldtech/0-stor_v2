@@ -69,8 +69,10 @@ pub struct Compression {
 #[serde(tag = "type", content = "config")]
 #[serde(rename_all = "lowercase")]
 pub enum Meta {
-    /// Write metadata to an etc cluster
+    /// Write metadata to an etcd cluster
     Etcd(crate::etcd::EtcdConfig),
+    /// Metadata storage on top of user-key zdbs, with client side redundancy and encryption
+    Zdb(crate::zdb_meta::ZdbMetaStoreConfig),
 }
 
 impl Config {

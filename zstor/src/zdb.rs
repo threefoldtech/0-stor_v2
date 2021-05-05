@@ -1,3 +1,4 @@
+use crate::meta::MetaStoreError;
 use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
@@ -720,6 +721,12 @@ impl fmt::Display for ZdbErrorKind {
                 ZdbErrorKind::Mode => "UNEXPECTED MODE",
             }
         )
+    }
+}
+
+impl From<ZdbError> for MetaStoreError {
+    fn from(e: ZdbError) -> Self {
+        Self::new(Box::new(e))
     }
 }
 
