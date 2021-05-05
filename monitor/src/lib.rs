@@ -11,7 +11,7 @@ use tokio::sync::broadcast::{channel, Sender};
 use tokio::task::{JoinError, JoinHandle};
 use zstor::{SingleZstor, ZstorBinError};
 use zstor_v2::config::Config as ZStorConfig;
-use zstor_v2::etcd::EtcdError;
+use zstor_v2::meta::MetaStoreError;
 use zstor_v2::ZstorError;
 
 pub mod backend;
@@ -197,7 +197,7 @@ impl error::Error for MonitorError {
             InternalError::Format(ref e) => Some(e),
             InternalError::Task(ref e) => Some(e),
             InternalError::Zstor(ref e) => Some(e),
-            InternalError::Etcd(ref e) => Some(e),
+            InternalError::Meta(ref e) => Some(e),
             InternalError::ZstorBin(ref e) => Some(e),
         }
     }
@@ -230,15 +230,6 @@ impl From<ZstorError> for MonitorError {
     }
 }
 
-impl From<EtcdError> for MonitorError {
-    fn from(e: EtcdError) -> Self {
-        MonitorError {
-            kind: ErrorKind::Meta,
-            internal: InternalError::Etcd(e),
-        }
-    }
-}
-
 impl From<toml::de::Error> for MonitorError {
     fn from(e: toml::de::Error) -> Self {
         MonitorError {
@@ -253,6 +244,15 @@ impl From<ZstorBinError> for MonitorError {
         MonitorError {
             kind: ErrorKind::Exec,
             internal: InternalError::ZstorBin(e),
+        }
+    }
+}
+
+impl From<MetaStoreError> for MonitorError {
+    fn from(e: MetaStoreError) -> Self {
+        MonitorError {
+            kind: ErrorKind::Meta,
+            internal: InternalError::Meta(e),
         }
     }
 }
@@ -290,7 +290,7 @@ pub enum InternalError {
     Format(toml::de::Error),
     Task(tokio::task::JoinError),
     Zstor(ZstorError),
-    Etcd(EtcdError),
+    Meta(MetaStoreError),
     ZstorBin(ZstorBinError),
 }
 
@@ -304,7 +304,7 @@ impl fmt::Display for InternalError {
                 InternalError::Format(ref e) => e,
                 InternalError::Task(ref e) => e,
                 InternalError::Zstor(ref e) => e,
-                InternalError::Etcd(ref e) => e,
+                InternalError::Meta(ref e) => e,
                 InternalError::ZstorBin(ref e) => e,
             }
         )

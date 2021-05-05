@@ -207,7 +207,9 @@ impl std::error::Error for MetaStoreError {
 pub type MetaStoreResult<T> = Result<T, MetaStoreError>;
 
 /// Create a new metastore for the provided config
-pub async fn new_metastore(cfg: &config::Config) -> MetaStoreResult<Box<dyn MetaStore>> {
+pub async fn new_metastore(
+    cfg: &config::Config,
+) -> MetaStoreResult<Box<dyn MetaStore + Send + Sync>> {
     match cfg.meta() {
         config::Meta::Etcd(etcd_cfg) => {
             let store = Etcd::new(&etcd_cfg, cfg.virtual_root().clone()).await?;
