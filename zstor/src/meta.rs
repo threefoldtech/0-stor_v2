@@ -6,8 +6,8 @@ use crate::zdb_meta::ZdbMetaStore;
 use async_trait::async_trait;
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::path::{Path, PathBuf};
+use std::{fmt, fs, io};
 
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
@@ -228,7 +228,7 @@ pub async fn new_metastore(
                 _ => panic!("Unknown metadata encryption algorithm"),
             };
             let encoder = zdb_cfg.encoder();
-            let store = ZdbMetaStore::new(backends, encoder, encryptor);
+            let store = ZdbMetaStore::new(backends, encoder, encryptor, cfg.virtual_root().clone());
             Ok(Box::new(store))
         }
     }
@@ -264,5 +264,25 @@ impl FailureMeta {
     /// Returns if the should-delete flag was set
     pub fn should_delete(&self) -> bool {
         self.should_delete
+    }
+}
+
+/// Canonicalizes a path, even if it does not exist
+pub(crate) fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    // annoyingly, the path needs to exist for this to work. So here's the plan:
+    // first we verify that it is actualy there
+    // if it is, no problem
+    // else, create a temp file, canonicalize that path, and remove the temp file again
+    match fs::metadata(path) {
+        Ok(_) => Ok(path.canonicalize()?),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => {
+                fs::File::create(path)?;
+                let cp = path.canonicalize()?;
+                fs::remove_file(path)?;
+                Ok(cp)
+            }
+            _ => Err(e),
+        },
     }
 }
