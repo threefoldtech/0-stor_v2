@@ -72,7 +72,7 @@ where
         }
     }
 
-    // helper functions to write data to backends.
+    /// helper functions to write data to backends.
     async fn write_value(&mut self, key: &str, value: Vec<u8>) -> ZdbMetaStoreResult<()> {
         debug!("Writing data to zdb metastore");
         // dispersed encoding
@@ -109,7 +109,7 @@ where
         Ok(())
     }
 
-    // helper function read data from backends.
+    /// helper function read data from backends.
     async fn read_value(&mut self, key: &str) -> ZdbMetaStoreResult<Option<Vec<u8>>> {
         trace!("Reading data from zdb metastore");
 
@@ -162,6 +162,22 @@ where
         Ok(Some(self.encoder.decode(shards)?))
     }
 
+    /// Helper function to delete a value from backends
+    async fn delete_value(&mut self, key: &str) -> ZdbMetaStoreResult<()> {
+        trace!("Deleting data from zdb metastore");
+
+        let mut delete_requests = Vec::with_capacity(self.backends.len());
+        for backend in self.backends.iter_mut() {
+            delete_requests.push(backend.delete(key));
+        }
+
+        // If any 1 db can't be written to we consider the whole write to be a failure
+        // set operations return () so the result after `?` is a Vec<()>, which can be ignored
+        try_join_all(delete_requests).await?;
+
+        Ok(())
+    }
+
     // hash a path using blake2b with 16 bytes of output, and hex encode the result
     // the path is canonicalized before encoding so the full path is used
     fn build_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
@@ -202,12 +218,38 @@ where
         let mut r = String::new();
         hasher.finalize_variable(|resp| r = hex::encode(resp));
         trace!("hashed path: {}", r);
-        Ok(r)
+        let full_key = format!("/meta/{}", r);
+        trace!("full key: {}", full_key);
+        Ok(full_key)
+    }
+
+    // This does not take into account the virtual root
+    fn build_failure_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
+        let mut hasher = VarBlake2b::new(16).unwrap();
+        hasher.update(
+            path.as_os_str()
+                .to_str()
+                .ok_or(ZdbMetaStoreError {
+                    kind: ErrorKind::Key,
+                    internal: InternalError::Other(
+                        "could not interpret path as utf-8 str".to_string(),
+                    ),
+                })?
+                .as_bytes(),
+        );
+
+        let mut out = Vec::new();
+        hasher.finalize_variable(|res| out = res.to_vec());
+
+        Ok(hex::encode(out))
     }
 }
 
 #[async_trait]
-impl<E: Encryptor + Send + Sync> MetaStore for ZdbMetaStore<E> {
+impl<E> MetaStore for ZdbMetaStore<E>
+where
+    E: Encryptor + Send + Sync,
+{
     async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError> {
         debug!("Saving metadata for key {}", key);
         // binary encode data
@@ -259,7 +301,15 @@ impl<E: Encryptor + Send + Sync> MetaStore for ZdbMetaStore<E> {
     }
 
     async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
-        todo!();
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/replaced_backends/{}", hash);
+        Ok(self.write_value(&key, vec![]).await?)
+    }
+
+    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
+        let hash = hex::encode(ci.blake2_hash());
+        let key = format!("/replaced_backends/{}", hash);
+        Ok(self.read_value(&key).await?.is_some())
     }
 
     async fn save_failure(
@@ -268,18 +318,38 @@ impl<E: Encryptor + Send + Sync> MetaStore for ZdbMetaStore<E> {
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
     ) -> Result<(), MetaStoreError> {
-        todo!();
+        let abs_data_path = canonicalize(data_path).map_err(ZdbMetaStoreError::from)?;
+        let key = format!(
+            "/upload_failures/{}",
+            self.build_failure_key(&abs_data_path)?
+        );
+
+        let meta = bincode::serialize(&FailureMeta::new(
+            abs_data_path,
+            match key_dir_path {
+                None => None,
+                Some(kp) => Some(canonicalize(kp).map_err(ZdbMetaStoreError::from)?),
+            },
+            should_delete,
+        ))
+        // unwrap here is fine since an error here is a programming error
+        .unwrap();
+
+        // unwrap here is safe as we already validated that to_str() returns some when building the
+        // failure key
+        Ok(self.write_value(&key, meta).await?)
     }
 
     async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
-        todo!();
+        let key = format!(
+            "/upload_failures/{}",
+            self.build_failure_key(&fm.data_path())?
+        );
+
+        Ok(self.delete_value(&key).await?)
     }
 
     async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError> {
-        todo!();
-    }
-
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
         todo!();
     }
 }

@@ -269,6 +269,29 @@ impl InternalZdb {
         Ok(Some(data))
     }
 
+    /// Delete some previously stored data by its key
+    async fn delete(&mut self, key: &[u8]) -> ZdbResult<()> {
+        trace!("deleting data at key {}", hex::encode(key));
+
+        timeout(
+            ZDB_TIMEOUT,
+            redis::cmd("DELETE").arg(key).query_async(&mut self.conn),
+        )
+        .await
+        .map_err(|_| ZdbError {
+            kind: ZdbErrorKind::Write,
+            remote: self.ci.address,
+            internal: ErrorCause::Timeout,
+        })?
+        .map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Write,
+            remote: self.ci.address,
+            internal: ErrorCause::Redis(e),
+        })?;
+
+        Ok(())
+    }
+
     /// Query info about the namespace.
     async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
         let list: String = timeout(
@@ -520,6 +543,12 @@ impl UserKeyZdb {
     pub async fn get<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<Option<Vec<u8>>> {
         trace!("loading data at key {}", hex::encode(key.as_ref()));
         Ok(self.internal.get(&key.as_ref()).await?)
+    }
+
+    /// Delete some previously stored data from it's key.
+    pub async fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<()> {
+        trace!("deleting data at key {}", hex::encode(key.as_ref()));
+        Ok(self.internal.delete(&key.as_ref()).await?)
     }
 
     /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
