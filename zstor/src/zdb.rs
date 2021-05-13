@@ -219,10 +219,7 @@ impl InternalZdb {
         let returned_key: Vec<u8> = timeout(
             ZDB_TIMEOUT,
             redis::cmd("SET")
-                .arg::<&[u8]>(match key {
-                    Some(ref key) => key,
-                    None => &[],
-                })
+                .arg(key.unwrap_or(&[]))
                 .arg(data)
                 .query_async(&mut self.conn),
         )
