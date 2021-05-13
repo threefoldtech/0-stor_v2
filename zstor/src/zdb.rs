@@ -275,7 +275,7 @@ impl InternalZdb {
 
         timeout(
             ZDB_TIMEOUT,
-            redis::cmd("DELETE").arg(key).query_async(&mut self.conn),
+            redis::cmd("DEL").arg(key).query_async(&mut self.conn),
         )
         .await
         .map_err(|_| ZdbError {
