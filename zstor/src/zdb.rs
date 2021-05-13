@@ -332,60 +332,15 @@ impl InternalZdb {
 
         Ok(NsInfo {
             name: kvs["name"].to_string(),
-            entries: kvs["entries"].parse().map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
-                internal: ErrorCause::Other(format!("expected entries to be an integer ({})", e)),
-            })?,
-            public: match kvs["public"] {
-                "yes" => true,
-                "no" => false,
-                _ => {
-                    return Err(ZdbError {
-                        kind: ZdbErrorKind::Format,
-                        remote: self.ci.address,
-                        internal: ErrorCause::Other("expected public to be yes/no".to_string()),
-                    })
-                }
-            },
-            password: match kvs["password"] {
-                "yes" => true,
-                "no" => false,
-                _ => {
-                    return Err(ZdbError {
-                        kind: ZdbErrorKind::Format,
-                        remote: self.ci.address,
-                        internal: ErrorCause::Other("expected password to be yes/no".to_string()),
-                    })
-                }
-            },
-            data_size_bytes: kvs["data_size_bytes"].parse().map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
-                internal: ErrorCause::Other(format!(
-                    "expected data_size_bytes to be an integer ({})",
-                    e
-                )),
-            })?,
-            data_limit_bytes: match kvs["data_limits_bytes"].parse().map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
-                internal: ErrorCause::Other(format!(
-                    "expected data_limit_bytes to be an integer ({})",
-                    e
-                )),
-            })? {
+            entries: self.parse_zdb_string(&kvs, "entries")?,
+            public: self.parse_zdb_bool_string(kvs["public"])?,
+            password: self.parse_zdb_bool_string(kvs["password"])?,
+            data_size_bytes: self.parse_zdb_string(&kvs, "data_size_bytes")?,
+            data_limit_bytes: match self.parse_zdb_string(&kvs, "data_limits_bytes")? {
                 0 => None,
                 limit => Some(limit),
             },
-            index_size_bytes: kvs["index_size_bytes"].parse().map_err(|e| ZdbError {
-                kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
-                internal: ErrorCause::Other(format!(
-                    "expected index_size_bytes to be an integer ({})",
-                    e
-                )),
-            })?,
+            index_size_bytes: self.parse_zdb_string(&kvs, "index_size_bytes")?,
             mode: match kvs["mode"] {
                 "userkey" => ZdbRunMode::User,
                 "sequential" => ZdbRunMode::Seq,
@@ -399,26 +354,18 @@ impl InternalZdb {
                     })
                 }
             },
-            index_disk_freespace_bytes: kvs["index_disk_freespace_bytes"].parse().map_err(|e| {
-                ZdbError {
-                    kind: ZdbErrorKind::Format,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Other(format!(
-                        "expected index_disk_freespace_bytes to be an integer ({})",
-                        e
-                    )),
-                }
-            })?,
-            data_disk_freespace_bytes: kvs["data_disk_freespace_bytes"].parse().map_err(|e| {
-                ZdbError {
-                    kind: ZdbErrorKind::Format,
-                    remote: self.ci.address,
-                    internal: ErrorCause::Other(format!(
-                        "expected index_disk_freespace_bytes to be an integer ({})",
-                        e
-                    )),
-                }
-            })?,
+            worm: self.parse_zdb_bool_string(kvs["worm"])?,
+            locked: self.parse_zdb_bool_string(kvs["locked"])?,
+            index_io_errors: self.parse_zdb_string(&kvs, "stats_index_io_errors")?,
+            index_io_error_last: self.parse_zdb_string(&kvs, "stats_index_io_error_last")?,
+            index_faults: self.parse_zdb_string(&kvs, "stats_index_faults")?,
+            data_io_errors: self.parse_zdb_string(&kvs, "stats_data_io_errors")?,
+            data_io_error_last: self.parse_zdb_string(&kvs, "stats_data_io_error_last")?,
+            data_faults: self.parse_zdb_string(&kvs, "stats_data_faults")?,
+
+            index_disk_freespace_bytes: self
+                .parse_zdb_string(&kvs, "index_disk_freespace_bytes")?,
+            data_disk_freespace_bytes: self.parse_zdb_string(&kvs, "data_disk_freespace_bytes")?,
         })
     }
 
@@ -426,7 +373,36 @@ impl InternalZdb {
     fn connection_info(&self) -> &ZdbConnectionInfo {
         &self.ci
     }
+
+    /// parse a boolean from the string returned by 0-db
+    fn parse_zdb_bool_string(&self, input: &str) -> ZdbResult<bool> {
+        Ok(match input {
+            "yes" => true,
+            "no" => false,
+            _ => {
+                return Err(ZdbError {
+                    kind: ZdbErrorKind::Format,
+                    remote: self.ci.address,
+                    internal: ErrorCause::Other("expected password to be yes/no".to_string()),
+                })
+            }
+        })
+    }
+
+    fn parse_zdb_string<T>(&self, data_map: &HashMap<&str, &str>, field: &str) -> ZdbResult<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        data_map[field].parse().map_err(|e| ZdbError {
+            kind: ZdbErrorKind::Format,
+            remote: self.ci.address,
+            internal: ErrorCause::Other(format!("Couldn't parse field {}: {}", field, e)),
+        })
+    }
 }
+
+use std::str::FromStr;
 
 impl SequentialZdb {
     /// Create a new connection to a 0-db namespace running in sequential mode. After the
@@ -565,7 +541,6 @@ impl UserKeyZdb {
 }
 
 /// Information about a 0-db namespace, as reported by the db itself.
-// TODO: not complete
 #[derive(Debug)]
 pub struct NsInfo {
     name: String,
@@ -576,6 +551,14 @@ pub struct NsInfo {
     data_limit_bytes: Option<u64>,
     index_size_bytes: u64,
     mode: ZdbRunMode,
+    worm: bool,
+    locked: bool,
+    index_io_errors: u32,
+    index_io_error_last: i64, // TODO: timestamp
+    index_faults: u32,        // currently unused
+    data_io_errors: u32,
+    data_io_error_last: i64, // TODO: timestamp
+    data_faults: u32,        // currently unused
     index_disk_freespace_bytes: u64,
     data_disk_freespace_bytes: u64,
 }
