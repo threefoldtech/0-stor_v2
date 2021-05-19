@@ -10,7 +10,10 @@ use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
 };
-use futures::future::{join_all, try_join_all};
+use futures::{
+    future::{join_all, try_join_all},
+    stream::{Stream, StreamExt},
+};
 use log::{debug, error, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -176,6 +179,19 @@ where
         try_join_all(delete_requests).await?;
 
         Ok(())
+    }
+
+    /// Return a stream of all function with a given prefix
+    fn keys<'a>(&'a mut self, prefix: &'a str) -> impl Stream<Item = String> + 'a {
+        self.backends[0]
+            .keys()
+            // yes both of these move keywords are really necessary
+            .filter_map(move |raw_key| async move {
+                if raw_key.starts_with(prefix.as_bytes()) {
+                    return String::from_utf8(raw_key).ok();
+                };
+                None
+            })
     }
 
     // hash a path using blake2b with 16 bytes of output, and hex encode the result

@@ -3,17 +3,21 @@ use blake2::{
     digest::{Update, VariableOutput},
     VarBlake2b,
 };
+use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
 use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::timeout;
 // use sha1::{Digest, Sha1};
-use std::fmt;
-
 use std::convert::TryInto;
+use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// The type of key's used in zdb in sequential mode.
 pub type Key = u32;
@@ -52,6 +56,103 @@ struct InternalZdb {
 impl fmt::Debug for InternalZdb {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ZDB at {}", self.ci.address)
+    }
+}
+
+/// The type returned by the SCAN command in 0-db. In practice, the outer vec only contains a
+/// single element.
+type ScanEntry = Vec<(Vec<u8>, u32, u32)>;
+
+/// A stream over all the keys in a namespace.
+struct CollectionKeys<'a> {
+    conn: &'a mut Connection,
+    /// Cursor to advance the scan, only set after the first call.
+    cursor: Option<Vec<u8>>,
+    /// The SCAN commands returns multiple entries per call, yet does not specify how many, so we
+    /// keep past results in an internal array for later consumption.
+    buffer: Vec<ScanEntry>,
+    /// The next entry in the buffer we will return.
+    buffer_idx: usize,
+}
+
+struct ScanRecord {
+    /// The bytes making up the actual key
+    raw_key: Vec<u8>,
+}
+
+impl<'a> Stream for CollectionKeys<'a> {
+    type Item = ScanRecord;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.buffer_idx < self.buffer.len() {
+            // Take the first element (i.e. remove) from the vec and try to be somewhat efficient.
+            // TODO: Verify that this indeed does not realloc the vec. If it does, this can
+            // obviously be written way more simple.
+            // TODO: Think if ordering really matters. If it does not, it is trivial to remove
+            // elements without reallocating.
+            let start = self.buffer_idx;
+            self.buffer_idx += 1;
+            let end = self.buffer_idx;
+            let rec = self
+                .buffer
+                .drain(start..end)
+                .next()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            return Poll::Ready(Some(ScanRecord { raw_key: rec.0 }));
+        }
+
+        // At this point there are no more entries in the buffer we haven't returned yet, fetch new
+        // ones.
+        let mut scan_cmd = redis::cmd("SCAN");
+        // Set the cursor if there is one
+        if let Some(ref cur) = self.cursor {
+            // compiler isn't smart enough (yet) to cast &Vec<u8> to &[u8].
+            scan_cmd.arg(cur as &[u8]);
+        }
+
+        // The future needs to be pin in order to call `poll`, since I don't want to deal with
+        // figuring out if it's safe to pin it on the stack, pin it to the heap for now. The
+        // performance penalty of a heap allocation will be marginal since this does a network
+        // operation anyhow.
+        let mut res: (Vec<u8>, Vec<ScanEntry>) =
+            match Box::pin(scan_cmd.query_async(&mut *self.conn))
+                .as_mut()
+                .poll(cx)
+            {
+                Poll::Ready(res) => match res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        debug!("Terminating scan: {}", e);
+                        return Poll::Ready(None);
+                    }
+                },
+                Poll::Pending => return Poll::Pending,
+            };
+
+        // Split the vec to get the first element. This reallocates the remainder, but it's more
+        // ergonomic than the previous untested approach of draining an element.
+        let buffer = res.1.split_off(1);
+
+        // Set new cursor
+        self.cursor = Some(res.0);
+        // New buffer
+        self.buffer = buffer;
+        // Reset buffer pointer, and set it to 1, as we will already return the first element.
+        self.buffer_idx = 1;
+
+        // Ergonomic is relative here
+        let rec = res
+            .1
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        Poll::Ready(Some(ScanRecord { raw_key: rec.0 }))
     }
 }
 
@@ -289,6 +390,16 @@ impl InternalZdb {
         Ok(())
     }
 
+    /// Get a stream of all the keys in the namespace
+    fn keys(&mut self) -> CollectionKeys<'_> {
+        CollectionKeys {
+            conn: &mut self.conn,
+            cursor: None,
+            buffer: Vec::new(),
+            buffer_idx: 0,
+        }
+    }
+
     /// Query info about the namespace.
     async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
         let list: String = timeout(
@@ -398,8 +509,6 @@ impl InternalZdb {
         })
     }
 }
-
-use std::str::FromStr;
 
 impl SequentialZdb {
     /// Create a new connection to a 0-db namespace running in sequential mode. After the
@@ -522,6 +631,11 @@ impl UserKeyZdb {
     pub async fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<()> {
         trace!("deleting data at key {}", hex::encode(key.as_ref()));
         Ok(self.internal.delete(&key.as_ref()).await?)
+    }
+
+    /// Get a stream which yields all the keys in the namespace.
+    pub fn keys(&mut self) -> impl Stream<Item = Vec<u8>> + '_ {
+        self.internal.keys().map(|st| st.raw_key)
     }
 
     /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
