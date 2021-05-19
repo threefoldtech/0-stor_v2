@@ -74,6 +74,11 @@ impl ZdbConnectionInfo {
         }
     }
 
+    /// Get the namespace of the 0-db.
+    pub fn namespace(&self) -> &Option<String> {
+        &self.namespace
+    }
+
     /// Get the address of the 0-db.
     pub fn address(&self) -> &SocketAddr {
         &self.address
@@ -539,28 +544,49 @@ impl UserKeyZdb {
 
 /// Information about a 0-db namespace, as reported by the db itself.
 #[derive(Debug)]
+#[allow(missing_docs)] // TODO temp
 pub struct NsInfo {
-    name: String,
-    entries: usize,
-    public: bool,
-    password: bool,
-    data_size_bytes: u64,
-    data_limit_bytes: Option<u64>,
-    index_size_bytes: u64,
-    mode: ZdbRunMode,
-    worm: bool,
-    locked: bool,
-    index_io_errors: u32,
-    index_io_error_last: i64, // TODO: timestamp
-    index_faults: u32,        // currently unused
-    data_io_errors: u32,
-    data_io_error_last: i64, // TODO: timestamp
-    data_faults: u32,        // currently unused
-    index_disk_freespace_bytes: u64,
-    data_disk_freespace_bytes: u64,
+    pub name: String,
+    pub entries: usize,
+    pub public: bool,
+    pub password: bool,
+    pub data_size_bytes: u64,
+    pub data_limit_bytes: Option<u64>,
+    pub index_size_bytes: u64,
+    pub mode: ZdbRunMode,
+    pub worm: bool,
+    pub locked: bool,
+    pub index_io_errors: u32,
+    pub index_io_error_last: i64, // TODO: timestamp
+    pub index_faults: u32,        // currently unused
+    pub data_io_errors: u32,
+    pub data_io_error_last: i64, // TODO: timestamp
+    pub data_faults: u32,        // currently unused
+    pub index_disk_freespace_bytes: u64,
+    pub data_disk_freespace_bytes: u64,
 }
 
 impl NsInfo {
+    /// Get the name of the 0-db namespace.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get the amount of entries in the namespace.
+    pub fn entries(&self) -> usize {
+        self.entries
+    }
+
+    /// Indicates wether this namespace is currently publicly accessible or not.
+    pub fn public(&self) -> bool {
+        self.public
+    }
+
+    /// Indicates whether this namespace is currently password protected
+    pub fn password(&self) -> bool {
+        self.password
+    }
+
     /// Get the amount of free space in the namespace. If there is no limit, or the free
     /// space according to the limit is higher than the remaining free disk size, the remainder of
     /// the free disk size is returned.

@@ -1,6 +1,7 @@
 [workspace]
 members = [
 	"zstor",
+	"zdb_mon",
 	"monitor",
 	"grid_explorer_client",
 ]
