@@ -25,9 +25,9 @@ fn main() {
         // nodes_filter(stellar_secret, user_id, mnemonic).await;
         let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
         if let Ok(wid) = res {
-            workload_poll(stellar_secret, user_id, mnemonic, wid).await;
+            workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
+            workload_decommission(stellar_secret, user_id, mnemonic, wid).await;
         }
-        
     });
 }
 
@@ -71,6 +71,20 @@ async fn nodes_filter(stellar_secret: String, user_id: i64, mnemonic: String) {
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
+        },
+        Err(err) => {
+            println!("{:?}", err)
+        }
+    }
+} 
+async fn workload_decommission(stellar_secret: String, user_id: i64, mnemonic: String, wid: i64) {
+    let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+
+    let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
+    let result = client.workload_decommission(wid).await;
+    match result {
+        Ok(decommissioned) => {
+            println!("{:?}", decommissioned);
         },
         Err(err) => {
             println!("{:?}", err)
