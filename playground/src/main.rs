@@ -14,15 +14,20 @@ fn main() {
 
     // Execute the future, blocking the current thread until completion
     rt.block_on(async {
-        // node_get().await;
-        // nodes_get().await;
-        // farms_get().await;
+        // node_get(stellar_secret, user_id, mnemonic).await;
+        // nodes_get(stellar_secret, user_id, mnemonic).await;
+        // farms_get(stellar_secret, user_id, mnemonic).await;
         // farm_get().await;
         // workload_get().await;
         // pool_get(stellar_secret, user_id, mnemonic).await;
         // pool_create(stellar_secret, user_id, mnemonic).await;
         // pools_by_owner(stellar_secret, user_id, mnemonic).await;
-        zdb_create(stellar_secret, user_id, mnemonic).await;
+        // nodes_filter(stellar_secret, user_id, mnemonic).await;
+        let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        if let Ok(wid) = res {
+            workload_poll(stellar_secret, user_id, mnemonic, wid).await;
+        }
+        
     });
 }
 
@@ -54,6 +59,53 @@ async fn nodes_get(stellar_secret: String, user_id: i64, mnemonic: String) {
         },
         Err(err) => {
             println!("{:?}", err)
+        }
+    }
+} 
+
+async fn nodes_filter(stellar_secret: String, user_id: i64, mnemonic: String) {
+    let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+
+    let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
+    let result = client.nodes_filter(Some(1), 5, 0, 0, 0, None).await;
+    match result {
+        Ok(nodes) => {
+            println!("{:?}", nodes);
+        },
+        Err(err) => {
+            println!("{:?}", err)
+        }
+    }
+} 
+async fn workload_poll(stellar_secret: String, user_id: i64, mnemonic: String, id: i64) {
+    let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+
+    let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
+    let result = client.workload_poll(id, 1 * 60).await;
+    match result {
+        Ok(v) => {
+            println!("workload deployed: {:?}", v);
+            let result = &v.result.unwrap();
+            if let serde_json::Value::Array(ips) = &result.data_json["IPs"] {
+                println!("first ip is {}", ips[0])
+            }
+        },
+        Err(err) => {
+            match err {
+                grid_explorer_client::ExplorerError::WorkloadFailedError(v) => {
+                    println!("couldn't deploy workload: {}", v);
+                },
+                grid_explorer_client::ExplorerError::ExplorerClientError(v) => {
+                    println!("client error: {}", v);
+                },
+                grid_explorer_client::ExplorerError::WorkloadTimeoutError(v) => {
+                    println!("workload timeout: {}", v);
+                },
+                _ => {
+                    println!("another error: {:?}", err);
+                },
+                
+            }
         }
     }
 } 
@@ -158,7 +210,7 @@ async fn pools_by_owner(stellar_secret: String, user_id: i64, mnemonic: String) 
     }
 }
 
-async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) {
+async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) -> Result<i64, grid_explorer_client::ExplorerError> {
     let user = grid_explorer_client::identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
 
     let client = grid_explorer_client::new_explorer_client(NETWORK, stellar_secret.as_str(), user);
@@ -171,16 +223,18 @@ async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) {
         public: false
     };
 
-    let pool_id = 20;
-    let node_id = String::from("8zPYak76CXcoZxRoJBjdU69kVjo7XYU1SFE2NEK4UMqn");
+    let pool_id = 11124;
+    let node_id = String::from("Gr8NxBLHe7yjSsnSTgTqGr7BHbyAUVPJqs8fnudEE4Sf");
 
     let result = client.create_zdb_reservation(node_id, pool_id, zdb).await;
     match result {
-        Ok(pool) => {
-            println!("{:?}", pool);
+        Ok(wid) => {
+            println!("{:?}", wid);
+            return Ok(wid)
         },
         Err(err) => {
-            println!("{:?}", err)
+            println!("{:?}", err);
+            return Err(err)
         }
     }
 }

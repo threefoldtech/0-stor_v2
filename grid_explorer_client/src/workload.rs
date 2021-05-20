@@ -46,7 +46,6 @@ impl Workload {
         concat_string.push_str(&format!("{}", self.epoch));
         concat_string.push_str(&format!("{}", self.description));
         concat_string.push_str(&format!("{}", self.metadata));
-
         concat_string
     }
 }
@@ -118,9 +117,9 @@ impl ZDBInformation {
     pub fn signature_challenge(&self) -> String {
         let mut concat_string = format!("{}", self.size);
 
-        concat_string.push_str(&format!("{}", self.mode.to_string()));
+        concat_string.push_str(&format!("{}", self.mode.to_string().to_lowercase()));
         concat_string.push_str(&format!("{}", self.password));
-        concat_string.push_str(&format!("{}", self.disk_type.to_string()));
+        concat_string.push_str(&format!("{}", self.disk_type.to_string().to_lowercase()));
         concat_string.push_str(&format!("{}", self.public));
 
         concat_string
@@ -212,22 +211,23 @@ pub enum NextAction {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WorkloadResult {
-    category: i64,
-    workload_id: String,
-    // data_json: Vec<u8>,
-    signature: String,
-    state: ResultState,
-    message: String,
-    epoch: i64,
-    node_id: String
+    pub category: i64,
+    pub workload_id: String,
+    pub data_json: serde_json::Value,
+    pub signature: String,
+    pub state: ResultState,
+    pub message: String,
+    pub epoch: i64,
+    pub node_id: String
 }
 
 #[repr(i64)]
 #[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug)]
 pub enum ResultState {
-    Ok,
     Err,
-    Deleted
+    Ok,
+    Deleted,
+    Pending // when Err and workload_id is empty
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -308,7 +308,7 @@ impl ZdbMode {
     pub fn to_string(&self) -> String {
         match &self {
             ZdbMode::ZDBModeUser => String::from("User"),
-            ZdbMode::ZDBModeSeq => String::from("Sequence")
+            ZdbMode::ZDBModeSeq => String::from("Seq")
         }
     }
 }
@@ -316,8 +316,8 @@ impl ZdbMode {
 #[repr(u8)]
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 pub enum DiskType {
-    SSD,
-    HDD
+    HDD,
+    SSD
 }
 
 impl DiskType {

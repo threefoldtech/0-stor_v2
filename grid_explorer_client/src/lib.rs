@@ -4,15 +4,18 @@ pub mod workload;
 mod types;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration, Instant};
 use hex;
 use reqwest::header::{HeaderMap, HeaderValue};
 mod auth;
 use chrono::{Utc};
+use async_std::task;
 
 #[derive(Debug)]
 pub enum ExplorerError {
     ExplorerClientError(String),
+    WorkloadTimeoutError(String),
+    WorkloadFailedError(String),
     Reqwest(reqwest::Error),
     StellarError(stellar_base::error::Error),
     HorizonError(stellar_horizon::error::Error)
@@ -74,6 +77,29 @@ impl ExplorerClient {
             .json::<Vec<types::Node>>()
             .await?)
     }
+    
+    pub async fn nodes_filter(&self, farm_id: Option<i32>, cru: i32, mru: i32, sru: i32, hru: i32, up: Option<bool>) -> Result<Vec<types::Node>, ExplorerError> {
+        let url = format!("{url}/api/v1/nodes", url=self.get_url()); 
+        let client = reqwest::Client::new();
+        let params = &[("cru", cru), ("mru", mru), ("sru", sru), ("hru", hru)];
+        let mut nodes = client.get(url.as_str())
+            .query(params)
+            .query(&[("farm", farm_id)])
+            .send()
+            .await?
+            .json::<Vec<types::Node>>()
+            .await?;
+        
+        if let Some(v) = up {
+            let now = SystemTime::now();
+            let timestamp = now
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_secs();
+            nodes = nodes.into_iter().filter(|node| (timestamp - node.updated <= 10 * 60) == v).collect();
+        }
+        return Ok(nodes);
+    }
 
     pub async fn node_get_by_id(&self, id: String) -> Result<types::Node, ExplorerError> {
         let url = format!("{url}/api/v1/nodes/{id}", url=self.get_url(), id=id); 
@@ -106,6 +132,35 @@ impl ExplorerClient {
             .json::<workload::Workload>()
             .await?)
     }
+    
+    pub fn _workload_state(&self, v: &workload::WorkloadResult) -> workload::ResultState {
+        if v.workload_id == ""{
+            return workload::ResultState::Pending;
+        }else if v.state == workload::ResultState::Ok {
+            return workload::ResultState::Ok;
+        }else{
+            return workload::ResultState::Err;
+        }
+    }
+
+    pub async fn workload_poll(&self, id: i64, timeout: u64) -> Result<workload::Workload, ExplorerError> {
+        let start = Instant::now();
+        let x = start.elapsed();
+        while x.as_secs() < timeout {
+            let w = self.workload_get_by_id(id).await?;
+            if let Some(v) = w.result.as_ref() {
+                match self._workload_state(&v) {
+                    workload::ResultState::Pending => task::sleep(Duration::from_secs(1)).await,
+                    workload::ResultState::Ok => return Ok(w),
+                    workload::ResultState::Err => return Err(ExplorerError::WorkloadFailedError(String::from(&v.message))),
+                    workload::ResultState::Deleted => return Err(ExplorerError::ExplorerClientError(String::from("workload deleted while waiting"))),
+                }
+            }else{
+                panic!("result should always exist")
+            }
+        }
+        return Err(ExplorerError::WorkloadTimeoutError(String::from("waited a long time for the workload to deploy")));
+    }
 
     pub async fn create_capacity_pool(&self, data_reservation: reservation::ReservationData) -> Result<bool, ExplorerError> {
         let mut reservation = reservation::Reservation{
@@ -120,7 +175,7 @@ impl ExplorerClient {
 
         reservation.json = serde_json::to_string(&reservation.data_reservation).unwrap();
         
-        let customer_signature_bytes = self.user_identity.sign(reservation.json.as_bytes());
+        let customer_signature_bytes = self.user_identity.hash_and_sign(reservation.json.as_bytes());
 
         // hex encode the customer signature
         reservation.customer_signature = hex::encode(customer_signature_bytes.to_vec());
@@ -190,42 +245,37 @@ impl ExplorerClient {
         };
 
         let mut workload_signature_challenge = workload.signature_challenge();
-        println!("{}", workload_signature_challenge.clone());
         workload_signature_challenge.push_str(zdb_signature_challenge.as_str());
 
-        println!("{}", workload_signature_challenge.clone());
-
-        let json = serde_json::to_string(&workload).unwrap();
         
-        let customer_signature_bytes = self.user_identity.sign(workload_signature_challenge.as_bytes());
-
+        let customer_signature_bytes = self.user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
+        
         // hex encode the customer signature
         let customer_signature = hex::encode(customer_signature_bytes.to_vec());
-
+        
         workload.customer_signature = customer_signature;
+        let json = serde_json::to_string(&workload).unwrap();
         workload.json = Some(json);
 
         let url = format!("{url}/api/v1/reservations/workloads", url=self.get_url()); 
         
         let date = Utc::now();
         let headers = self.construct_headers(date);
-
         let resp = reqwest::Client::new()
             .post(url)
             .headers(headers)
             .json(&workload)
             .send()
+            .await?
+            .json::<reservation::ReservationCreateResponse>()
             .await?;
-
-            // .json(&d);
-
-        println!("{:?}", resp.text().await);
-        
-        // println!("{:?}", resp.text().await);
-            // .json::<reservation::ReservationCreateResponse>()
-            // .await?;
-
-        Ok(1)
+        if let Some(e) = resp.error {
+            Err(ExplorerError::ExplorerClientError(e))
+        }else if let Some(id) = resp.reservation_id{
+            Ok(id)
+        }else{
+            Err(ExplorerError::ExplorerClientError(String::from("client didn't respond with error or id")))
+        }
     }
 
     fn construct_headers(&self, date: chrono::DateTime<chrono::Utc>) -> HeaderMap {
