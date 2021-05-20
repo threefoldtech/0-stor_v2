@@ -11,6 +11,7 @@ pub struct Node {
     os_version: String,
     created: u64,
     uptime: u64,
+    pub updated: u64,
     address: String,
     location: Location,
     total_resources: ResourceAmount,

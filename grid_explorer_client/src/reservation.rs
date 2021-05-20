@@ -51,5 +51,6 @@ pub struct PoolData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ReservationCreateResponse {
-    pub id: i64
+    pub reservation_id: Option<i64>,
+    pub error: Option<String>
 }

@@ -2,6 +2,7 @@
 use bip39::{Mnemonic, Error};
 use std::str::FromStr;
 use ed25519_dalek::{Signer, Keypair, SecretKey, PublicKey, SignatureError};
+use sha2::{Sha256, Digest};
 
 #[derive(Debug)]
 pub enum IdentityError {
@@ -53,6 +54,13 @@ pub fn new(name: String, email: String, user_id: i64, mnemonic: &str) -> Result<
 impl Identity {
     pub fn get_id(&self) -> i64 {
         self.user_id
+    }
+
+    pub fn hash_and_sign(&self, input: &[u8]) -> [u8; 64] {
+        let mut hasher = Sha256::new();
+        hasher.update(input);
+        let result = hasher.finalize();
+        self.keypair.sign(result.as_slice()).to_bytes()
     }
 
     pub fn sign(&self, input: &[u8]) -> [u8; 64] {
