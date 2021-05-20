@@ -91,11 +91,7 @@ impl ExplorerClient {
             .await?;
         
         if let Some(v) = up {
-            let now = SystemTime::now();
-            let timestamp = now
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_secs();
+            let timestamp = self.epoch();
             nodes = nodes.into_iter().filter(|node| (timestamp - node.updated <= 10 * 60) == v).collect();
         }
         return Ok(nodes);
@@ -207,12 +203,50 @@ impl ExplorerClient {
             .json::<Vec<reservation::PoolData>>()
             .await?)
     }
+    
+    pub async fn workload_decommission(&self, wid: i64) -> Result<bool, ExplorerError> {
+        let w = self.workload_get_by_id(wid).await?;
+        if w.next_action as u8 > 3 {
+            return Ok(false)
+        }
+        let zdb_signature = match &w.data {
+            workload::WorkloadData::ZDB(ref v) => v.signature_challenge(),
+            _ => return Err(ExplorerError::ExplorerClientError(String::from("type not supported")))
+        };
+        let tid = self.user_identity.user_id;
+        let mut workload_signature_challenge = w.signature_challenge();
+        workload_signature_challenge.push_str(zdb_signature.as_str());
+        workload_signature_challenge.push_str("delete");
+        workload_signature_challenge.push_str(&tid.to_string());
+        let customer_signature_bytes = self.user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
+        let since_the_epoch = self.epoch();
+        // hex encode the customer signature
+        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
 
+
+        let data = workload::WorkloadDelete{
+            signature: customer_signature,
+            tid: tid,
+            epoch: since_the_epoch
+        };
+        let url = format!("{url}/api/v1/reservations/workloads/{wid}/sign/delete", url=self.get_url(), wid=wid); 
+        
+        let date = Utc::now();
+        let headers = self.construct_headers(date);
+        reqwest::Client::new()
+            .post(url)
+            .headers(headers)
+            .json(&data)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+
+        Ok(true)
+    }
     pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
-        let start = SystemTime::now();
-        let since_the_epoch = start
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards");
+        let since_the_epoch = self.epoch();
 
         let zdb_signature_challenge = zdb.signature_challenge();
         
@@ -235,7 +269,7 @@ impl ExplorerClient {
             
             version: 1,
             metadata: String::from(""),
-            epoch: since_the_epoch.as_secs(),
+            epoch: since_the_epoch,
 
             result: None,
 
@@ -243,7 +277,8 @@ impl ExplorerClient {
 
             data: workload::WorkloadData::ZDB(zdb),
         };
-
+        workload.signing_request_delete.quorum_min = 1;
+        workload.signing_request_delete.signers = Some(vec![self.user_identity.user_id]);
         let mut workload_signature_challenge = workload.signature_challenge();
         workload_signature_challenge.push_str(zdb_signature_challenge.as_str());
 
@@ -303,5 +338,12 @@ impl ExplorerClient {
             "devnet" => "https://explorer.devnet.grid.tf",
             _ => "https://explorer.grid.tf",
         }
+    }
+
+    fn epoch(&self) -> u64 {
+        let start = SystemTime::now();
+        start.duration_since(UNIX_EPOCH)
+        .expect("Time went backwards").as_secs()
+
     }
 }

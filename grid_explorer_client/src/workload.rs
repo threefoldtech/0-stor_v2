@@ -52,8 +52,8 @@ impl Workload {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SigningRequest {
-    signers: Option<Vec<i64>>,
-    quorum_min: i64
+    pub signers: Option<Vec<i64>>,
+    pub quorum_min: i64
 }
 
 #[repr(i64)]
@@ -197,7 +197,7 @@ pub struct Gateway4To6Information {
 }
 
 #[repr(i64)]
-#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Clone, Copy)]
 pub enum NextAction {
     Create,
 	Sign,
@@ -219,6 +219,13 @@ pub struct WorkloadResult {
     pub message: String,
     pub epoch: i64,
     pub node_id: String
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct WorkloadDelete {
+    pub signature: String,
+    pub tid: i64,
+    pub epoch: u64,
 }
 
 #[repr(i64)]
