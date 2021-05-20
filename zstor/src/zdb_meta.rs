@@ -25,6 +25,7 @@ pub struct ZdbMetaStoreConfig {
     data_shards: usize,
     parity_shards: usize,
     encryption: config::Encryption,
+    prefix: String,
     backends: Vec<ZdbConnectionInfo>,
 }
 
@@ -43,6 +44,11 @@ impl ZdbMetaStoreConfig {
     pub fn encryption(&self) -> &config::Encryption {
         &self.encryption
     }
+
+    /// Get the prefix used for the metadata
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
 }
 
 /// ZdbMetaStore stores data in multiple 0-db, encrypted, with dispersed encoding
@@ -52,6 +58,7 @@ pub struct ZdbMetaStore<E: Encryptor> {
     backends: Vec<UserKeyZdb>,
     encoder: Encoder,
     encryptor: E,
+    prefix: String,
     virtual_root: Option<PathBuf>,
 }
 
@@ -65,12 +72,14 @@ where
         backends: Vec<UserKeyZdb>,
         encoder: Encoder,
         encryptor: E,
+        prefix: String,
         virtual_root: Option<PathBuf>,
     ) -> Self {
         Self {
             backends,
             encoder,
             encryptor,
+            prefix,
             virtual_root,
         }
     }
@@ -234,7 +243,7 @@ where
         let mut r = String::new();
         hasher.finalize_variable(|resp| r = hex::encode(resp));
         trace!("hashed path: {}", r);
-        let full_key = format!("/meta/{}", r);
+        let full_key = format!("/{}/meta/{}", self.prefix, r);
         trace!("full key: {}", full_key);
         Ok(full_key)
     }
@@ -257,7 +266,7 @@ where
         let mut out = Vec::new();
         hasher.finalize_variable(|res| out = res.to_vec());
 
-        Ok(hex::encode(out))
+        Ok(format!("/{}/failures/{}", self.prefix, hex::encode(out)))
     }
 }
 
@@ -313,18 +322,48 @@ where
     }
 
     async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
-        todo!();
+        // pin the stream on the heap for now
+        let prefix = format!("/{}/meta/", self.prefix);
+        let meta_keys = Box::pin(self.keys(&prefix));
+        let keys: Vec<String> = meta_keys.collect().await;
+        let mut data = Vec::with_capacity(keys.len());
+        for key in keys.into_iter() {
+            let value = match self.read_value(&key).await {
+                Ok(value) => match value {
+                    Some(value) => value,
+                    None => {
+                        warn!("Empty value for key {}", key);
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    error!("error in key iteration: {}", e);
+                    continue;
+                }
+            };
+
+            let meta = match bincode::deserialize(&value) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("Corrupted metadata at key {}: {}", key, e);
+                    continue;
+                }
+            };
+            data.push((key, meta));
+        }
+
+        Ok(data)
     }
 
     async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
         let hash = hex::encode(ci.blake2_hash());
-        let key = format!("/replaced_backends/{}", hash);
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.write_value(&key, vec![]).await?)
     }
 
     async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
         let hash = hex::encode(ci.blake2_hash());
-        let key = format!("/replaced_backends/{}", hash);
+        let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.read_value(&key).await?.is_some())
     }
 
@@ -335,10 +374,7 @@ where
         should_delete: bool,
     ) -> Result<(), MetaStoreError> {
         let abs_data_path = canonicalize(data_path).map_err(ZdbMetaStoreError::from)?;
-        let key = format!(
-            "/upload_failures/{}",
-            self.build_failure_key(&abs_data_path)?
-        );
+        let key = self.build_failure_key(&abs_data_path)?;
 
         let meta = bincode::serialize(&FailureMeta::new(
             abs_data_path,
@@ -357,10 +393,7 @@ where
     }
 
     async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
-        let key = format!(
-            "/upload_failures/{}",
-            self.build_failure_key(&fm.data_path())?
-        );
+        let key = self.build_failure_key(fm.data_path())?;
 
         Ok(self.delete_value(&key).await?)
     }

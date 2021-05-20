@@ -228,7 +228,13 @@ pub async fn new_metastore(
                 _ => panic!("Unknown metadata encryption algorithm"),
             };
             let encoder = zdb_cfg.encoder();
-            let store = ZdbMetaStore::new(backends, encoder, encryptor, cfg.virtual_root().clone());
+            let store = ZdbMetaStore::new(
+                backends,
+                encoder,
+                encryptor,
+                zdb_cfg.prefix().to_string(),
+                cfg.virtual_root().clone(),
+            );
             Ok(Box::new(store))
         }
     }

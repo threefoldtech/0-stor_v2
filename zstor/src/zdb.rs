@@ -70,6 +70,7 @@ struct CollectionKeys<'a> {
     cursor: Option<Vec<u8>>,
     /// The SCAN commands returns multiple entries per call, yet does not specify how many, so we
     /// keep past results in an internal array for later consumption.
+    // TODO: might need to become a VecDeque to get first element without a realloc
     buffer: Vec<ScanEntry>,
     /// The next entry in the buffer we will return.
     buffer_idx: usize,
