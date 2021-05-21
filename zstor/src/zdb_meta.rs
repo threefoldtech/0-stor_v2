@@ -399,7 +399,37 @@ where
     }
 
     async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError> {
-        todo!();
+        // pin the stream on the heap for now
+        let prefix = format!("/{}/failures/", self.prefix);
+        let meta_keys = Box::pin(self.keys(&prefix));
+        let keys: Vec<String> = meta_keys.collect().await;
+        let mut data = Vec::with_capacity(keys.len());
+        for key in keys.into_iter() {
+            let value = match self.read_value(&key).await {
+                Ok(value) => match value {
+                    Some(value) => value,
+                    None => {
+                        warn!("Empty value for key {}", key);
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    error!("error in key iteration: {}", e);
+                    continue;
+                }
+            };
+
+            let meta = match bincode::deserialize(&value) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("Corrupted metadata at key {}: {}", key, e);
+                    continue;
+                }
+            };
+            data.push(meta);
+        }
+
+        Ok(data)
     }
 }
 
