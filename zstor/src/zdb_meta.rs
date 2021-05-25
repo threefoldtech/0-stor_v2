@@ -128,7 +128,7 @@ where
 
     /// helper function read data from backends and decrypt it.
     async fn read_value(&mut self, key: &str) -> ZdbMetaStoreResult<Option<Vec<u8>>> {
-        trace!("Reading data from zdb metastore");
+        debug!("Reading data from zdb metastore for key {}", key);
 
         let mut read_requests = Vec::with_capacity(self.backends.len());
         for backend in self.backends.iter_mut() {
@@ -189,7 +189,7 @@ where
 
     /// Helper function to delete a value from backends
     async fn delete_value(&mut self, key: &str) -> ZdbMetaStoreResult<()> {
-        trace!("Deleting data from zdb metastore");
+        debug!("Deleting data from zdb metastore for key {}", key);
 
         let mut delete_requests = Vec::with_capacity(self.backends.len());
         for backend in self.backends.iter_mut() {
@@ -205,6 +205,7 @@ where
 
     /// Return a stream of all function with a given prefix
     fn keys<'a>(&'a mut self, prefix: &'a str) -> impl Stream<Item = String> + 'a {
+        debug!("Starting metastore key iteration with prefix {}", prefix);
         self.backends[0]
             .keys()
             // yes both of these move keywords are really necessary
