@@ -1,7 +1,7 @@
 use crate::{
     config,
     encryption::{EncryptionError, Encryptor},
-    erasure::{Encoder, EncodingError},
+    erasure::{Encoder, EncodingError, Shard},
     meta::{canonicalize, FailureMeta, MetaData, MetaStore, MetaStoreError},
     zdb::{UserKeyZdb, ZdbConnectionInfo, ZdbError},
 };
@@ -111,6 +111,8 @@ where
                 backend.connection_info().address(),
                 key
             );
+            let checksum = shard.checksum();
+            shard.extend(&checksum);
             store_requests.push(backend.set(key, shard));
         }
 
@@ -139,7 +141,7 @@ where
                 }
                 // data is not empty so index 0 is set, making this safe
                 let idx = data[0];
-                let shard = data.drain(..).skip(1).collect();
+                let mut shard: Vec<u8> = data.drain(..).skip(1).collect();
                 if idx as usize >= shards.len() {
                     warn!(
                         "found shard at index {}, but only {} shards are expected for key {}",
@@ -149,8 +151,14 @@ where
                     );
                     continue;
                 }
-                // TODO checksum
-                shards[idx as usize] = Some(shard);
+                let saved_checksum = shard.split_off(shard.len() - 16);
+                let shard = Shard::from(shard);
+                if saved_checksum != shard.checksum() {
+                    warn!("shard {} checksum verification failed", idx);
+                    continue;
+                }
+
+                shards[idx as usize] = Some(shard.into_inner());
             };
         }
 
