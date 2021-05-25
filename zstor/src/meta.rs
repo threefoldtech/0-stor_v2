@@ -39,7 +39,6 @@ pub struct ShardInfo {
     shard_idx: usize,
     checksum: Checksum,
     keys: Vec<Key>,
-    #[serde(flatten)]
     ci: ZdbConnectionInfo,
 }
 
