@@ -84,9 +84,11 @@ where
         }
     }
 
-    /// helper functions to write data to backends.
-    async fn write_value(&mut self, key: &str, value: Vec<u8>) -> ZdbMetaStoreResult<()> {
+    /// helper functions to encrypt and write data to backends.
+    async fn write_value(&mut self, key: &str, value: &[u8]) -> ZdbMetaStoreResult<()> {
         debug!("Writing data to zdb metastore");
+        trace!("Encrypt value");
+        let value = self.encryptor.encrypt(value)?;
         // dispersed encoding
         trace!("Dispersed encoding of metadata");
         let mut chunks = self.encoder.encode(value);
@@ -104,6 +106,8 @@ where
         for ((shard_idx, shard), backend) in
             chunks.iter_mut().enumerate().zip(self.backends.iter_mut())
         {
+            // grab the checksum before inserting the shard idx
+            let checksum = shard.checksum();
             shard.insert(0, shard_idx as u8);
             trace!(
                 "Storing data chunk of size {} in backend {} with key {}",
@@ -111,7 +115,6 @@ where
                 backend.connection_info().address(),
                 key
             );
-            let checksum = shard.checksum();
             shard.extend(&checksum);
             store_requests.push(backend.set(key, shard));
         }
@@ -123,7 +126,7 @@ where
         Ok(())
     }
 
-    /// helper function read data from backends.
+    /// helper function read data from backends and decrypt it.
     async fn read_value(&mut self, key: &str) -> ZdbMetaStoreResult<Option<Vec<u8>>> {
         trace!("Reading data from zdb metastore");
 
@@ -179,7 +182,9 @@ where
             });
         }
 
-        Ok(Some(self.encoder.decode(shards)?))
+        let content = self.encoder.decode(shards)?;
+
+        Ok(Some(self.encryptor.decrypt(&content)?))
     }
 
     /// Helper function to delete a value from backends
@@ -289,14 +294,7 @@ where
         trace!("Binary encoding metadata");
         let bin_meta = bincode::serialize(meta).map_err(ZdbMetaStoreError::from)?;
 
-        // encrypt metadata
-        trace!("Encrypting metadata");
-        let enc_meta = self
-            .encryptor
-            .encrypt(&bin_meta)
-            .map_err(ZdbMetaStoreError::from)?;
-
-        Ok(self.write_value(key, enc_meta).await?)
+        Ok(self.write_value(key, &bin_meta).await?)
     }
 
     async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, MetaStoreError> {
@@ -308,16 +306,9 @@ where
             None => return Ok(None),
         };
 
-        // decrypt metadata
-        trace!("Decrypting metadata");
-        let dec_meta = self
-            .encryptor
-            .decrypt(&read)
-            .map_err(ZdbMetaStoreError::from)?;
-
         trace!("Binary decoding metadata");
         Ok(Some(
-            bincode::deserialize(&dec_meta).map_err(ZdbMetaStoreError::from)?,
+            bincode::deserialize(&read).map_err(ZdbMetaStoreError::from)?,
         ))
     }
 
@@ -366,7 +357,7 @@ where
     async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
         let hash = hex::encode(ci.blake2_hash());
         let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
-        Ok(self.write_value(&key, vec![]).await?)
+        Ok(self.write_value(&key, &[]).await?)
     }
 
     async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
@@ -397,7 +388,7 @@ where
 
         // unwrap here is safe as we already validated that to_str() returns some when building the
         // failure key
-        Ok(self.write_value(&key, meta).await?)
+        Ok(self.write_value(&key, &meta).await?)
     }
 
     async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
