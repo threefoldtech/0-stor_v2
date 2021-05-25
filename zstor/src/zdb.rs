@@ -913,6 +913,14 @@ mod tests {
             } else {
                 None
             },
+            worm: false,
+            locked: false,
+            data_faults: 0,
+            data_io_errors: 0,
+            data_io_error_last: 0,
+            index_faults: 0,
+            index_io_errors: 0,
+            index_io_error_last: 0,
             index_size_bytes: 0,
             mode: ZdbRunMode::Seq,
             index_disk_freespace_bytes: 1 << 40, // 1 TiB still free
