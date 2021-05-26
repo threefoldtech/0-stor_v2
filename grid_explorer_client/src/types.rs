@@ -18,9 +18,6 @@ pub struct Node {
     used_resources: ResourceAmount,
     reserved_resources: ResourceAmount,
     workloads: WorkloadAmount,
-    // proofs: Vec<Proof>,
-    // ifaces: Vec<IFace>,
-    // public_config: PublicIface,
     free_to_use: bool,
     approved: bool,
     public_key_hex: String,
@@ -47,7 +44,6 @@ pub struct Farm {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct NodeCloudUnitPrice {
-    // currency: PriceCurrency,
     cu: f64,
     su: f64,
     nu: f64,
@@ -69,7 +65,6 @@ struct WalletAddress {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct NodeResourcePrice {
-    // currency: PriceCurrency,
     cru: f64,
     mru: f64,
     hru: f64,
@@ -122,7 +117,14 @@ struct Proof {
     created: u64,
     hardware_hash: String,
     disk_hash: String,
-    // hardware map[string]interface
-    // disks map[string]interface
     hypervisor: Vec<String>
 }
+
+
+#[derive(Serialize, Deserialize, Debug)]
+enum GridNetwork {
+    Dev,
+    Test,
+    Main
+}
+
