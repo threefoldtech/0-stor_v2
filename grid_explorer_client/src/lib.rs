@@ -10,6 +10,7 @@ mod auth;
 use chrono::{Utc};
 use tokio::time;
 use std::fmt;
+use workload::SignatureChallenge;
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -215,11 +216,11 @@ impl ExplorerClient {
             return Ok(false)
         }
         let zdb_signature = match &w.data {
-            workload::WorkloadData::ZDB(ref v) => v.signature_challenge(),
+            workload::WorkloadData::ZDB(ref v) => v.challenge(),
             _ => return Err(ExplorerError::ExplorerClientError(String::from("type not supported")))
         };
         let tid = self.user_identity.user_id;
-        let mut workload_signature_challenge = w.signature_challenge();
+        let mut workload_signature_challenge = w.challenge();
         workload_signature_challenge.push_str(zdb_signature.as_str());
         workload_signature_challenge.push_str("delete");
         workload_signature_challenge.push_str(&tid.to_string());
@@ -252,7 +253,7 @@ impl ExplorerClient {
     pub async fn create_zdb_reservation(&self, node_id: String, pool_id: i64, zdb: workload::ZDBInformation) -> Result<i64, ExplorerError> {
         let since_the_epoch = self.epoch();
 
-        let zdb_signature_challenge = zdb.signature_challenge();
+        let zdb_signature_challenge = zdb.challenge();
         
         let mut workload = workload::Workload {
             workload_id: 1,
@@ -283,7 +284,7 @@ impl ExplorerClient {
         };
         workload.signing_request_delete.quorum_min = 1;
         workload.signing_request_delete.signers = Some(vec![self.user_identity.user_id]);
-        let mut workload_signature_challenge = workload.signature_challenge();
+        let mut workload_signature_challenge = workload.challenge();
         workload_signature_challenge.push_str(zdb_signature_challenge.as_str());
 
         

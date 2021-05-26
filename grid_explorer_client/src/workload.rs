@@ -1,6 +1,17 @@
+use std::fmt;
 use std::collections::HashMap;
 use serde_repr::*;
 use serde::{Deserialize, Serialize};
+
+/// Specific error type related to workload creation errors
+#[derive(Debug)]
+pub enum WorkloadCreationError {
+     MissingField(String),
+}
+
+pub trait SignatureChallenge {
+    fn challenge(&self) -> String;
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Workload {
@@ -34,15 +45,15 @@ pub struct Workload {
     pub data: WorkloadData
 }
 
-impl Workload {
-    pub fn signature_challenge(&self) -> String {
+impl SignatureChallenge for Workload {
+    fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.workload_id);
 
         concat_string.push_str(&format!("{}", self.node_id));
         concat_string.push_str(&format!("{}", self.pool_id));
         concat_string.push_str(&format!("{}", self.reference));
         concat_string.push_str(&format!("{}", self.customer_tid));
-        concat_string.push_str(&format!("{}", self.workload_type.workload_type_as_string()));
+        concat_string.push_str(&format!("{}", self.workload_type));
         concat_string.push_str(&format!("{}", self.epoch));
         concat_string.push_str(&format!("{}", self.description));
         concat_string.push_str(&format!("{}", self.metadata));
@@ -70,14 +81,26 @@ pub enum WorkloadType {
 	WorkloadTypeDomainDelegate,
 	WorkloadTypeGateway4To6,
 	WorkloadTypeNetworkResource,
-	WorkloadTypePublicIP
+	WorkloadTypePublicIP,
+	WorkloadTypeVirtualMachine
 }
 
-impl WorkloadType {
-    pub fn workload_type_as_string(&self) -> String {
+impl fmt::Display for WorkloadType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WorkloadType::WorkloadTypeZDB => String::from("ZDB"),
-            _ => String::from("NOPE")
+            WorkloadType::WorkloadTypeZDB => write!(f, "ZDB"),
+            WorkloadType::WorkloadTypeContainer => write!(f, "CONTAINER"),
+            WorkloadType::WorkloadTypeVolume => write!(f, "VOLUME"),
+            WorkloadType::WorkloadTypeNetwork => write!(f, "NETWORK"),
+            WorkloadType::WorkloadTypeKubernetes => write!(f, "KUBERNETES"),
+            WorkloadType::WorkloadTypeProxy => write!(f, "PROXY"),
+            WorkloadType::WorkloadTypeReverseProxy => write!(f, "REVERSE_PROXY"),
+            WorkloadType::WorkloadTypeSubDomain => write!(f, "SUBDOMAIN"),
+            WorkloadType::WorkloadTypeDomainDelegate => write!(f, "DOMAIN_DELEGATE"),
+            WorkloadType::WorkloadTypeGateway4To6 => write!(f, "GATEWAY4TO6"),
+            WorkloadType::WorkloadTypeNetworkResource => write!(f, "NETWORK_RESOURCE"),
+            WorkloadType::WorkloadTypePublicIP => write!(f, "PUBLIC_IP"),
+            WorkloadType::WorkloadTypeVirtualMachine => write!(f, "VIRTUAL_MACHINE"),
         }
     }
 }
@@ -113,8 +136,8 @@ pub struct ZDBInformation {
     pub public: bool,
 }
 
-impl ZDBInformation {
-    pub fn signature_challenge(&self) -> String {
+impl SignatureChallenge for ZDBInformation {
+    fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.size);
 
         concat_string.push_str(&format!("{}", self.mode.to_string().to_lowercase()));
@@ -221,6 +244,18 @@ pub struct WorkloadResult {
     pub node_id: String
 }
 
+impl WorkloadResult {
+    pub fn workload_state(&self) -> ResultState {
+        if self.workload_id == ""{
+            ResultState::Pending
+        }else if self.state == ResultState::Ok {
+            ResultState::Ok
+        }else{
+            ResultState::Err
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WorkloadDelete {
     pub signature: String,
@@ -311,11 +346,11 @@ pub enum ZdbMode {
 	ZDBModeUser
 }
 
-impl ZdbMode {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for ZdbMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            ZdbMode::ZDBModeUser => String::from("User"),
-            ZdbMode::ZDBModeSeq => String::from("Seq")
+            ZdbMode::ZDBModeUser => write!(f, "User"),
+            ZdbMode::ZDBModeSeq => write!(f, "Seq")
         }
     }
 }
@@ -327,11 +362,11 @@ pub enum DiskType {
     SSD
 }
 
-impl DiskType {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for DiskType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            DiskType::SSD => String::from("SSD"),
-            DiskType::HDD => String::from("HDD")
+            DiskType::SSD => write!(f, "SSD"),
+            DiskType::HDD => write!(f, "HDD")
         }
     }
 }
