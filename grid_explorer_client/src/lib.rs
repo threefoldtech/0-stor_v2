@@ -10,6 +10,8 @@ mod auth;
 use chrono::Utc;
 use std::fmt;
 use tokio::time;
+pub use types::GridNetwork;
+
 #[derive(Debug)]
 pub enum ExplorerError {
     ExplorerClientError(String),
@@ -54,7 +56,7 @@ impl From<workload::BuilderError> for ExplorerError {
 }
 
 pub struct ExplorerClient {
-    pub network: &'static str,
+    pub network: GridNetwork,
     pub user_identity: identity::Identity,
     pub stellar_client: stellar::StellarClient,
     client: reqwest::Client,
@@ -62,7 +64,7 @@ pub struct ExplorerClient {
 
 impl ExplorerClient {
     pub fn new(
-        network: &'static str,
+        network: GridNetwork,
         secret: &str,
         user_identity: identity::Identity,
     ) -> ExplorerClient {
@@ -355,10 +357,9 @@ impl ExplorerClient {
 
     fn get_url(&self) -> &str {
         match self.network {
-            "mainnet" => "https://explorer.grid.tf",
-            "testnet" => "https://explorer.testnet.grid.tf",
-            "devnet" => "https://explorer.devnet.grid.tf",
-            _ => "https://explorer.grid.tf",
+            GridNetwork::Main => "https://explorer.grid.tf",
+            GridNetwork::Test => "https://explorer.testnet.grid.tf",
+            GridNetwork::Dev => "https://explorer.devnet.grid.tf",
         }
     }
 

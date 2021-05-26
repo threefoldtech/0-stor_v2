@@ -119,8 +119,8 @@ struct Proof {
     hypervisor: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-enum GridNetwork {
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub enum GridNetwork {
     Dev,
     Test,
     Main,
