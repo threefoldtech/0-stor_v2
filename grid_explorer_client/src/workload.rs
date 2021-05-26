@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::*;
 use std::collections::HashMap;
 use std::fmt;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 /// Specific error type related to workload creation errors
 #[derive(Debug)]
 pub enum BuilderError {
@@ -98,13 +98,13 @@ impl WorkloadBuilder {
     }
 
     fn validate(&self) -> Option<BuilderError> {
-        if let None = self.customer_tid {
+        if self.customer_tid.is_none() {
             return Some(BuilderError::MissingField(String::from("customer_tid")));
-        } else if let None = self.node_id {
+        } else if self.node_id.is_none() {
             return Some(BuilderError::MissingField(String::from("node_id")));
-        } else if let None = self.pool_id {
+        } else if self.pool_id.is_none() {
             return Some(BuilderError::MissingField(String::from("pool_id")));
-        } else if let None = self.data {
+        } else if self.data.is_none() {
             return Some(BuilderError::MissingField(String::from("data")));
         }
         None
@@ -112,8 +112,8 @@ impl WorkloadBuilder {
 
     fn workload_type(&self) -> WorkloadType {
         match self.data.as_ref().unwrap() {
-            WorkloadData::ZDB(_) => WorkloadType::WorkloadTypeZDB,
-            _ => WorkloadType::WorkloadTypeZDB,
+            WorkloadData::Zdb(_) => WorkloadType::WorkloadTypeZdb,
+            _ => WorkloadType::WorkloadTypeZdb,
         }
     }
     pub fn build(self, user_identity: &Identity) -> Result<Workload, BuilderError> {
@@ -212,7 +212,7 @@ pub struct SigningRequest {
 #[repr(i64)]
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 pub enum WorkloadType {
-    WorkloadTypeZDB,
+    WorkloadTypeZdb,
     WorkloadTypeContainer,
     WorkloadTypeVolume,
     WorkloadTypeNetwork,
@@ -230,7 +230,7 @@ pub enum WorkloadType {
 impl fmt::Display for WorkloadType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WorkloadType::WorkloadTypeZDB => write!(f, "ZDB"),
+            WorkloadType::WorkloadTypeZdb => write!(f, "ZDB"),
             WorkloadType::WorkloadTypeContainer => write!(f, "CONTAINER"),
             WorkloadType::WorkloadTypeVolume => write!(f, "VOLUME"),
             WorkloadType::WorkloadTypeNetwork => write!(f, "NETWORK"),
@@ -251,8 +251,8 @@ impl fmt::Display for WorkloadType {
 #[serde(untagged)]
 pub enum WorkloadData {
     Volume(VolumeInformation),
-    ZDB(ZDBInformation),
-    Container(ContainerInformation),
+    Zdb(ZdbInformation),
+    Container(Box<ContainerInformation>),
     K8S(K8SInformation),
     PublicIP(PublicIPInformation),
     Network(NetworkInformation),
@@ -266,7 +266,7 @@ pub enum WorkloadData {
 impl SignatureChallenge for WorkloadData {
     fn challenge(&self) -> String {
         match self {
-            WorkloadData::ZDB(v) => v.challenge(),
+            WorkloadData::Zdb(v) => v.challenge(),
             _ => String::from("Not implemented"),
         }
     }
@@ -279,7 +279,7 @@ pub struct VolumeInformation {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ZDBInformation {
+pub struct ZdbInformation {
     pub size: i64,
     pub mode: ZdbMode,
     pub password: String,
@@ -287,7 +287,7 @@ pub struct ZDBInformation {
     pub public: bool,
 }
 
-impl SignatureChallenge for ZDBInformation {
+impl SignatureChallenge for ZdbInformation {
     fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.size);
 
@@ -301,7 +301,7 @@ impl SignatureChallenge for ZDBInformation {
 }
 
 #[derive(Default)]
-pub struct ZDBInformationBuilder {
+pub struct ZdbInformationBuilder {
     pub size: Option<i64>,
     pub mode: Option<ZdbMode>,
     pub password: Option<String>,
@@ -309,54 +309,56 @@ pub struct ZDBInformationBuilder {
     pub public: Option<bool>,
 }
 
-impl ZDBInformationBuilder {
-    pub fn new() -> ZDBInformationBuilder {
-        ZDBInformationBuilder::default()
+impl ZdbInformationBuilder {
+    pub fn new() -> ZdbInformationBuilder {
+        ZdbInformationBuilder::default()
     }
-    pub fn size(mut self, size: i64) -> ZDBInformationBuilder {
+    pub fn size(mut self, size: i64) -> ZdbInformationBuilder {
         self.size = Some(size);
         self
     }
-    pub fn mode(mut self, mode: ZdbMode) -> ZDBInformationBuilder {
+    pub fn mode(mut self, mode: ZdbMode) -> ZdbInformationBuilder {
         self.mode = Some(mode);
         self
     }
-    pub fn password(mut self, password: String) -> ZDBInformationBuilder {
+    pub fn password(mut self, password: String) -> ZdbInformationBuilder {
         self.password = Some(password);
         self
     }
-    pub fn disk_type(mut self, disk_type: DiskType) -> ZDBInformationBuilder {
+    pub fn disk_type(mut self, disk_type: DiskType) -> ZdbInformationBuilder {
         self.disk_type = Some(disk_type);
         self
     }
-    pub fn public(mut self, public: bool) -> ZDBInformationBuilder {
+    pub fn public(mut self, public: bool) -> ZdbInformationBuilder {
         self.public = Some(public);
         self
     }
     fn validate(&self) -> Option<BuilderError> {
-        if let None = self.size {
+        if self.size.is_none() {
             return Some(BuilderError::MissingField(String::from("size")));
-        } else if let None = self.mode {
+        } else if self.mode.is_none() {
             return Some(BuilderError::MissingField(String::from("mode")));
-        } else if let None = self.password {
+        } else if self.password.is_none() {
             return Some(BuilderError::MissingField(String::from("password")));
-        } else if let None = self.disk_type {
+        } else if self.disk_type.is_none() {
             return Some(BuilderError::MissingField(String::from("disk_type")));
-        }
-        if let None = self.public {
+        }else if self.public.is_none() {
             return Some(BuilderError::MissingField(String::from("public")));
         }
         None
     }
-    pub fn build(self) -> ZDBInformation {
+    pub fn build(self) -> Result<ZdbInformation, BuilderError> {
+        if let Some(e) = self.validate() {
+            return Err(e);
+        }
         // TODO: encrypt password
-        ZDBInformation {
+        Ok(ZdbInformation {
             size: self.size.unwrap(),
             mode: self.mode.unwrap(),
             password: self.password.unwrap(),
             disk_type: self.disk_type.unwrap(),
             public: self.public.unwrap(),
-        }
+        })
     }
 }
 
@@ -553,15 +555,15 @@ pub struct ContainerCapacity {
 #[repr(u8)]
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 pub enum ZdbMode {
-    ZDBModeSeq,
-    ZDBModeUser,
+    ZdbModeSeq,
+    ZdbModeUser,
 }
 
 impl fmt::Display for ZdbMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            ZdbMode::ZDBModeUser => write!(f, "User"),
-            ZdbMode::ZDBModeSeq => write!(f, "Seq"),
+            ZdbMode::ZdbModeUser => write!(f, "User"),
+            ZdbMode::ZdbModeSeq => write!(f, "Seq"),
         }
     }
 }
@@ -569,15 +571,15 @@ impl fmt::Display for ZdbMode {
 #[repr(u8)]
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 pub enum DiskType {
-    HDD,
-    SSD,
+    Hdd,
+    Ssd,
 }
 
 impl fmt::Display for DiskType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            DiskType::SSD => write!(f, "SSD"),
-            DiskType::HDD => write!(f, "HDD"),
+            DiskType::Ssd => write!(f, "SSD"),
+            DiskType::Hdd => write!(f, "HDD"),
         }
     }
 }
