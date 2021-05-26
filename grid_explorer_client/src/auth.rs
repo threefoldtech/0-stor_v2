@@ -1,7 +1,6 @@
 use super::identity;
-use base64;
 
-pub fn create_header(id: &identity::Identity, date: chrono::DateTime<chrono::Utc>, date_str: String) -> String {
+pub fn create_header(id: &identity::Identity, date: &chrono::DateTime<chrono::Utc>, date_str: &String) -> String {
     let created = date.timestamp();
 
     let sig_str = format!(
