@@ -87,7 +87,7 @@ async fn nodes_filter(stellar_secret: String, user_id: i64, mnemonic: String) {
     .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let result = client.nodes_filter(Some(1), 0, 0, 0, 0, Some(true)).await;
+    let result = client.nodes_filter(Some(1), 0, 0, 0, 0, Some(false)).await;
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
@@ -303,14 +303,13 @@ async fn zdb_create(
     .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-
-    let zdb = grid_explorer_client::workload::ZDBInformation {
-        size: 1,
-        mode: grid_explorer_client::workload::ZdbMode::ZDBModeUser,
-        password: String::from(""),
-        disk_type: grid_explorer_client::workload::DiskType::HDD,
-        public: false,
-    };
+    let zdb = grid_explorer_client::workload::ZDBInformationBuilder::new()
+        .size(10000)
+        .mode(grid_explorer_client::workload::ZdbMode::ZDBModeUser)
+        .password(String::from(""))
+        .disk_type(grid_explorer_client::workload::DiskType::SSD)
+        .public(true)
+        .build();
 
     let pool_id = 11124;
     let node_id = String::from("3NAkUYqm5iPRmNAnmLfjwdreqDssvsebj4uPUt9BxFPm");

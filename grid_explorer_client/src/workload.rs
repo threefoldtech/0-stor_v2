@@ -1,11 +1,12 @@
+use crate::identity::Identity;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
 use std::collections::HashMap;
 use std::fmt;
-
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Specific error type related to workload creation errors
 #[derive(Debug)]
-pub enum WorkloadCreationError {
+pub enum BuilderError {
     MissingField(String),
 }
 
@@ -44,6 +45,148 @@ pub struct Workload {
     pub data: WorkloadData,
 }
 
+#[derive(Default)]
+pub struct WorkloadBuilder {
+    pub customer_tid: Option<i64>,
+    pub node_id: Option<String>,
+    pub pool_id: Option<i64>,
+
+    pub reference: Option<String>,
+    pub description: Option<String>,
+    pub metadata: Option<String>,
+
+    pub version: Option<i64>,
+
+    pub data: Option<WorkloadData>,
+}
+
+impl WorkloadBuilder {
+    pub fn new() -> WorkloadBuilder {
+        WorkloadBuilder::default()
+    }
+    pub fn customer_tid(mut self, customer_tid: i64) -> WorkloadBuilder {
+        self.customer_tid = Some(customer_tid);
+        self
+    }
+    pub fn node_id(mut self, node_id: &str) -> WorkloadBuilder {
+        self.node_id = Some(String::from(node_id));
+        self
+    }
+    pub fn pool_id(mut self, pool_id: i64) -> WorkloadBuilder {
+        self.pool_id = Some(pool_id);
+        self
+    }
+    pub fn reference(mut self, reference: &str) -> WorkloadBuilder {
+        self.reference = Some(String::from(reference));
+        self
+    }
+    pub fn description(mut self, description: &str) -> WorkloadBuilder {
+        self.description = Some(String::from(description));
+        self
+    }
+    pub fn metadata(mut self, metadata: &str) -> WorkloadBuilder {
+        self.metadata = Some(String::from(metadata));
+        self
+    }
+    pub fn version(mut self, version: i64) -> WorkloadBuilder {
+        self.version = Some(version);
+        self
+    }
+    pub fn data(mut self, data: WorkloadData) -> WorkloadBuilder {
+        self.data = Some(data);
+        self
+    }
+
+    fn validate(&self) -> Option<BuilderError> {
+        if let None = self.customer_tid {
+            return Some(BuilderError::MissingField(String::from("customer_tid")));
+        } else if let None = self.node_id {
+            return Some(BuilderError::MissingField(String::from("node_id")));
+        } else if let None = self.pool_id {
+            return Some(BuilderError::MissingField(String::from("pool_id")));
+        } else if let None = self.data {
+            return Some(BuilderError::MissingField(String::from("data")));
+        }
+        None
+    }
+
+    fn workload_type(&self) -> WorkloadType {
+        match self.data.as_ref().unwrap() {
+            WorkloadData::ZDB(_) => WorkloadType::WorkloadTypeZDB,
+            _ => WorkloadType::WorkloadTypeZDB,
+        }
+    }
+    pub fn build(self, user_identity: &Identity) -> Result<Workload, BuilderError> {
+        if let Some(e) = self.validate() {
+            return Err(e);
+        }
+        let version = default(self.version, 1);
+        let metadata = default(self.metadata.clone(), String::from(""));
+        let reference = default(self.reference.clone(), String::from(""));
+        let description = default(self.description.clone(), String::from(""));
+        let epoch = epoch();
+        let node_id = self.node_id.as_ref().unwrap();
+        let pool_id = self.pool_id.unwrap();
+        let customer_tid = self.customer_tid.as_ref().unwrap();
+        let signing_request_delete = SigningRequest {
+            signers: Some(vec![*customer_tid]),
+            quorum_min: 1,
+        };
+        let workload_type = self.workload_type();
+
+        let mut w = Workload {
+            workload_id: 1,
+            node_id: node_id.clone(),
+            pool_id,
+            reference,
+            description,
+
+            signing_request_provision: SigningRequest::default(),
+            signing_request_delete,
+
+            id: 1,
+            json: Some(String::from("")),
+            customer_tid: *customer_tid,
+            customer_signature: String::from(""),
+
+            next_action: NextAction::Create,
+
+            version,
+            metadata,
+            epoch,
+
+            result: None,
+
+            workload_type,
+
+            data: self.data.unwrap(),
+        };
+        let mut workload_signature_challenge = w.challenge();
+        workload_signature_challenge.push_str(w.data.challenge().as_str());
+        let customer_signature_bytes =
+            user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
+        let encoded_signature = hex::encode(customer_signature_bytes.to_vec());
+        w.customer_signature = encoded_signature;
+        let json = serde_json::to_string(&w).unwrap();
+        w.json = Some(json);
+        Ok(w)
+    }
+}
+
+fn epoch() -> u64 {
+    let start = SystemTime::now();
+    start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs()
+}
+fn default<T>(v: Option<T>, d: T) -> T {
+    if let Some(x) = v {
+        x
+    } else {
+        d
+    }
+}
 impl SignatureChallenge for Workload {
     fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.workload_id);
@@ -120,6 +263,15 @@ pub enum WorkloadData {
     Gateway4To6(Gateway4To6Information),
 }
 
+impl SignatureChallenge for WorkloadData {
+    fn challenge(&self) -> String {
+        match self {
+            WorkloadData::ZDB(v) => v.challenge(),
+            _ => String::from("Not implemented"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct VolumeInformation {
     pub size: i64,
@@ -145,6 +297,66 @@ impl SignatureChallenge for ZDBInformation {
         concat_string.push_str(&format!("{}", self.public));
 
         concat_string
+    }
+}
+
+#[derive(Default)]
+pub struct ZDBInformationBuilder {
+    pub size: Option<i64>,
+    pub mode: Option<ZdbMode>,
+    pub password: Option<String>,
+    pub disk_type: Option<DiskType>,
+    pub public: Option<bool>,
+}
+
+impl ZDBInformationBuilder {
+    pub fn new() -> ZDBInformationBuilder {
+        ZDBInformationBuilder::default()
+    }
+    pub fn size(mut self, size: i64) -> ZDBInformationBuilder {
+        self.size = Some(size);
+        self
+    }
+    pub fn mode(mut self, mode: ZdbMode) -> ZDBInformationBuilder {
+        self.mode = Some(mode);
+        self
+    }
+    pub fn password(mut self, password: String) -> ZDBInformationBuilder {
+        self.password = Some(password);
+        self
+    }
+    pub fn disk_type(mut self, disk_type: DiskType) -> ZDBInformationBuilder {
+        self.disk_type = Some(disk_type);
+        self
+    }
+    pub fn public(mut self, public: bool) -> ZDBInformationBuilder {
+        self.public = Some(public);
+        self
+    }
+    fn validate(&self) -> Option<BuilderError> {
+        if let None = self.size {
+            return Some(BuilderError::MissingField(String::from("size")));
+        } else if let None = self.mode {
+            return Some(BuilderError::MissingField(String::from("mode")));
+        } else if let None = self.password {
+            return Some(BuilderError::MissingField(String::from("password")));
+        } else if let None = self.disk_type {
+            return Some(BuilderError::MissingField(String::from("disk_type")));
+        }
+        if let None = self.public {
+            return Some(BuilderError::MissingField(String::from("public")));
+        }
+        None
+    }
+    pub fn build(self) -> ZDBInformation {
+        // TODO: encrypt password
+        ZDBInformation {
+            size: self.size.unwrap(),
+            mode: self.mode.unwrap(),
+            password: self.password.unwrap(),
+            disk_type: self.disk_type.unwrap(),
+            public: self.public.unwrap(),
+        }
     }
 }
 
