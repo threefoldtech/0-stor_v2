@@ -18,16 +18,16 @@ fn main() {
         // nodes_get(stellar_secret, user_id, mnemonic).await;
         // farms_get(stellar_secret, user_id, mnemonic).await;
         // farm_get().await;
-        // workload_get().await;
+        workload_get(stellar_secret, user_id, mnemonic).await;
         // pool_get(stellar_secret, user_id, mnemonic).await;
         // pool_create(stellar_secret, user_id, mnemonic).await;
         // pools_by_owner(stellar_secret, user_id, mnemonic).await;
         // nodes_filter(stellar_secret, user_id, mnemonic).await;
-        let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
-        if let Ok(wid) = res {
-            workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
-            workload_decommission(stellar_secret, user_id, mnemonic, wid).await;
-        }
+        // let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        // if let Ok(wid) = res {
+        //     workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
+        //     workload_decommission(stellar_secret, user_id, mnemonic, wid).await;
+        // }
     });
 }
 
@@ -205,7 +205,7 @@ async fn workload_get(stellar_secret: String, user_id: i64, mnemonic: String) {
     .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let result = client.workload_get_by_id(28338).await;
+    let result = client.workload_get_by_id(49975).await;
     match result {
         Ok(workload) => {
             println!("{:?}", workload);
