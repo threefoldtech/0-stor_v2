@@ -45,6 +45,17 @@ pub struct Workload {
     pub data: WorkloadData,
 }
 
+impl Workload {
+    pub fn sign(&mut self, user_identity: &Identity) {
+        let mut workload_signature_challenge = self.challenge();
+        workload_signature_challenge.push_str(self.data.challenge().as_str());
+        let customer_signature_bytes =
+            user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
+        let encoded_signature = hex::encode(customer_signature_bytes.to_vec());
+        self.customer_signature = encoded_signature;
+    }
+}
+
 #[derive(Default)]
 pub struct WorkloadBuilder {
     pub customer_tid: Option<i64>,
@@ -161,12 +172,7 @@ impl WorkloadBuilder {
 
             data: self.data.unwrap(),
         };
-        let mut workload_signature_challenge = w.challenge();
-        workload_signature_challenge.push_str(w.data.challenge().as_str());
-        let customer_signature_bytes =
-            user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
-        let encoded_signature = hex::encode(customer_signature_bytes.to_vec());
-        w.customer_signature = encoded_signature;
+        w.sign(user_identity);
         let json = serde_json::to_string(&w).unwrap();
         w.json = Some(json);
         Ok(w)
@@ -342,7 +348,7 @@ impl ZdbInformationBuilder {
             return Some(BuilderError::MissingField(String::from("password")));
         } else if self.disk_type.is_none() {
             return Some(BuilderError::MissingField(String::from("disk_type")));
-        }else if self.public.is_none() {
+        } else if self.public.is_none() {
             return Some(BuilderError::MissingField(String::from("public")));
         }
         None
