@@ -10,7 +10,6 @@ mod auth;
 use chrono::Utc;
 use std::fmt;
 use tokio::time;
-use workload::SignatureChallenge;
 #[derive(Debug)]
 pub enum ExplorerError {
     ExplorerClientError(String),
@@ -265,34 +264,15 @@ impl ExplorerClient {
     }
 
     pub async fn workload_decommission(&self, wid: i64) -> Result<bool, ExplorerError> {
-        let w = self.workload_get_by_id(wid).await?;
+        let mut w = self.workload_get_by_id(wid).await?;
         if w.next_action as u8 > 3 {
             return Ok(false);
         }
-        let zdb_signature = match &w.data {
-            workload::WorkloadData::Zdb(ref v) => v.challenge(),
-            _ => {
-                return Err(ExplorerError::ExplorerClientError(String::from(
-                    "type not supported",
-                )))
-            }
-        };
-        let tid = self.user_identity.user_id;
-        let mut workload_signature_challenge = w.challenge();
-        workload_signature_challenge.push_str(zdb_signature.as_str());
-        workload_signature_challenge.push_str("delete");
-        workload_signature_challenge.push_str(&tid.to_string());
-        let customer_signature_bytes = self
-            .user_identity
-            .hash_and_sign(workload_signature_challenge.as_bytes());
-        let since_the_epoch = self.epoch();
-        // hex encode the customer signature
-        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
-
+        w.sign(&self.user_identity);
         let data = workload::WorkloadDelete {
-            signature: customer_signature,
-            tid,
-            epoch: since_the_epoch,
+            signature: w.customer_signature,
+            tid: self.user_identity.user_id,
+            epoch: self.epoch(),
         };
         let url = format!(
             "{url}/api/v1/reservations/workloads/{wid}/sign/delete",
