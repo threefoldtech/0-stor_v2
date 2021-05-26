@@ -5,11 +5,11 @@ mod types;
 mod stellar;
 use stellar_base::crypto::{KeyPair};
 use std::time::{SystemTime, UNIX_EPOCH, Duration, Instant};
-use hex;
 use reqwest::header::{HeaderMap, HeaderValue};
 mod auth;
 use chrono::{Utc};
-use async_std::task;
+use tokio::time;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -26,7 +26,6 @@ pub struct ExplorerClientError {
     msg: String,
 }
 
-use std::fmt;
 impl fmt::Display for ExplorerClientError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.msg)
@@ -51,28 +50,31 @@ impl From<reqwest::Error> for ExplorerError {
 pub struct ExplorerClient {
     pub network: &'static str,
     pub user_identity: identity::Identity,
-    pub stellar_client: stellar::StellarClient
+    pub stellar_client: stellar::StellarClient,
+    client: reqwest::Client
 }
 
-pub fn new_explorer_client(network: &'static str, secret: &str, user_identity: identity::Identity) -> ExplorerClient {
-    let keypair = KeyPair::from_secret_seed(&secret).unwrap();
-    
-    let stellar_client = stellar::StellarClient {
-        network,
-        keypair
-    };
-
-    ExplorerClient{
-        network,
-        user_identity,
-        stellar_client
-    }
-}
 
 impl ExplorerClient {
+    pub fn new(network: &'static str, secret: &str, user_identity: identity::Identity) -> ExplorerClient {
+        let keypair = KeyPair::from_secret_seed(&secret).unwrap();
+        
+        let stellar_client = stellar::StellarClient {
+            network,
+            keypair
+        };
+        let client = reqwest::Client::new();
+        ExplorerClient{
+            network,
+            user_identity,
+            stellar_client,
+            client
+        }
+    }
     pub async fn nodes_get(&self) -> Result<Vec<types::Node>, ExplorerError> {
         let url = format!("{url}/api/v1/nodes", url=self.get_url()); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<Vec<types::Node>>()
             .await?)
@@ -80,9 +82,8 @@ impl ExplorerClient {
     
     pub async fn nodes_filter(&self, farm_id: Option<i32>, cru: i32, mru: i32, sru: i32, hru: i32, up: Option<bool>) -> Result<Vec<types::Node>, ExplorerError> {
         let url = format!("{url}/api/v1/nodes", url=self.get_url()); 
-        let client = reqwest::Client::new();
         let params = &[("cru", cru), ("mru", mru), ("sru", sru), ("hru", hru)];
-        let mut nodes = client.get(url.as_str())
+        let mut nodes = self.client.get(url.as_str())
             .query(params)
             .query(&[("farm", farm_id)])
             .send()
@@ -94,12 +95,13 @@ impl ExplorerClient {
             let timestamp = self.epoch();
             nodes = nodes.into_iter().filter(|node| (timestamp - node.updated <= 10 * 60) == v).collect();
         }
-        return Ok(nodes);
+        Ok(nodes)
     }
 
-    pub async fn node_get_by_id(&self, id: String) -> Result<types::Node, ExplorerError> {
+    pub async fn node_get_by_id(&self, id: &String) -> Result<types::Node, ExplorerError> {
         let url = format!("{url}/api/v1/nodes/{id}", url=self.get_url(), id=id); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<types::Node>()
             .await?)
@@ -107,7 +109,8 @@ impl ExplorerClient {
 
     pub async fn farms_get(&self) -> Result<Vec<types::Farm>, ExplorerError> {
         let url = format!("{url}/api/v1/farms", url=self.get_url()); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<Vec<types::Farm>>()
             .await?)
@@ -115,7 +118,8 @@ impl ExplorerClient {
 
     pub async fn farm_get_by_id(&self, id: i64) -> Result<types::Farm, ExplorerError> {
         let url = format!("{url}/api/v1/farms/{id}", url=self.get_url(), id=id); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<types::Farm>()
             .await?)
@@ -123,7 +127,8 @@ impl ExplorerClient {
 
     pub async fn workload_get_by_id(&self, id: i64) -> Result<workload::Workload, ExplorerError> {
         let url = format!("{url}/api/v1/reservations/workloads/{id}", url=self.get_url(), id=id); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<workload::Workload>()
             .await?)
@@ -131,22 +136,21 @@ impl ExplorerClient {
     
     pub fn _workload_state(&self, v: &workload::WorkloadResult) -> workload::ResultState {
         if v.workload_id == ""{
-            return workload::ResultState::Pending;
+            workload::ResultState::Pending
         }else if v.state == workload::ResultState::Ok {
-            return workload::ResultState::Ok;
+            workload::ResultState::Ok
         }else{
-            return workload::ResultState::Err;
+            workload::ResultState::Err
         }
     }
 
     pub async fn workload_poll(&self, id: i64, timeout: u64) -> Result<workload::Workload, ExplorerError> {
         let start = Instant::now();
-        let x = start.elapsed();
-        while x.as_secs() < timeout {
+        while start.elapsed().as_secs() < timeout {
             let w = self.workload_get_by_id(id).await?;
             if let Some(v) = w.result.as_ref() {
-                match self._workload_state(&v) {
-                    workload::ResultState::Pending => task::sleep(Duration::from_secs(1)).await,
+                match v.workload_state() {
+                    workload::ResultState::Pending => time::sleep(Duration::from_secs(1)).await,
                     workload::ResultState::Ok => return Ok(w),
                     workload::ResultState::Err => return Err(ExplorerError::WorkloadFailedError(String::from(&v.message))),
                     workload::ResultState::Deleted => return Err(ExplorerError::ExplorerClientError(String::from("workload deleted while waiting"))),
@@ -155,7 +159,7 @@ impl ExplorerClient {
                 panic!("result should always exist")
             }
         }
-        return Err(ExplorerError::WorkloadTimeoutError(String::from("waited a long time for the workload to deploy")));
+        Err(ExplorerError::WorkloadTimeoutError(String::from("waited a long time for the workload to deploy")))
     }
 
     pub async fn create_capacity_pool(&self, data_reservation: reservation::ReservationData) -> Result<bool, ExplorerError> {
@@ -177,8 +181,7 @@ impl ExplorerClient {
         reservation.customer_signature = hex::encode(customer_signature_bytes.to_vec());
 
         let url = format!("{url}/api/v1/reservations/pools", url=self.get_url()); 
-        let resp = reqwest::Client::new()
-            .post(url)
+        let resp = self.client.post(url)
             .json(&reservation)
             .send()
             .await?
@@ -190,7 +193,8 @@ impl ExplorerClient {
 
     pub async fn pool_get_by_id(&self, id: i64) -> Result<reservation::PoolData, ExplorerError> {
         let url = format!("{url}/api/v1/reservations/pools/{id}", url=self.get_url(), id=id); 
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<reservation::PoolData>()
             .await?)
@@ -198,7 +202,8 @@ impl ExplorerClient {
 
     pub async fn pools_by_owner(&self) -> Result<Vec<reservation::PoolData>, ExplorerError> {
         let url = format!("{url}/api/v1/reservations/pools/owner/{id}", url=self.get_url(), id=self.user_identity.get_id());
-        Ok(reqwest::get(url.as_str())
+        Ok(self.client.get(url.as_str())
+            .send()
             .await?
             .json::<Vec<reservation::PoolData>>()
             .await?)
@@ -233,8 +238,7 @@ impl ExplorerClient {
         
         let date = Utc::now();
         let headers = self.construct_headers(date);
-        reqwest::Client::new()
-            .post(url)
+        self.client.post(url)
             .headers(headers)
             .json(&data)
             .send()
@@ -296,8 +300,7 @@ impl ExplorerClient {
         
         let date = Utc::now();
         let headers = self.construct_headers(date);
-        let resp = reqwest::Client::new()
-            .post(url)
+        let resp = self.client.post(url)
             .headers(headers)
             .json(&workload)
             .send()
@@ -317,7 +320,7 @@ impl ExplorerClient {
         let mut headers = HeaderMap::new();
 
         let date_str = format!("{}", date.format("%a, %d %b %Y %H:%M:%S GMT"));
-        let header = auth::create_header(&self.user_identity, date, date_str.clone());
+        let header = auth::create_header(&self.user_identity, &date, &date_str);
         
         let sig = HeaderValue::from_str(&header).unwrap();
         headers.insert("Authorization", sig);
