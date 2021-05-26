@@ -11,12 +11,12 @@ use chrono::Utc;
 use std::fmt;
 use tokio::time;
 use workload::SignatureChallenge;
-
 #[derive(Debug)]
 pub enum ExplorerError {
     ExplorerClientError(String),
     WorkloadTimeoutError(String),
     WorkloadFailedError(String),
+    WorkloadCreationError(workload::BuilderError),
     Reqwest(reqwest::Error),
     StellarError(stellar_base::error::Error),
     HorizonError(stellar_horizon::error::Error),
@@ -45,6 +45,12 @@ impl From<String> for ExplorerError {
 impl From<reqwest::Error> for ExplorerError {
     fn from(err: reqwest::Error) -> ExplorerError {
         ExplorerError::Reqwest(err)
+    }
+}
+
+impl From<workload::BuilderError> for ExplorerError {
+    fn from(err: workload::BuilderError) -> ExplorerError {
+        ExplorerError::WorkloadCreationError(err)
     }
 }
 
@@ -307,59 +313,8 @@ impl ExplorerClient {
 
         Ok(true)
     }
-    pub async fn create_zdb_reservation(
-        &self,
-        node_id: String,
-        pool_id: i64,
-        zdb: workload::ZDBInformation,
-    ) -> Result<i64, ExplorerError> {
-        let since_the_epoch = self.epoch();
 
-        let zdb_signature_challenge = zdb.challenge();
-
-        let mut workload = workload::Workload {
-            workload_id: 1,
-            node_id,
-            pool_id,
-            reference: String::from(""),
-            description: String::from(""),
-
-            signing_request_provision: workload::SigningRequest::default(),
-            signing_request_delete: workload::SigningRequest::default(),
-
-            id: 1,
-            json: Some(String::from("")),
-            customer_tid: self.user_identity.get_id(),
-            customer_signature: String::from(""),
-
-            next_action: workload::NextAction::Create,
-
-            version: 1,
-            metadata: String::from(""),
-            epoch: since_the_epoch,
-
-            result: None,
-
-            workload_type: workload::WorkloadType::WorkloadTypeZDB,
-
-            data: workload::WorkloadData::ZDB(zdb),
-        };
-        workload.signing_request_delete.quorum_min = 1;
-        workload.signing_request_delete.signers = Some(vec![self.user_identity.user_id]);
-        let mut workload_signature_challenge = workload.challenge();
-        workload_signature_challenge.push_str(zdb_signature_challenge.as_str());
-
-        let customer_signature_bytes = self
-            .user_identity
-            .hash_and_sign(workload_signature_challenge.as_bytes());
-
-        // hex encode the customer signature
-        let customer_signature = hex::encode(customer_signature_bytes.to_vec());
-
-        workload.customer_signature = customer_signature;
-        let json = serde_json::to_string(&workload).unwrap();
-        workload.json = Some(json);
-
+    pub async fn deploy_workload(&self, w: &workload::Workload) -> Result<i64, ExplorerError> {
         let url = format!("{url}/api/v1/reservations/workloads", url = self.get_url());
 
         let date = Utc::now();
@@ -368,7 +323,7 @@ impl ExplorerClient {
             .client
             .post(url)
             .headers(headers)
-            .json(&workload)
+            .json(&w)
             .send()
             .await?
             .json::<reservation::ReservationCreateResponse>()
@@ -382,6 +337,22 @@ impl ExplorerClient {
                 "client didn't respond with error or id",
             )))
         }
+    }
+
+    pub async fn create_zdb_reservation(
+        &self,
+        node_id: String,
+        pool_id: i64,
+        zdb: workload::ZDBInformation,
+    ) -> Result<i64, ExplorerError> {
+        let w = workload::WorkloadBuilder::new()
+            .customer_tid(self.user_identity.user_id)
+            .node_id(node_id.as_str())
+            .pool_id(pool_id)
+            .data(workload::WorkloadData::ZDB(zdb))
+            .build(&self.user_identity)?;
+
+        Ok(self.deploy_workload(&w).await?)
     }
 
     fn construct_headers(&self, date: chrono::DateTime<chrono::Utc>) -> HeaderMap {
