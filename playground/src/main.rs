@@ -67,7 +67,7 @@ async fn nodes_filter(stellar_secret: String, user_id: i64, mnemonic: String) {
     let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let result = client.nodes_filter(Some(1), 0, 0, 0, 0, Some(false)).await;
+    let result = client.nodes_filter(Some(1), 0, 0, 0, 0, Some(true)).await;
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
@@ -238,7 +238,7 @@ async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) -> R
     };
 
     let pool_id = 11124;
-    let node_id = String::from("HtKZ3SwHcGM7nTsm8ykRGttfodFfLkghrmD5FGypgobK");
+    let node_id = String::from("3NAkUYqm5iPRmNAnmLfjwdreqDssvsebj4uPUt9BxFPm");
 
     let result = client.create_zdb_reservation(node_id, pool_id, zdb).await;
     match result {
