@@ -676,6 +676,12 @@ pub struct NsInfo {
 }
 
 impl NsInfo {
+    /// Get the amount of entries, or keys, in the namespace.
+    #[inline]
+    pub fn entries(&self) -> usize {
+        self.entries
+    }
+
     /// Get the amount of free space in the namespace. If there is no limit, or the free
     /// space according to the limit is higher than the remaining free disk size, the remainder of
     /// the free disk size is returned.
@@ -702,6 +708,7 @@ impl NsInfo {
     }
 
     /// Get the [`mode`](ZdbRunMode) the 0-db is running in
+    #[inline]
     pub fn mode(&self) -> ZdbRunMode {
         self.mode
     }
