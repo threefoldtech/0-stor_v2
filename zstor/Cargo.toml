@@ -28,7 +28,7 @@ hex = "0.4"
 aes-gcm = { version = "0.8", features = ["std"] }
 snap = "1"
 log = { version = "0.4", features = ["release_max_level_debug"] }
-redis = { version = "0.20", default-features = false, features = ["aio", "tokio-comp"] }
+redis = { version = "0.20", default-features = false, features = ["aio", "tokio-comp", "connection-manager"] }
 sha-1 = "0.9"
 simple_logger = "1.11" # TODO: remove this
 pretty_env_logger = "0.4"

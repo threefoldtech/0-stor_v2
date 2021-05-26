@@ -5,19 +5,19 @@ use blake2::{
 };
 use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
-use redis::{aio::Connection, ConnectionAddr, ConnectionInfo};
+use redis::{aio::ConnectionManager, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::time::Duration;
-use tokio::time::timeout;
-// use sha1::{Digest, Sha1};
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::time::timeout;
+// use sha1::{Digest, Sha1};
 
 /// The type of key's used in zdb in sequential mode.
 pub type Key = u32;
@@ -48,7 +48,7 @@ pub struct UserKeyZdb {
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
 /// the remote closed). No reconnection is attempted.
 struct InternalZdb {
-    conn: Connection,
+    conn: ConnectionManager,
     // connection info tracked to conveniently inspect the remote address and namespace.
     ci: ZdbConnectionInfo,
 }
@@ -62,18 +62,26 @@ impl fmt::Debug for InternalZdb {
 /// The type returned by the SCAN command in 0-db. In practice, the outer vec only contains a
 /// single element.
 type ScanEntry = Vec<(Vec<u8>, u32, u32)>;
+/// The outpout of a `SCAN` Cmd (future).
+type ScanResult = redis::RedisResult<(Vec<u8>, Vec<ScanEntry>)>;
 
 /// A stream over all the keys in a namespace.
-struct CollectionKeys<'a> {
-    conn: &'a mut Connection,
+struct CollectionKeys {
+    conn: ConnectionManager,
     /// Cursor to advance the scan, only set after the first call.
     cursor: Option<Vec<u8>>,
     /// The SCAN commands returns multiple entries per call, yet does not specify how many, so we
     /// keep past results in an internal array for later consumption.
-    // TODO: might need to become a VecDeque to get first element without a realloc
-    buffer: Vec<ScanEntry>,
+    buffer: VecDeque<ScanEntry>,
     /// The next entry in the buffer we will return.
     buffer_idx: usize,
+    // active scan command, this is the actual command.
+    active_scan: Option<&'static redis::Cmd>,
+    // address of the active connection used by the running_scan. This is a pointer to a
+    // ['ConnectionManager'].
+    active_con: Option<*const usize>,
+    // An in flight scan request issued by the stream.
+    running_scan: Option<Pin<Box<dyn Future<Output = ScanResult> + Send>>>,
 }
 
 struct ScanRecord {
@@ -81,80 +89,146 @@ struct ScanRecord {
     raw_key: Vec<u8>,
 }
 
-impl<'a> Stream for CollectionKeys<'a> {
+impl CollectionKeys {
+    fn dealloc_future(&mut self) {
+        if let Some(cmd) = self.active_scan.take() {
+            // SAFETY: the some variant here is only set through methods, and is only filled in
+            // through a leak of the boxed variable. Therefore we can safely recreate the box and
+            // let it go out of scope to deallocate it.
+            unsafe { Box::from_raw(cmd as *const redis::Cmd as *mut redis::Cmd) };
+        }
+        if let Some(ca) = self.active_con.take() {
+            // SAFETY: convert a raw pointer to the ConnectionManager. The conversion to a box,
+            // which is then dropped to deallocate the ConnectionManager is safe since the field
+            // can only contain a value to such a type through the leak of the boxed value,
+            // similarly to the above. The validity of the raw pointer is reliant on the fact that
+            // the ConnectionManager is not moved. This should ideally be a Pin<_>, but the redis
+            // lib does not seem to like that.
+            unsafe { Box::from_raw(ca as *mut ConnectionManager) };
+        }
+        // Clear the running future, this is needed in case this method gets called while the
+        // object is still alive, i.e. as part of the [`Stream`] impl. It is however not strictly
+        // needed as it will be dropped regardless in the `Drop` function.
+        self.running_scan = None;
+    }
+}
+
+// SAFETY: This is allowed since nothing should be able to change the address of the raw pointer to
+// the `ConnectionManager`.
+unsafe impl Send for CollectionKeys {}
+
+impl Stream for CollectionKeys {
     type Item = ScanRecord;
 
+    // TODO: consider if key order matters here. For now keys are returned in the order 0-db
+    // returns them. However if ordering does not matter in the first place, this method can be
+    // optimized to avoid reallocs, and possibly become zero copy.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.buffer_idx < self.buffer.len() {
-            // Take the first element (i.e. remove) from the vec and try to be somewhat efficient.
-            // TODO: Verify that this indeed does not realloc the vec. If it does, this can
-            // obviously be written way more simple.
-            // TODO: Think if ordering really matters. If it does not, it is trivial to remove
-            // elements without reallocating.
-            let start = self.buffer_idx;
-            self.buffer_idx += 1;
-            let end = self.buffer_idx;
-            let rec = self
-                .buffer
-                .drain(start..end)
-                .next()
-                .unwrap()
-                .into_iter()
-                .next()
-                .unwrap();
-            return Poll::Ready(Some(ScanRecord { raw_key: rec.0 }));
+        trace!("Starting CollectionKeys stream poll");
+        if self.running_scan.is_none() {
+            // if we are not in the process of running a scan, we check the local buffer first. The
+            // buffer is here since 0-db returns an unspecified amount of keys per call.
+            if let Some(mut rec) = self.buffer.pop_front() {
+                trace!(
+                    "Existing cached key found, returning ({} left in cache)",
+                    self.buffer.len()
+                );
+                // if we have an item we are guarnateed to have a 1 element vec, as this is the item
+                // type as returned by 0-db. No clue why it is wrapped in a vec though (perhaps the redis
+                // lib doesn't handle a list with different type element perfectly.
+                // We use remove since: it takes ownership, does not reallocate, and since there is
+                // only 1 element, it actually also doesn't do any memcopies.
+                return Poll::Ready(Some(ScanRecord {
+                    raw_key: rec.remove(0).0,
+                }));
+            }
+
+            // At this point there are no more entries in the buffer we haven't returned yet, fetch new
+            // ones.
+            let mut scan_cmd = redis::cmd("SCAN");
+            // Set the cursor if there is one
+            if let Some(ref cur) = self.cursor {
+                trace!(
+                    "Adding existing cursor {} to scan command",
+                    hex::encode(cur)
+                );
+                // compiler isn't smart enough (yet) to cast &Vec<u8> to &[u8].
+                scan_cmd.arg(cur as &[u8]);
+            }
+
+            // Since the redis lib uses await, our future expects a 'static lifetime. To do that,
+            // we temporarily leak a heap allocated value and save the 'static pointer we get from
+            // that on the struct in an option. We later reclaim this, by calling
+            // `self.dealloc_future`. Important here is that the leaked info is always reclaimed,
+            // either here when more data is returnedm or in the drop implementation.
+            // Specifically, we leak 2 things:
+            // - A clone of the connection manager, which is the connection used to talk with 0-db.
+            // - The command we send. It needs to live for 'static due to the future lifetime, but
+            //      we can't trivially guarantee that since it's a local variable, and even saving
+            //      on the struct won't help as the struct itself is not 'static.
+            //  Leaking these 2 things means all items in the future have the 'static lifetime,
+            //  satisfying it's requirement.
+            //  Because we can't save the leaked `ConnectionManager` on the struct, as that would
+            //  require a 'static lifetime on the struct, we actually take a raw pointer to it, and
+            //  save this. We can use this raw pointer to later drop the leaked `ConnectionManager`.
+            //  NOTE: This relies on the address of the ConnectionManager not changing, i.e. it is
+            //  not moved.
+            //  NOTE: all of this would not be needed if `Cmd::query_async` would not require
+            //  'static lifetimes.
+            self.active_scan = Some(Box::leak(Box::new(scan_cmd)));
+            let c = Box::leak(Box::new(self.conn.clone()));
+            self.active_con = Some(c as *mut ConnectionManager as *const usize);
+            if let Some(scan) = self.active_scan {
+                // The future needs to be pin in order to call `poll`, since I don't want to deal with
+                // figuring out if it's safe to pin it on the stack, pin it to the heap for now. The
+                // performance penalty of a heap allocation will be marginal since this does a network
+                // operation anyhow.
+                self.running_scan = Some(Box::pin(scan.query_async(c)));
+            }
         }
 
-        // At this point there are no more entries in the buffer we haven't returned yet, fetch new
-        // ones.
-        let mut scan_cmd = redis::cmd("SCAN");
-        // Set the cursor if there is one
-        if let Some(ref cur) = self.cursor {
-            // compiler isn't smart enough (yet) to cast &Vec<u8> to &[u8].
-            scan_cmd.arg(cur as &[u8]);
-        }
-
-        // The future needs to be pin in order to call `poll`, since I don't want to deal with
-        // figuring out if it's safe to pin it on the stack, pin it to the heap for now. The
-        // performance penalty of a heap allocation will be marginal since this does a network
-        // operation anyhow.
-        let mut res: (Vec<u8>, Vec<ScanEntry>) =
-            match Box::pin(scan_cmd.query_async(&mut *self.conn))
-                .as_mut()
-                .poll(cx)
-            {
-                Poll::Ready(res) => match res {
-                    Ok(r) => r,
-                    Err(e) => {
-                        debug!("Terminating scan: {}", e);
-                        return Poll::Ready(None);
+        let res: (Vec<u8>, Vec<ScanEntry>) = match self.running_scan {
+            Some(ref mut fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(res) => {
+                    self.running_scan = None;
+                    match res {
+                        Ok(r) => {
+                            self.dealloc_future();
+                            r
+                        }
+                        Err(e) => {
+                            debug!("Terminating scan: {}", e);
+                            return Poll::Ready(None);
+                        }
                     }
-                },
+                }
                 Poll::Pending => return Poll::Pending,
-            };
-
-        // Split the vec to get the first element. This reallocates the remainder, but it's more
-        // ergonomic than the previous untested approach of draining an element.
-        let buffer = res.1.split_off(1);
+            },
+            // This code can't be reached, since, if we skip the first code block, it means there
+            // is already a future running. If the first block runs, it always creates and sets the
+            // future to poll on.
+            None => unreachable!(),
+        };
 
         // Set new cursor
         self.cursor = Some(res.0);
-        // New buffer
-        self.buffer = buffer;
+        // New buffer - Converting the Vec into a VecDeque will, sadly, realloc the vec (under the
+        // assumption that the vec has cap == len).
+        self.buffer = res.1.into();
         // Reset buffer pointer, and set it to 1, as we will already return the first element.
         self.buffer_idx = 1;
 
-        // Ergonomic is relative here
-        let rec = res
-            .1
-            .into_iter()
-            .next()
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
+        // Unwrapping is safe since this code is only executed when a new buffer is fetched, which
+        // only returns successful if there are other elements.
+        // Similarly to above, use `remove` to get the element as owner, and since its a 1 element
+        // vec there are no other side effects.
+        let rec = self.buffer.pop_front().unwrap().remove(0);
         Poll::Ready(Some(ScanRecord { raw_key: rec.0 }))
     }
+}
+
+impl Drop for CollectionKeys {
+    fn drop(&mut self) {}
 }
 
 /// Connection info for a 0-db (namespace).
@@ -224,7 +298,7 @@ impl InternalZdb {
             remote: info.address,
             internal: ErrorCause::Redis(e),
         })?;
-        let mut conn = timeout(ZDB_TIMEOUT, client.get_async_connection())
+        let mut conn = timeout(ZDB_TIMEOUT, ConnectionManager::new(client))
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
@@ -311,8 +385,12 @@ impl InternalZdb {
     /// panics if the data len is larger than 8MiB
     async fn set(&mut self, key: Option<&[u8]>, data: &[u8]) -> ZdbResult<Vec<u8>> {
         trace!(
-            "storing data in zdb (key: {:?} length: {} remote: {})",
-            key,
+            "storing data in zdb (key: {} length: {} remote: {})",
+            if let Some(key) = key {
+                hex::encode(key)
+            } else {
+                "None".to_string()
+            },
             data.len(),
             self.connection_info().address(),
         );
@@ -401,12 +479,15 @@ impl InternalZdb {
     }
 
     /// Get a stream of all the keys in the namespace
-    fn keys(&mut self) -> CollectionKeys<'_> {
+    fn keys(&self) -> CollectionKeys {
         CollectionKeys {
-            conn: &mut self.conn,
+            conn: self.conn.clone(),
             cursor: None,
-            buffer: Vec::new(),
+            buffer: VecDeque::new(),
             buffer_idx: 0,
+            active_scan: None,
+            active_con: None,
+            running_scan: None,
         }
     }
 
