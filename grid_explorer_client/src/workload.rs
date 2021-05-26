@@ -48,14 +48,14 @@ impl SignatureChallenge for Workload {
     fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.workload_id);
 
-        concat_string.push_str(&format!("{}", self.node_id));
+        concat_string.push_str(&self.node_id.to_string());
         concat_string.push_str(&format!("{}", self.pool_id));
-        concat_string.push_str(&format!("{}", self.reference));
+        concat_string.push_str(&self.reference.to_string());
         concat_string.push_str(&format!("{}", self.customer_tid));
         concat_string.push_str(&format!("{}", self.workload_type));
         concat_string.push_str(&format!("{}", self.epoch));
-        concat_string.push_str(&format!("{}", self.description));
-        concat_string.push_str(&format!("{}", self.metadata));
+        concat_string.push_str(&self.description.to_string());
+        concat_string.push_str(&self.metadata.to_string());
         concat_string
     }
 }
@@ -139,9 +139,9 @@ impl SignatureChallenge for ZDBInformation {
     fn challenge(&self) -> String {
         let mut concat_string = format!("{}", self.size);
 
-        concat_string.push_str(&format!("{}", self.mode.to_string().to_lowercase()));
-        concat_string.push_str(&format!("{}", self.password));
-        concat_string.push_str(&format!("{}", self.disk_type.to_string().to_lowercase()));
+        concat_string.push_str(&self.mode.to_string().to_lowercase());
+        concat_string.push_str(&self.password);
+        concat_string.push_str(&self.disk_type.to_string().to_lowercase());
         concat_string.push_str(&format!("{}", self.public));
 
         concat_string
@@ -245,7 +245,7 @@ pub struct WorkloadResult {
 
 impl WorkloadResult {
     pub fn workload_state(&self) -> ResultState {
-        if self.workload_id == "" {
+        if self.workload_id.is_empty() {
             ResultState::Pending
         } else if self.state == ResultState::Ok {
             ResultState::Ok

@@ -3,7 +3,7 @@ use super::identity;
 pub fn create_header(
     id: &identity::Identity,
     date: &chrono::DateTime<chrono::Utc>,
-    date_str: &String,
+    date_str: &str,
 ) -> String {
     let created = date.timestamp();
 
