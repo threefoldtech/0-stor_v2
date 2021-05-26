@@ -311,9 +311,10 @@ impl InternalZdb {
     /// panics if the data len is larger than 8MiB
     async fn set(&mut self, key: Option<&[u8]>, data: &[u8]) -> ZdbResult<Vec<u8>> {
         trace!(
-            "storing data in zdb (key: {:?} length: {})",
+            "storing data in zdb (key: {:?} length: {} remote: {})",
             key,
-            data.len()
+            data.len(),
+            self.connection_info().address(),
         );
 
         assert!(data.len() < MAX_ZDB_DATA_SIZE);
@@ -342,7 +343,11 @@ impl InternalZdb {
 
     /// Retrieve some previously stored data with its key
     async fn get(&mut self, key: &[u8]) -> ZdbResult<Option<Vec<u8>>> {
-        trace!("loading data at key {}", hex::encode(key));
+        trace!(
+            "loading data at key {} from {}",
+            hex::encode(key),
+            self.connection_info().address()
+        );
         let data = timeout(
             ZDB_TIMEOUT,
             redis::cmd("GET")
@@ -370,7 +375,11 @@ impl InternalZdb {
 
     /// Delete some previously stored data by its key
     async fn delete(&mut self, key: &[u8]) -> ZdbResult<()> {
-        trace!("deleting data at key {}", hex::encode(key));
+        trace!(
+            "deleting data at key {} from {}",
+            hex::encode(key),
+            self.connection_info().address()
+        );
 
         timeout(
             ZDB_TIMEOUT,
@@ -612,11 +621,6 @@ impl UserKeyZdb {
                 )),
             });
         }
-        trace!(
-            "writing data  of size {} at key {}",
-            data.len(),
-            hex::encode(key.as_ref())
-        );
         self.internal.set(Some(key.as_ref()), data).await?;
 
         Ok(())
@@ -624,18 +628,17 @@ impl UserKeyZdb {
 
     /// Retrieve some previously stored data from it's key.
     pub async fn get<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<Option<Vec<u8>>> {
-        trace!("loading data at key {}", hex::encode(key.as_ref()));
         Ok(self.internal.get(&key.as_ref()).await?)
     }
 
     /// Delete some previously stored data from it's key.
     pub async fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<()> {
-        trace!("deleting data at key {}", hex::encode(key.as_ref()));
         Ok(self.internal.delete(&key.as_ref()).await?)
     }
 
     /// Get a stream which yields all the keys in the namespace.
     pub fn keys(&mut self) -> impl Stream<Item = Vec<u8>> + '_ {
+        trace!("key iteration on {}", self.connection_info().address());
         self.internal.keys().map(|st| st.raw_key)
     }
 
