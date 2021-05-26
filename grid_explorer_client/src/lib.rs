@@ -270,7 +270,7 @@ impl ExplorerClient {
             return Ok(false);
         }
         let zdb_signature = match &w.data {
-            workload::WorkloadData::ZDB(ref v) => v.challenge(),
+            workload::WorkloadData::Zdb(ref v) => v.challenge(),
             _ => {
                 return Err(ExplorerError::ExplorerClientError(String::from(
                     "type not supported",
@@ -314,7 +314,7 @@ impl ExplorerClient {
         Ok(true)
     }
 
-    pub async fn deploy_workload(&self, w: &workload::Workload) -> Result<i64, ExplorerError> {
+    pub async fn workload_deploy(&self, w: &workload::Workload) -> Result<i64, ExplorerError> {
         let url = format!("{url}/api/v1/reservations/workloads", url = self.get_url());
 
         let date = Utc::now();
@@ -343,16 +343,16 @@ impl ExplorerClient {
         &self,
         node_id: String,
         pool_id: i64,
-        zdb: workload::ZDBInformation,
+        zdb: workload::ZdbInformation,
     ) -> Result<i64, ExplorerError> {
         let w = workload::WorkloadBuilder::new()
             .customer_tid(self.user_identity.user_id)
             .node_id(node_id.as_str())
             .pool_id(pool_id)
-            .data(workload::WorkloadData::ZDB(zdb))
+            .data(workload::WorkloadData::Zdb(zdb))
             .build(&self.user_identity)?;
 
-        Ok(self.deploy_workload(&w).await?)
+        Ok(self.workload_deploy(&w).await?)
     }
 
     fn construct_headers(&self, date: chrono::DateTime<chrono::Utc>) -> HeaderMap {

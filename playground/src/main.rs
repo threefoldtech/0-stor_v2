@@ -303,13 +303,13 @@ async fn zdb_create(
     .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let zdb = grid_explorer_client::workload::ZDBInformationBuilder::new()
-        .size(10000)
-        .mode(grid_explorer_client::workload::ZdbMode::ZDBModeUser)
+    let zdb = grid_explorer_client::workload::ZdbInformationBuilder::new()
+        .size(5)
+        .mode(grid_explorer_client::workload::ZdbMode::ZdbModeUser)
         .password(String::from(""))
-        .disk_type(grid_explorer_client::workload::DiskType::SSD)
+        .disk_type(grid_explorer_client::workload::DiskType::Ssd)
         .public(true)
-        .build();
+        .build()?;
 
     let pool_id = 11124;
     let node_id = String::from("3NAkUYqm5iPRmNAnmLfjwdreqDssvsebj4uPUt9BxFPm");
