@@ -25,7 +25,6 @@ pub struct Node {
     deleted: bool,
     reserved: bool
 }
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Farm {
     id: i64,
