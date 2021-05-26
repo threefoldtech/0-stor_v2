@@ -1,7 +1,7 @@
-use bip39::{Mnemonic, Error};
+use bip39::{Error, Mnemonic};
+use ed25519_dalek::{Keypair, PublicKey, SecretKey, SignatureError, Signer};
+use sha2::{Digest, Sha256};
 use std::str::FromStr;
-use ed25519_dalek::{Signer, Keypair, SecretKey, PublicKey, SignatureError};
-use sha2::{Sha256, Digest};
 
 #[derive(Debug)]
 pub enum IdentityError {
@@ -28,27 +28,31 @@ pub struct Identity {
     pub keypair: Keypair,
 }
 
-
 impl Identity {
-    pub fn new(name: String, email: String, user_id: i64, mnemonic: &str) -> Result<Identity, IdentityError> {
+    pub fn new(
+        name: String,
+        email: String,
+        user_id: i64,
+        mnemonic: &str,
+    ) -> Result<Identity, IdentityError> {
         let mnemonic = Mnemonic::from_str(mnemonic)?;
         let entropy = mnemonic.to_entropy();
-    
+
         let secret_key: SecretKey = SecretKey::from_bytes(&entropy)?;
         let public_key: PublicKey = (&secret_key).into();
-    
+
         let keypair = Keypair {
             secret: secret_key,
-            public: public_key
+            public: public_key,
         };
-    
-        let id = Identity{
+
+        let id = Identity {
             name,
             email,
             user_id,
-            keypair
+            keypair,
         };
-    
+
         Ok(id)
     }
     pub fn get_id(&self) -> i64 {
