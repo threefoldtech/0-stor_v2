@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr};
+use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
@@ -23,7 +23,7 @@ pub struct Node {
     public_key_hex: String,
     wg_ports: Option<Vec<i64>>,
     deleted: bool,
-    reserved: bool
+    reserved: bool,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Farm {
@@ -38,7 +38,7 @@ pub struct Farm {
     prefixzero: Option<IpAddr>,
     ipaddresses: Option<Vec<IpAddress>>,
     enable_custom_pricing: bool,
-    farm_cloudunits_price: NodeCloudUnitPrice
+    farm_cloudunits_price: NodeCloudUnitPrice,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -46,20 +46,20 @@ struct NodeCloudUnitPrice {
     cu: f64,
     su: f64,
     nu: f64,
-    ipv4u: f64
+    ipv4u: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct IpAddress {
     address: String,
     gateway: String,
-    reservation_id: i64
+    reservation_id: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct WalletAddress {
     asset: String,
-    address: String
+    address: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -68,7 +68,7 @@ struct NodeResourcePrice {
     mru: f64,
     hru: f64,
     sru: f64,
-    nru: f64
+    nru: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -77,16 +77,16 @@ enum PriceCurrency {
     PriceCurrencyUSD,
     PriceCurrencyTFT,
     PriceCurrencyAED,
-    PriceCurrencyGBP
+    PriceCurrencyGBP,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Location {
-    city:      String,  
-	country:   String, 
-	continent: String,
-	latitude:  f64,
-	longitude: f64
+    city: String,
+    country: String,
+    continent: String,
+    latitude: f64,
+    longitude: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -94,7 +94,7 @@ struct ResourceAmount {
     cru: u64,
     mru: f64,
     hru: f64,
-    sru: f64
+    sru: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -116,14 +116,12 @@ struct Proof {
     created: u64,
     hardware_hash: String,
     disk_hash: String,
-    hypervisor: Vec<String>
+    hypervisor: Vec<String>,
 }
-
 
 #[derive(Serialize, Deserialize, Debug)]
 enum GridNetwork {
     Dev,
     Test,
-    Main
+    Main,
 }
-

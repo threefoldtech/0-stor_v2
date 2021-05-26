@@ -1,6 +1,6 @@
 use grid_explorer_client;
-use tokio::runtime::Runtime;
 use std::env;
+use tokio::runtime::Runtime;
 
 fn main() {
     // Create the runtime
@@ -34,65 +34,97 @@ fn main() {
 const NETWORK: &str = "devnet";
 
 async fn node_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let result = client.node_get_by_id(&"2anfZwrzskXiUHPLTqH1veJAia8G6rW2eFLy5YFMa1MP".to_string()).await;
+    let result = client
+        .node_get_by_id(&"2anfZwrzskXiUHPLTqH1veJAia8G6rW2eFLy5YFMa1MP".to_string())
+        .await;
     match result {
         Ok(node) => {
             println!("{:?}", node);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
-} 
+}
 
 async fn nodes_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.nodes_get().await;
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
-} 
+}
 
 async fn nodes_filter(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.nodes_filter(Some(1), 0, 0, 0, 0, Some(true)).await;
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
-} 
+}
 async fn workload_decommission(stellar_secret: String, user_id: i64, mnemonic: String, wid: i64) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.workload_decommission(wid).await;
     match result {
         Ok(decommissioned) => {
             println!("{:?}", decommissioned);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
-} 
+}
 async fn workload_poll(stellar_secret: String, user_id: i64, mnemonic: String, id: i64) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.workload_poll(id, 1 * 60).await;
@@ -103,51 +135,60 @@ async fn workload_poll(stellar_secret: String, user_id: i64, mnemonic: String, i
             if let serde_json::Value::Array(ips) = &result.data_json["IPs"] {
                 println!("first ip is {}", ips[0])
             }
-        },
-        Err(err) => {
-            match err {
-                grid_explorer_client::ExplorerError::WorkloadFailedError(v) => {
-                    println!("couldn't deploy workload: {}", v);
-                },
-                grid_explorer_client::ExplorerError::ExplorerClientError(v) => {
-                    println!("client error: {}", v);
-                },
-                grid_explorer_client::ExplorerError::WorkloadTimeoutError(v) => {
-                    println!("workload timeout: {}", v);
-                },
-                _ => {
-                    println!("another error: {:?}", err);
-                },
-                
-            }
         }
+        Err(err) => match err {
+            grid_explorer_client::ExplorerError::WorkloadFailedError(v) => {
+                println!("couldn't deploy workload: {}", v);
+            }
+            grid_explorer_client::ExplorerError::ExplorerClientError(v) => {
+                println!("client error: {}", v);
+            }
+            grid_explorer_client::ExplorerError::WorkloadTimeoutError(v) => {
+                println!("workload timeout: {}", v);
+            }
+            _ => {
+                println!("another error: {:?}", err);
+            }
+        },
     }
-} 
+}
 
 async fn farm_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.farm_get_by_id(1).await;
     match result {
         Ok(node) => {
             println!("{:?}", node);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
-} 
+}
 
 async fn farms_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.farms_get().await;
     match result {
         Ok(nodes) => {
             println!("{:?}", nodes);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
@@ -155,14 +196,20 @@ async fn farms_get(stellar_secret: String, user_id: i64, mnemonic: String) {
 }
 
 async fn workload_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.workload_get_by_id(28338).await;
     match result {
         Ok(workload) => {
             println!("{:?}", workload);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
@@ -170,14 +217,20 @@ async fn workload_get(stellar_secret: String, user_id: i64, mnemonic: String) {
 }
 
 async fn pool_get(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.pool_get_by_id(2).await;
     match result {
         Ok(pool) => {
             println!("{:?}", pool);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
@@ -185,11 +238,17 @@ async fn pool_get(stellar_secret: String, user_id: i64, mnemonic: String) {
 }
 
 async fn pool_create(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
 
-    let data = grid_explorer_client::reservation::ReservationData{
+    let data = grid_explorer_client::reservation::ReservationData {
         pool_id: 0,
         cus: 1,
         sus: 1,
@@ -202,7 +261,7 @@ async fn pool_create(stellar_secret: String, user_id: i64, mnemonic: String) {
     match result {
         Ok(pool) => {
             println!("{:?}", pool);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
@@ -210,22 +269,38 @@ async fn pool_create(stellar_secret: String, user_id: i64, mnemonic: String) {
 }
 
 async fn pools_by_owner(stellar_secret: String, user_id: i64, mnemonic: String) {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
     let result = client.pools_by_owner().await;
     match result {
         Ok(pool) => {
             println!("{:?}", pool);
-        },
+        }
         Err(err) => {
             println!("{:?}", err)
         }
     }
 }
 
-async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) -> Result<i64, grid_explorer_client::ExplorerError> {
-    let user = grid_explorer_client::identity::Identity::new(String::from(""), String::from(""), user_id, mnemonic.as_str()).unwrap();
+async fn zdb_create(
+    stellar_secret: String,
+    user_id: i64,
+    mnemonic: String,
+) -> Result<i64, grid_explorer_client::ExplorerError> {
+    let user = grid_explorer_client::identity::Identity::new(
+        String::from(""),
+        String::from(""),
+        user_id,
+        mnemonic.as_str(),
+    )
+    .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
 
@@ -234,7 +309,7 @@ async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) -> R
         mode: grid_explorer_client::workload::ZdbMode::ZDBModeUser,
         password: String::from(""),
         disk_type: grid_explorer_client::workload::DiskType::HDD,
-        public: false
+        public: false,
     };
 
     let pool_id = 11124;
@@ -244,11 +319,11 @@ async fn zdb_create(stellar_secret: String, user_id: i64, mnemonic: String) -> R
     match result {
         Ok(wid) => {
             println!("{:?}", wid);
-            return Ok(wid)
-        },
+            return Ok(wid);
+        }
         Err(err) => {
             println!("{:?}", err);
-            return Err(err)
+            return Err(err);
         }
     }
 }
