@@ -114,7 +114,7 @@ impl ExplorerClient {
         Ok(nodes)
     }
 
-    pub async fn node_get_by_id(&self, id: &String) -> Result<types::Node, ExplorerError> {
+    pub async fn node_get_by_id(&self, id: &str) -> Result<types::Node, ExplorerError> {
         let url = format!("{url}/api/v1/nodes/{id}", url = self.get_url(), id = id);
         Ok(self
             .client
@@ -160,16 +160,6 @@ impl ExplorerClient {
             .await?
             .json::<workload::Workload>()
             .await?)
-    }
-
-    pub fn _workload_state(&self, v: &workload::WorkloadResult) -> workload::ResultState {
-        if v.workload_id == "" {
-            workload::ResultState::Pending
-        } else if v.state == workload::ResultState::Ok {
-            workload::ResultState::Ok
-        } else {
-            workload::ResultState::Err
-        }
     }
 
     pub async fn workload_poll(
@@ -295,7 +285,7 @@ impl ExplorerClient {
 
         let data = workload::WorkloadDelete {
             signature: customer_signature,
-            tid: tid,
+            tid,
             epoch: since_the_epoch,
         };
         let url = format!(

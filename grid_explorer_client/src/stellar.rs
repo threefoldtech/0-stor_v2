@@ -45,7 +45,7 @@ impl StellarClient {
         let tft_asset_string: Vec<&str> = capacity_pool_information
             .escrow_information
             .asset
-            .split(":")
+            .split(':')
             .collect();
         let issuer = PublicKey::from_str(tft_asset_string[1])?;
         let tft_asset = Asset::new_credit(tft_asset_string[0], issuer)?;
@@ -82,14 +82,10 @@ impl StellarClient {
     }
 
     fn get_network(&self) -> Network {
-        match self.network {
-            _ => Network::new_public(),
-        }
+        Network::new_public()
     }
 
     fn get_horizon_url(&self) -> &str {
-        match self.network {
-            _ => "https://horizon.stellar.org",
-        }
+        "https://horizon.stellar.org"
     }
 }

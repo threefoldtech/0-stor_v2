@@ -73,11 +73,11 @@ struct NodeResourcePrice {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum PriceCurrency {
-    PriceCurrencyEUR,
-    PriceCurrencyUSD,
-    PriceCurrencyTFT,
-    PriceCurrencyAED,
-    PriceCurrencyGBP,
+    EUR,
+    USD,
+    TFT,
+    AED,
+    GBP,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
