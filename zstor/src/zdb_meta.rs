@@ -204,9 +204,29 @@ where
     }
 
     /// Return a stream of all function with a given prefix
-    fn keys<'a>(&'a mut self, prefix: &'a str) -> impl Stream<Item = String> + 'a {
+    async fn keys<'a>(
+        &'a mut self,
+        prefix: &'a str,
+    ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
         debug!("Starting metastore key iteration with prefix {}", prefix);
-        self.backends[0]
+
+        // First get the lengh of all the backends
+        let mut ns_requests = Vec::with_capacity(self.backends.len());
+        for backend in self.backends.iter_mut() {
+            ns_requests.push(backend.ns_info());
+        }
+        let mut most_keys_idx = 0;
+        let mut highest_key_count = 0;
+        for (idx, ns_info_res) in join_all(ns_requests).await.into_iter().enumerate() {
+            let ns_info = ns_info_res?;
+            if ns_info.entries() > highest_key_count {
+                most_keys_idx = idx;
+                highest_key_count = ns_info.entries();
+            }
+        }
+
+        // Now iterate over the keys of the longest backend
+        Ok(self.backends[most_keys_idx]
             .keys()
             // yes both of these move keywords are really necessary
             .filter_map(move |raw_key| async move {
@@ -214,7 +234,7 @@ where
                     return String::from_utf8(raw_key).ok();
                 };
                 None
-            })
+            }))
     }
 
     // hash a path using blake2b with 16 bytes of output, and hex encode the result
@@ -324,7 +344,7 @@ where
     async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
         // pin the stream on the heap for now
         let prefix = format!("/{}/meta/", self.prefix);
-        let meta_keys = Box::pin(self.keys(&prefix));
+        let meta_keys = Box::pin(self.keys(&prefix).await?);
         let keys: Vec<String> = meta_keys.collect().await;
         let mut data = Vec::with_capacity(keys.len());
         for key in keys.into_iter() {
@@ -401,7 +421,7 @@ where
     async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError> {
         // pin the stream on the heap for now
         let prefix = format!("/{}/failures/", self.prefix);
-        let meta_keys = Box::pin(self.keys(&prefix));
+        let meta_keys = Box::pin(self.keys(&prefix).await?);
         let keys: Vec<String> = meta_keys.collect().await;
         let mut data = Vec::with_capacity(keys.len());
         for key in keys.into_iter() {
