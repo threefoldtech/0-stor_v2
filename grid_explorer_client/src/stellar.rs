@@ -1,4 +1,5 @@
 use super::reservation;
+use crate::types::GridNetwork;
 use std::str::FromStr;
 use stellar_base::amount::{Amount, Stroops};
 use stellar_base::asset::Asset;
@@ -23,7 +24,7 @@ impl From<stellar_horizon::error::Error> for super::ExplorerError {
 }
 
 pub struct StellarClient {
-    pub network: &'static str,
+    pub network: GridNetwork,
     pub keypair: KeyPair,
 }
 

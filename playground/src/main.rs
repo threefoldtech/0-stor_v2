@@ -18,20 +18,20 @@ fn main() {
         // nodes_get(stellar_secret, user_id, mnemonic).await;
         // farms_get(stellar_secret, user_id, mnemonic).await;
         // farm_get().await;
-        workload_get(stellar_secret, user_id, mnemonic).await;
+        // workload_get(stellar_secret, user_id, mnemonic).await;
         // pool_get(stellar_secret, user_id, mnemonic).await;
         // pool_create(stellar_secret, user_id, mnemonic).await;
         // pools_by_owner(stellar_secret, user_id, mnemonic).await;
         // nodes_filter(stellar_secret, user_id, mnemonic).await;
-        // let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
-        // if let Ok(wid) = res {
-        //     workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
-        //     workload_decommission(stellar_secret, user_id, mnemonic, wid).await;
-        // }
+        let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        if let Ok(wid) = res {
+            workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
+            workload_decommission(stellar_secret, user_id, mnemonic, wid).await;
+        }
     });
 }
 
-const NETWORK: &str = "devnet";
+const NETWORK: grid_explorer_client::GridNetwork = grid_explorer_client::GridNetwork::Dev;
 
 async fn node_get(stellar_secret: String, user_id: i64, mnemonic: String) {
     let user = grid_explorer_client::identity::Identity::new(
