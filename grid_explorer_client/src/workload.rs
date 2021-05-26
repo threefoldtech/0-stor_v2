@@ -124,7 +124,17 @@ impl WorkloadBuilder {
     fn workload_type(&self) -> WorkloadType {
         match self.data.as_ref().unwrap() {
             WorkloadData::Zdb(_) => WorkloadType::WorkloadTypeZdb,
-            _ => WorkloadType::WorkloadTypeZdb,
+            WorkloadData::Container(_) => WorkloadType::WorkloadTypeContainer,
+            WorkloadData::Volume(_) => WorkloadType::WorkloadTypeVolume,
+            WorkloadData::Network(_) => WorkloadType::WorkloadTypeNetwork,
+            WorkloadData::K8S(_) => WorkloadType::WorkloadTypeKubernetes,
+            WorkloadData::GatewayProxy(_) => WorkloadType::WorkloadTypeProxy,
+            WorkloadData::GatewayReverseProxy(_) => WorkloadType::WorkloadTypeReverseProxy,
+            WorkloadData::GatewaySubdomain(_) => WorkloadType::WorkloadTypeSubDomain,
+            WorkloadData::GatewayDelegate(_) => WorkloadType::WorkloadTypeDomainDelegate,
+            WorkloadData::Gateway4To6(_) => WorkloadType::WorkloadTypeGateway4To6,
+            WorkloadData::PublicIP(_) => WorkloadType::WorkloadTypePublicIP,
+            _ => WorkloadType::WorkloadTypeNetworkResource,
         }
     }
     pub fn build(self, user_identity: &Identity) -> Result<Workload, BuilderError> {
@@ -267,6 +277,7 @@ pub enum WorkloadData {
     GatewaySubdomain(GatewaySubdomainInformation),
     GatewayDelegate(GatewayDelegateInformation),
     Gateway4To6(Gateway4To6Information),
+    VirtualMachine(VirtualMachineInformation),
 }
 
 impl SignatureChallenge for WorkloadData {
@@ -282,6 +293,16 @@ impl SignatureChallenge for WorkloadData {
 pub struct VolumeInformation {
     pub size: i64,
     pub kind: DiskType,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct VirtualMachineInformation {
+    pub size: i64,
+    pub network_id: String,
+    pub name: String,
+    pub ipaddress: std::net::IpAddr,
+    pub ssh_keys: Vec<String>,
+    pub public_ip: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
