@@ -383,7 +383,7 @@ impl InternalZdb {
     /// # Panics
     ///
     /// panics if the data len is larger than 8MiB
-    async fn set(&mut self, key: Option<&[u8]>, data: &[u8]) -> ZdbResult<Vec<u8>> {
+    async fn set(&self, key: Option<&[u8]>, data: &[u8]) -> ZdbResult<Vec<u8>> {
         trace!(
             "storing data in zdb (key: {} length: {} remote: {})",
             if let Some(key) = key {
@@ -402,7 +402,7 @@ impl InternalZdb {
             redis::cmd("SET")
                 .arg(key.unwrap_or(&[]))
                 .arg(data)
-                .query_async(&mut self.conn),
+                .query_async(&mut self.conn.clone()),
         )
         .await
         .map_err(|_| ZdbError {
@@ -420,7 +420,7 @@ impl InternalZdb {
     }
 
     /// Retrieve some previously stored data with its key
-    async fn get(&mut self, key: &[u8]) -> ZdbResult<Option<Vec<u8>>> {
+    async fn get(&self, key: &[u8]) -> ZdbResult<Option<Vec<u8>>> {
         trace!(
             "loading data at key {} from {}",
             hex::encode(key),
@@ -430,7 +430,7 @@ impl InternalZdb {
             ZDB_TIMEOUT,
             redis::cmd("GET")
                 .arg(key)
-                .query_async::<_, Option<Vec<u8>>>(&mut self.conn),
+                .query_async::<_, Option<Vec<u8>>>(&mut self.conn.clone()),
         )
         .await
         .map_err(|_| ZdbError {
@@ -452,7 +452,7 @@ impl InternalZdb {
     }
 
     /// Delete some previously stored data by its key
-    async fn delete(&mut self, key: &[u8]) -> ZdbResult<()> {
+    async fn delete(&self, key: &[u8]) -> ZdbResult<()> {
         trace!(
             "deleting data at key {} from {}",
             hex::encode(key),
@@ -461,7 +461,9 @@ impl InternalZdb {
 
         timeout(
             ZDB_TIMEOUT,
-            redis::cmd("DEL").arg(key).query_async(&mut self.conn),
+            redis::cmd("DEL")
+                .arg(key)
+                .query_async(&mut self.conn.clone()),
         )
         .await
         .map_err(|_| ZdbError {
@@ -492,7 +494,7 @@ impl InternalZdb {
     }
 
     /// Query info about the namespace.
-    async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+    async fn ns_info(&self) -> ZdbResult<NsInfo> {
         let list: String = timeout(
             ZDB_TIMEOUT,
             redis::cmd("NSINFO")
@@ -501,7 +503,7 @@ impl InternalZdb {
                 } else {
                     "default"
                 })
-                .query_async(&mut self.conn),
+                .query_async(&mut self.conn.clone()),
         )
         .await
         .map_err(|_| ZdbError {
@@ -606,7 +608,7 @@ impl SequentialZdb {
     /// connection is established, the namespace is checked to make sure it is indeed running in
     /// sequential mode.
     pub async fn new(ci: ZdbConnectionInfo) -> ZdbResult<Self> {
-        let mut internal = InternalZdb::new(ci).await?;
+        let internal = InternalZdb::new(ci).await?;
         let ns_info = internal.ns_info().await?;
         match ns_info.mode() {
             ZdbRunMode::Seq => Ok(Self { internal }),
@@ -624,7 +626,7 @@ impl SequentialZdb {
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
     /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
     /// so we internally chunk the data.
-    pub async fn set(&mut self, data: &[u8]) -> ZdbResult<Vec<Key>> {
+    pub async fn set(&self, data: &[u8]) -> ZdbResult<Vec<Key>> {
         let mut keys =
             Vec::with_capacity((data.len() as f64 / MAX_ZDB_CHUNK_SIZE as f64).ceil() as usize);
 
@@ -641,7 +643,7 @@ impl SequentialZdb {
     }
 
     /// Retrieve some previously stored data with its keys
-    pub async fn get(&mut self, keys: &[Key]) -> ZdbResult<Option<Vec<u8>>> {
+    pub async fn get(&self, keys: &[Key]) -> ZdbResult<Option<Vec<u8>>> {
         let mut data: Vec<u8> = Vec::new();
         for key in keys {
             trace!("loading data at key {}", key);
@@ -664,7 +666,7 @@ impl SequentialZdb {
 
     /// Query info about the namespace.
     #[inline]
-    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+    pub async fn ns_info(&self) -> ZdbResult<NsInfo> {
         self.internal.ns_info().await
     }
 }
@@ -674,7 +676,7 @@ impl UserKeyZdb {
     /// connection is established, the namespace is checked to make sure it is indeed running in
     /// userkey mode.
     pub async fn new(ci: ZdbConnectionInfo) -> ZdbResult<Self> {
-        let mut internal = InternalZdb::new(ci).await?;
+        let internal = InternalZdb::new(ci).await?;
         let ns_info = internal.ns_info().await?;
         match ns_info.mode() {
             ZdbRunMode::User => Ok(Self { internal }),
@@ -691,7 +693,7 @@ impl UserKeyZdb {
 
     /// Store some data in the zdb under the provided key. Data size is limited to 8MiB, anything
     /// larger will result in an error.
-    pub async fn set<K: AsRef<[u8]>>(&mut self, key: K, data: &[u8]) -> ZdbResult<()> {
+    pub async fn set<K: AsRef<[u8]>>(&self, key: K, data: &[u8]) -> ZdbResult<()> {
         if data.len() > MAX_ZDB_DATA_SIZE {
             return Err(ZdbError {
                 kind: ZdbErrorKind::Write,
@@ -708,17 +710,17 @@ impl UserKeyZdb {
     }
 
     /// Retrieve some previously stored data from it's key.
-    pub async fn get<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<Option<Vec<u8>>> {
+    pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> ZdbResult<Option<Vec<u8>>> {
         Ok(self.internal.get(&key.as_ref()).await?)
     }
 
     /// Delete some previously stored data from it's key.
-    pub async fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> ZdbResult<()> {
+    pub async fn delete<K: AsRef<[u8]>>(&self, key: K) -> ZdbResult<()> {
         Ok(self.internal.delete(&key.as_ref()).await?)
     }
 
     /// Get a stream which yields all the keys in the namespace.
-    pub fn keys(&mut self) -> impl Stream<Item = Vec<u8>> + '_ {
+    pub fn keys(&self) -> impl Stream<Item = Vec<u8>> + '_ {
         trace!("key iteration on {}", self.connection_info().address());
         self.internal.keys().map(|st| st.raw_key)
     }
@@ -731,7 +733,7 @@ impl UserKeyZdb {
 
     /// Query info about the namespace.
     #[inline]
-    pub async fn ns_info(&mut self) -> ZdbResult<NsInfo> {
+    pub async fn ns_info(&self) -> ZdbResult<NsInfo> {
         self.internal.ns_info().await
     }
 }
