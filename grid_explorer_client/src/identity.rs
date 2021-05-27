@@ -26,6 +26,7 @@ pub struct Identity {
     pub email: String,
     pub user_id: i64,
     pub keypair: Keypair,
+    pub mnemonic: Mnemonic,
 }
 
 impl Identity {
@@ -51,6 +52,7 @@ impl Identity {
             email,
             user_id,
             keypair,
+            mnemonic,
         };
 
         Ok(id)

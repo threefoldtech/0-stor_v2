@@ -302,17 +302,18 @@ async fn zdb_create(
     )
     .unwrap();
 
+    let node_id = String::from("3NAkUYqm5iPRmNAnmLfjwdreqDssvsebj4uPUt9BxFPm");
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
+    let node_public_key = client.node_get_by_id(&node_id).await?.public_key_hex;
     let zdb = grid_explorer_client::workload::ZdbInformationBuilder::new()
         .size(5)
         .mode(grid_explorer_client::workload::ZdbMode::ZdbModeUser)
-        .password(String::from(""))
+        .password(String::from("password"))
         .disk_type(grid_explorer_client::workload::DiskType::Ssd)
         .public(true)
-        .build()?;
+        .build(&client.user_identity, &node_public_key)?;
 
     let pool_id = 11124;
-    let node_id = String::from("3NAkUYqm5iPRmNAnmLfjwdreqDssvsebj4uPUt9BxFPm");
 
     let result = client.create_zdb_reservation(node_id, pool_id, zdb).await;
     match result {

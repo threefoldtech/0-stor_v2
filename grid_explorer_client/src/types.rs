@@ -20,7 +20,7 @@ pub struct Node {
     workloads: WorkloadAmount,
     free_to_use: bool,
     approved: bool,
-    public_key_hex: String,
+    pub public_key_hex: String,
     wg_ports: Option<Vec<i64>>,
     deleted: bool,
     reserved: bool,
