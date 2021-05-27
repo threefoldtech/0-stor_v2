@@ -18,6 +18,8 @@ name = "test-etcd"
 path = "src/test_etcd.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+vendored = ["openssl"]
 
 [dependencies]
 reed-solomon-erasure = "4"
@@ -41,6 +43,7 @@ etcd-client = { version = "0.6", features = ["tls", "tls-roots"] }
 log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
 async-trait = "0.1"
 bincode = "1"
+openssl = { version = "0.10", features = ["vendored"], optional = true }
 
 [dev-dependencies]
 rand = "0.7"
