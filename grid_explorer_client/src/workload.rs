@@ -1,3 +1,4 @@
+use crate::encryption;
 use crate::identity::Identity;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
@@ -8,6 +9,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub enum BuilderError {
     MissingField(String),
+    EncryptionError(String),
+}
+
+impl From<encryption::EncryptionError> for BuilderError {
+    fn from(e: encryption::EncryptionError) -> Self {
+        match e {
+            encryption::EncryptionError::EncryptionError(s) => BuilderError::EncryptionError(s),
+        }
+    }
 }
 
 pub trait SignatureChallenge {
@@ -374,15 +384,23 @@ impl ZdbInformationBuilder {
         }
         None
     }
-    pub fn build(self) -> Result<ZdbInformation, BuilderError> {
+    pub fn build(
+        self,
+        identity: &Identity,
+        node_public_key: &str,
+    ) -> Result<ZdbInformation, BuilderError> {
         if let Some(e) = self.validate() {
             return Err(e);
         }
-        // TODO: encrypt password
+        let encrypted = encryption::encrypt(
+            self.password.unwrap().as_str(),
+            &identity.mnemonic,
+            node_public_key,
+        )?;
         Ok(ZdbInformation {
             size: self.size.unwrap(),
             mode: self.mode.unwrap(),
-            password: self.password.unwrap(),
+            password: encrypted,
             disk_type: self.disk_type.unwrap(),
             public: self.public.unwrap(),
         })
