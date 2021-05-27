@@ -1,4 +1,3 @@
-use grid_explorer_client;
 use std::env;
 use tokio::runtime::Runtime;
 
@@ -14,15 +13,15 @@ fn main() {
 
     // Execute the future, blocking the current thread until completion
     rt.block_on(async {
-        // node_get(stellar_secret, user_id, mnemonic).await;
-        // nodes_get(stellar_secret, user_id, mnemonic).await;
-        // farms_get(stellar_secret, user_id, mnemonic).await;
-        // farm_get().await;
-        // workload_get(stellar_secret, user_id, mnemonic).await;
-        // pool_get(stellar_secret, user_id, mnemonic).await;
-        // pool_create(stellar_secret, user_id, mnemonic).await;
-        // pools_by_owner(stellar_secret, user_id, mnemonic).await;
-        // nodes_filter(stellar_secret, user_id, mnemonic).await;
+        node_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        nodes_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        farms_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        farm_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        workload_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        pool_get(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        pool_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        pools_by_owner(stellar_secret.clone(), user_id, mnemonic.clone()).await;
+        nodes_filter(stellar_secret.clone(), user_id, mnemonic.clone()).await;
         let res = zdb_create(stellar_secret.clone(), user_id, mnemonic.clone()).await;
         if let Ok(wid) = res {
             workload_poll(stellar_secret.clone(), user_id, mnemonic.clone(), wid).await;
@@ -127,7 +126,7 @@ async fn workload_poll(stellar_secret: String, user_id: i64, mnemonic: String, i
     .unwrap();
 
     let client = grid_explorer_client::ExplorerClient::new(NETWORK, stellar_secret.as_str(), user);
-    let result = client.workload_poll(id, 1 * 60).await;
+    let result = client.workload_poll(id, 60).await;
     match result {
         Ok(v) => {
             println!("workload deployed: {:?}", v);
