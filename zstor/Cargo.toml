@@ -17,6 +17,10 @@ path = "src/test_zdb.rs"
 name = "test-etcd"
 path = "src/test_etcd.rs"
 
+[[bench]]
+name = "aes_encryptor"
+harness = false
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 vendored = ["openssl"]
@@ -47,4 +51,5 @@ openssl = { version = "0.10", features = ["vendored"], optional = true }
 
 [dev-dependencies]
 rand = "0.7"
+criterion = "0.3"
 
