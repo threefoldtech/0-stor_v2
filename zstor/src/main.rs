@@ -618,7 +618,7 @@ async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
         Vec::with_capacity(metadata.shards().len());
     for si in metadata.shards().iter().cloned() {
         shard_loads.push(tokio::spawn(async move {
-            let mut db = match SequentialZdb::new(si.zdb().clone()).await {
+            let db = match SequentialZdb::new(si.zdb().clone()).await {
                 Ok(ok) => ok,
                 Err(e) => return (si.index(), Err(e.into())),
             };
@@ -690,7 +690,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
 
         for backend in backends {
             handles.push(tokio::spawn(async move {
-                let mut db = SequentialZdb::new(backend.clone()).await?;
+                let db = SequentialZdb::new(backend.clone()).await?;
                 // check space in backend
                 let ns_info = db.ns_info().await?;
                 match ns_info.free_space() {
@@ -738,7 +738,7 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
     );
 
     let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
-    for (mut db, (shard_idx, shard)) in dbs.into_iter().zip(shards.into_iter().enumerate()) {
+    for (db, (shard_idx, shard)) in dbs.into_iter().zip(shards.into_iter().enumerate()) {
         handles.push(tokio::spawn(async move {
             let keys = db.set(&shard).await?;
             Ok(ShardInfo::new(
