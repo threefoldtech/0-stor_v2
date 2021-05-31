@@ -157,6 +157,8 @@ enum Cmd {
     /// metadata storage is reachable. Validation of the configuration also includes making sure
     /// at least 1 distribution can be generated for writing files.
     Test,
+    /// Start 0-stor in monitor daemon mode
+    Monitor,
 }
 
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
@@ -178,6 +180,10 @@ impl Filter for ModuleFilter {
 }
 
 fn main() -> ZstorResult<()> {
+    if let Cmd::Monitor = Opts::from_args().cmd {
+        zstor_v2::monitor::start();
+        return Ok(());
+    }
     if let Err(e) = real_main() {
         error!("{}", e);
         return Err(e);
@@ -449,6 +455,7 @@ fn real_main() -> ZstorResult<()> {
                 // retrieve a config
                 cfg.shard_stores()?;
             }
+            _ => unreachable!(),
         };
 
         Ok(())
