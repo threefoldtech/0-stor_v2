@@ -16,6 +16,8 @@ use std::fmt;
 use tokio::task::JoinError;
 use zdb::ZdbError;
 
+/// Implementations of all components as actors.
+pub mod actors;
 /// Contains a general compression interface and implementations.
 pub mod compression;
 /// Contains global configuration details.
@@ -26,12 +28,17 @@ pub mod encryption;
 pub mod erasure;
 /// A small etcd cluster client to load and set metadata.
 pub mod etcd;
-/// Metadata for stored shards after encoding
+/// Metadata for stored shards after encoding.
 pub mod meta;
+/// Entrypoint for running 0-stor as a daemon.
+pub mod monitor;
+/// The main data pipeline to go from the raw data to the representation which can be saved in the
+/// backend.
+pub mod pipeline;
 /// Very basic 0-db client, allowing to connect to a given (password protected) namespace, and
 /// write and read data from it.
 pub mod zdb;
-/// A metadata implementation on top of zdb
+/// A metadata implementation on top of zdb.
 pub mod zdb_meta;
 
 /// Global result type for zstor operations
