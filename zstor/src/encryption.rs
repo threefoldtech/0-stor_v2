@@ -1,3 +1,4 @@
+use crate::config;
 use aes_gcm::aead::{generic_array::GenericArray, Aead, NewAead};
 use rand::prelude::*;
 use serde::{
@@ -23,7 +24,14 @@ pub trait Encryptor {
     fn decrypt(&self, data: &[u8]) -> EncryptionResult<Vec<u8>>;
 }
 
-/// An implementation of the AES encryption algorithm running in GCM mode.
+/// Create a new [`Encryptor`] from an encryption config object.
+pub fn new(ce: config::Encryption) -> Box<dyn Encryptor> {
+    match ce {
+        config::Encryption::Aes(key) => Box::new(AesGcm::new(key)),
+    }
+}
+
+///  An implementation of the AES encryption algorithm running in GCM mode.
 #[derive(Debug, Clone)]
 pub struct AesGcm {
     /// the key to use for encrypting and decrypting.
