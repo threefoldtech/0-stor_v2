@@ -37,14 +37,11 @@ fn main() {
             1,
             2,
             [0; 16],
-            Encryption::new(
-                "AES",
-                &SymmetricKey::new([
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5,
-                    6, 7, 8, 9, 0, 1,
-                ]),
-            ),
-            Compression::new("snappy"),
+            Encryption::Aes(SymmetricKey::new([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7,
+                8, 9, 0, 1,
+            ])),
+            Compression::Snappy,
         );
         data.add_shard(ShardInfo::new(
             0,

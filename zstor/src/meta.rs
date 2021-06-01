@@ -222,9 +222,8 @@ pub async fn new_metastore(
                     .map(|ci| UserKeyZdb::new(ci.clone())),
             )
             .await?;
-            let encryptor = match cfg.encryption().algorithm() {
-                "AES" => encryption::AesGcm::new(cfg.encryption().key().clone()),
-                _ => panic!("Unknown metadata encryption algorithm"),
+            let encryptor = match cfg.encryption() {
+                Encryption::Aes(key) => encryption::AesGcm::new(key.clone()),
             };
             let encoder = zdb_cfg.encoder();
             let store = ZdbMetaStore::new(

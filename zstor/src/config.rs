@@ -48,19 +48,22 @@ pub struct Group {
 /// Configuration for the used encryption.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Encryption {
-    /// Algorithm to use.
-    algorithm: String, // TODO: make enum
-    /// encryption key to use in hex form. The key must be 64 characters long (32 bytes).
-    key: SymmetricKey,
+#[serde(tag = "algorithm", content = "key")]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Encryption {
+    /// Aes-Gcm authenticated encryption scheme using the AES cipher in GCM mode. The 256 bit
+    /// variant is used, which requires a 32 byte key
+    Aes(SymmetricKey),
 }
 
 /// Configuration for the used compression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Compression {
-    /// Algorithm to use.
-    algorithm: String, // TODO: make enum
+#[serde(tag = "algorithm")]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    /// The snappy encryption algorithm
+    Snappy,
 }
 
 /// Configuration for the metadata store to use
@@ -91,18 +94,6 @@ impl Config {
             )
             .into());
         };
-        if self.encryption.algorithm != "AES" {
-            return Err(
-                format!("unknown encryption algorithm {}", self.encryption.algorithm).into(),
-            );
-        }
-        if self.compression.algorithm != "snappy" {
-            return Err(format!(
-                "unknown compression algorithm {}",
-                self.compression.algorithm
-            )
-            .into());
-        }
 
         Ok(())
     }
@@ -323,40 +314,6 @@ impl Config {
     }
 }
 
-impl Encryption {
-    /// Create a new encryption instance
-    pub fn new(algorithm: &str, key: &SymmetricKey) -> Self {
-        Self {
-            algorithm: algorithm.to_owned(),
-            key: key.clone(),
-        }
-    }
-
-    /// Get the name of the encryption algorithm to use
-    pub fn algorithm(&self) -> &str {
-        &self.algorithm
-    }
-
-    /// Get the key to use for the encryption algorithm
-    pub fn key(&self) -> &SymmetricKey {
-        &self.key
-    }
-}
-
-impl Compression {
-    /// Create a new compression instance
-    pub fn new(algorithm: &str) -> Self {
-        Self {
-            algorithm: algorithm.to_owned(),
-        }
-    }
-
-    /// Get the name of the compression algorithm to use
-    pub fn algorithm(&self) -> &str {
-        &self.algorithm
-    }
-}
-
 /// An error in the configuration
 #[derive(Debug)]
 pub struct ConfigError {
@@ -427,13 +384,8 @@ mod tests {
                     backends: vec![saddr3, saddr4],
                 },
             ],
-            encryption: super::Encryption {
-                key: SymmetricKey::new([0; 32]),
-                algorithm: "AES".into(),
-            },
-            compression: super::Compression {
-                algorithm: "snappy".into(),
-            },
+            encryption: super::Encryption::Aes(SymmetricKey::new([0u8; 32])),
+            compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
                 vec![
@@ -530,13 +482,8 @@ password = "supersecretpass"
                     backends: vec![saddr3, saddr4],
                 },
             ],
-            encryption: super::Encryption {
-                key: SymmetricKey::new([0; 32]),
-                algorithm: "AES".into(),
-            },
-            compression: super::Compression {
-                algorithm: "snappy".into(),
-            },
+            encryption: super::Encryption::Aes(SymmetricKey::new([0; 32])),
+            compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
                 vec![

@@ -18,7 +18,7 @@ use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::Config;
-use zstor_v2::encryption::{AesGcm, Encryptor};
+use zstor_v2::encryption;
 use zstor_v2::erasure::{Encoder, Shard};
 use zstor_v2::meta::{new_metastore, Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::{SequentialZdb, ZdbError, ZdbResult};
@@ -306,7 +306,7 @@ fn real_main() -> ZstorResult<()> {
                 })?;
                 let decoded = recover_data(&metadata).await?;
 
-                let encryptor = AesGcm::new(metadata.encryption().key().clone());
+                let encryptor = encryption::new(metadata.encryption().clone());
                 let decrypted = encryptor.decrypt(&decoded)?;
 
                 // create the file
@@ -596,7 +596,7 @@ async fn save_file(
     let compressed = cursor.into_inner();
     trace!("compressed size: {} bytes", original_size);
 
-    let encryptor = AesGcm::new(cfg.encryption().key().clone());
+    let encryptor = encryption::new(cfg.encryption().clone());
     let encrypted = encryptor.encrypt(&compressed)?;
     trace!("encrypted size: {} bytes", encrypted.len());
 

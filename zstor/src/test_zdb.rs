@@ -54,8 +54,8 @@ fn main() {
             None,
         );
 
-        let enc = Encryption::new("AES", &ENCRYPTIONKEY);
-        let compression = Compression::new("snappy");
+        let enc = Encryption::Aes(ENCRYPTIONKEY);
+        let compression = Compression::Snappy;
 
         // write
         for i in 0..1000 {
