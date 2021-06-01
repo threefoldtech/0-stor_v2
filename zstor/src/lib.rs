@@ -226,3 +226,12 @@ impl From<MetaStoreError> for ZstorError {
         }
     }
 }
+
+impl From<toml::de::Error> for ZstorError {
+    fn from(e: toml::de::Error) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Config,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
