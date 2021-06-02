@@ -46,7 +46,7 @@ fn main() {
         let encoder = Encoder::new(2, 2);
         let encryptor = AesGcm::new(ENCRYPTIONKEY);
 
-        let mut metastore = ZdbMetaStore::new(
+        let metastore = ZdbMetaStore::new(
             backends,
             encoder,
             encryptor,
@@ -80,7 +80,7 @@ fn main() {
         let encoder = Encoder::new(2, 2);
         let encryptor = AesGcm::new(ENCRYPTIONKEY);
 
-        let mut metastore = ZdbMetaStore::new(
+        let metastore = ZdbMetaStore::new(
             backends,
             encoder,
             encryptor,
