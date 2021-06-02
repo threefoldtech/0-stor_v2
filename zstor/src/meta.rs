@@ -141,39 +141,39 @@ impl ShardInfo {
 /// internal detail of the metadata storage.
 pub trait MetaStore {
     /// Save the metadata for the file identified by `path` with a given prefix
-    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError>;
+    async fn save_meta(&self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError>;
 
     /// Save the metadata for a given key
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError>;
+    async fn save_meta_by_key(&self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError>;
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, MetaStoreError>;
+    async fn load_meta(&self, path: &Path) -> Result<Option<MetaData>, MetaStoreError>;
 
     /// loads the metadata for a given path and prefix
-    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, MetaStoreError>;
+    async fn load_meta_by_key(&self, key: &str) -> Result<Option<MetaData>, MetaStoreError>;
 
     /// Mark a Zdb backend as replaced based on its connection info
-    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError>;
+    async fn set_replaced(&self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError>;
 
     /// Check to see if a Zdb backend has been marked as replaced based on its connection info
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
+    async fn is_replaced(&self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects
-    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;
+    async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;
 
     /// Save info about a failed upload under the failures key
     async fn save_failure(
-        &mut self,
+        &self,
         data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
     ) -> Result<(), MetaStoreError>;
 
     /// Delete info about a failed upload from the failure key
-    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError>;
+    async fn delete_failure(&self, fm: &FailureMeta) -> Result<(), MetaStoreError>;
 
     /// Get all the paths of files which failed to upload
-    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError>;
+    async fn get_failures(&self) -> Result<Vec<FailureMeta>, MetaStoreError>;
 }
 
 /// A high lvl error returned by the metadata store

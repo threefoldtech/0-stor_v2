@@ -101,7 +101,7 @@ where
     }
 
     /// helper functions to encrypt and write data to backends.
-    async fn write_value(&mut self, key: &str, value: &[u8]) -> ZdbMetaStoreResult<()> {
+    async fn write_value(&self, key: &str, value: &[u8]) -> ZdbMetaStoreResult<()> {
         debug!("Writing data to zdb metastore");
         trace!("Encrypt value");
         let value = self.encryptor.encrypt(value)?;
@@ -119,8 +119,7 @@ where
         // We don't support redundant backends for the metadata so no point in randomizing which
         // ones are used, they all are.
         let mut store_requests = Vec::with_capacity(self.backends.len());
-        for ((shard_idx, shard), backend) in
-            chunks.iter_mut().enumerate().zip(self.backends.iter_mut())
+        for ((shard_idx, shard), backend) in chunks.iter_mut().enumerate().zip(self.backends.iter())
         {
             // grab the checksum before inserting the shard idx
             let checksum = shard.checksum();
@@ -143,11 +142,11 @@ where
     }
 
     /// helper function read data from backends and decrypt it.
-    async fn read_value(&mut self, key: &str) -> ZdbMetaStoreResult<Option<Vec<u8>>> {
+    async fn read_value(&self, key: &str) -> ZdbMetaStoreResult<Option<Vec<u8>>> {
         debug!("Reading data from zdb metastore for key {}", key);
 
         let mut read_requests = Vec::with_capacity(self.backends.len());
-        for backend in self.backends.iter_mut() {
+        for backend in self.backends.iter() {
             read_requests.push(backend.get(key));
         }
 
@@ -204,11 +203,11 @@ where
     }
 
     /// Helper function to delete a value from backends
-    async fn delete_value(&mut self, key: &str) -> ZdbMetaStoreResult<()> {
+    async fn delete_value(&self, key: &str) -> ZdbMetaStoreResult<()> {
         debug!("Deleting data from zdb metastore for key {}", key);
 
         let mut delete_requests = Vec::with_capacity(self.backends.len());
-        for backend in self.backends.iter_mut() {
+        for backend in self.backends.iter() {
             delete_requests.push(backend.delete(key));
         }
 
@@ -221,14 +220,14 @@ where
 
     /// Return a stream of all function with a given prefix
     async fn keys<'a>(
-        &'a mut self,
+        &'a self,
         prefix: &'a str,
     ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
         debug!("Starting metastore key iteration with prefix {}", prefix);
 
         // First get the lengh of all the backends
         let mut ns_requests = Vec::with_capacity(self.backends.len());
-        for backend in self.backends.iter_mut() {
+        for backend in self.backends.iter() {
             ns_requests.push(backend.ns_info());
         }
         let mut most_keys_idx = 0;
@@ -325,7 +324,7 @@ impl<E> MetaStore for ZdbMetaStore<E>
 where
     E: Encryptor + Send + Sync,
 {
-    async fn save_meta_by_key(&mut self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError> {
+    async fn save_meta_by_key(&self, key: &str, meta: &MetaData) -> Result<(), MetaStoreError> {
         debug!("Saving metadata for key {}", key);
         // binary encode data
         trace!("Binary encoding metadata");
@@ -334,7 +333,7 @@ where
         Ok(self.write_value(key, &bin_meta).await?)
     }
 
-    async fn load_meta_by_key(&mut self, key: &str) -> Result<Option<MetaData>, MetaStoreError> {
+    async fn load_meta_by_key(&self, key: &str) -> Result<Option<MetaData>, MetaStoreError> {
         debug!("Loading metadata for key {}", key);
 
         // read data back
@@ -349,15 +348,15 @@ where
         ))
     }
 
-    async fn load_meta(&mut self, path: &Path) -> Result<Option<MetaData>, MetaStoreError> {
+    async fn load_meta(&self, path: &Path) -> Result<Option<MetaData>, MetaStoreError> {
         Ok(self.load_meta_by_key(&self.build_key(path)?).await?)
     }
 
-    async fn save_meta(&mut self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
+    async fn save_meta(&self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
         Ok(self.save_meta_by_key(&self.build_key(path)?, meta).await?)
     }
 
-    async fn object_metas(&mut self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
+    async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
         // pin the stream on the heap for now
         let prefix = format!("/{}/meta/", self.prefix);
         let meta_keys = Box::pin(self.keys(&prefix).await?);
@@ -391,20 +390,20 @@ where
         Ok(data)
     }
 
-    async fn set_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
+    async fn set_replaced(&self, ci: &ZdbConnectionInfo) -> Result<(), MetaStoreError> {
         let hash = hex::encode(ci.blake2_hash());
         let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.write_value(&key, &[]).await?)
     }
 
-    async fn is_replaced(&mut self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
+    async fn is_replaced(&self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError> {
         let hash = hex::encode(ci.blake2_hash());
         let key = format!("/{}/replaced_backends/{}", self.prefix, hash);
         Ok(self.read_value(&key).await?.is_some())
     }
 
     async fn save_failure(
-        &mut self,
+        &self,
         data_path: &Path,
         key_dir_path: &Option<PathBuf>,
         should_delete: bool,
@@ -428,13 +427,13 @@ where
         Ok(self.write_value(&key, &meta).await?)
     }
 
-    async fn delete_failure(&mut self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
+    async fn delete_failure(&self, fm: &FailureMeta) -> Result<(), MetaStoreError> {
         let key = self.build_failure_key(fm.data_path())?;
 
         Ok(self.delete_value(&key).await?)
     }
 
-    async fn get_failures(&mut self) -> Result<Vec<FailureMeta>, MetaStoreError> {
+    async fn get_failures(&self) -> Result<Vec<FailureMeta>, MetaStoreError> {
         // pin the stream on the heap for now
         let prefix = format!("/{}/failures/", self.prefix);
         let meta_keys = Box::pin(self.keys(&prefix).await?);
