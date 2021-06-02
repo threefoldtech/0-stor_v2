@@ -6,6 +6,7 @@
 //! write to 0-dbs, compress, encrypt and erasure code data, and write to etc. There are also
 //! config structs available.
 
+use actix::MailboxError;
 use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
@@ -219,6 +220,15 @@ impl From<toml::de::Error> for ZstorError {
     fn from(e: toml::de::Error) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Config,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<MailboxError> for ZstorError {
+    fn from(e: MailboxError) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Async,
             internal: InternalError::Other(Box::new(e)),
         }
     }
