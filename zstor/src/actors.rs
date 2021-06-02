@@ -4,3 +4,6 @@ pub mod config;
 pub mod meta;
 /// Actor implementation of the pipeline
 pub mod pipeline;
+/// Actor implementation of the main zstor functionality. This actor takes care of the actual
+/// object manipulation.
+pub mod zstor;
