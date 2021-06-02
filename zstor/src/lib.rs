@@ -10,7 +10,6 @@ use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
-use etcd::EtcdError;
 use meta::MetaStoreError;
 use std::fmt;
 use tokio::task::JoinError;
@@ -26,8 +25,6 @@ pub mod config;
 pub mod encryption;
 /// Contains a general erasure encoder.
 pub mod erasure;
-/// A small etcd cluster client to load and set metadata.
-pub mod etcd;
 /// Metadata for stored shards after encoding.
 pub mod meta;
 /// Entrypoint for running 0-stor as a daemon.
@@ -160,15 +157,6 @@ impl From<ZdbError> for ZstorError {
         ZstorError {
             kind: ZstorErrorKind::Storage,
             internal: InternalError::Zdb(e),
-        }
-    }
-}
-
-impl From<EtcdError> for ZstorError {
-    fn from(e: EtcdError) -> Self {
-        ZstorError {
-            kind: ZstorErrorKind::Metadata,
-            internal: InternalError::Other(Box::new(e)),
         }
     }
 }
