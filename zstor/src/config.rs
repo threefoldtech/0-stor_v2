@@ -4,7 +4,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-/// The full configuration for the data encoding and decoding. This included the etcd to save the
+/// The full configuration for the data encoding and decoding. This included the metastore to save the
 /// data to, as well as all backends which may or may not be used when data is written.
 ///
 /// Backends are separated into groups. A single group _should_ represent physically close nodes,
@@ -72,8 +72,6 @@ pub enum Compression {
 #[serde(tag = "type", content = "config")]
 #[serde(rename_all = "lowercase")]
 pub enum Meta {
-    /// Write metadata to an etcd cluster
-    Etcd(crate::etcd::EtcdConfig),
     /// Metadata storage on top of user-key zdbs, with client side redundancy and encryption
     Zdb(crate::zdb_meta::ZdbMetaStoreConfig),
 }
@@ -387,15 +385,49 @@ mod tests {
             encryption: super::Encryption::Aes(SymmetricKey::new([0u8; 32])),
             compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
-            meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
-                vec![
-                    "http://127.0.0.1:2379".to_string(),
-                    "http://127.0.0.1:22379".to_string(),
-                    "http://127.0.0.1:32379".to_string(),
-                ],
+            meta: super::Meta::Zdb(crate::zdb_meta::ZdbMetaStoreConfig::new(
+                2,
+                2,
                 "someprefix".to_string(),
-                None,
-                None,
+                super::Encryption::Aes(SymmetricKey::new([1u8; 32])),
+                vec![
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9900"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9901"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9902"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9903"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                ],
             )),
         };
 
@@ -413,11 +445,36 @@ key = "0000000000000000000000000000000000000000000000000000000000000000"
 algorithm = "snappy"
 
 [meta]
-type = "etcd"
+type = "zdb"
 
 [meta.config]
-endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
+data_shards = 2
+parity_shards = 2
 prefix = "someprefix"
+
+[meta.config.encryption]
+algorithm = "AES"
+key = "0101010101010101010101010101010101010101010101010101010101010101"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9900"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9901"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9902"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9903"
+namespace = "test2"
+password = "supersecretpass"
 
 [[groups]]
 [[groups.backends]]
@@ -485,15 +542,49 @@ password = "supersecretpass"
             encryption: super::Encryption::Aes(SymmetricKey::new([0; 32])),
             compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
-            meta: super::Meta::Etcd(crate::etcd::EtcdConfig::new(
-                vec![
-                    "http://127.0.0.1:2379".to_string(),
-                    "http://127.0.0.1:22379".to_string(),
-                    "http://127.0.0.1:32379".to_string(),
-                ],
+            meta: super::Meta::Zdb(crate::zdb_meta::ZdbMetaStoreConfig::new(
+                2,
+                2,
                 "someprefix".to_string(),
-                None,
-                None,
+                super::Encryption::Aes(SymmetricKey::new([1u8; 32])),
+                vec![
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9900"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9901"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9902"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                    ZdbConnectionInfo::new(
+                        "[2a02:1802:5e::dead:beef]:9903"
+                            .to_socket_addrs()
+                            .unwrap()
+                            .next()
+                            .unwrap(),
+                        Some("test2".to_string()),
+                        Some("supersecretpass".to_string()),
+                    ),
+                ],
             )),
         };
 
@@ -511,11 +602,36 @@ key = "0000000000000000000000000000000000000000000000000000000000000000"
 algorithm = "snappy"
 
 [meta]
-type = "etcd"
+type = "zdb"
 
 [meta.config]
-endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
+data_shards = 2
+parity_shards = 2
 prefix = "someprefix"
+
+[meta.config.encryption]
+algorithm = "AES"
+key = "0101010101010101010101010101010101010101010101010101010101010101"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9900"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9901"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9902"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9903"
+namespace = "test2"
+password = "supersecretpass"
 
 [[groups]]
 [[groups.backends]]

@@ -1,6 +1,5 @@
 use crate::config::{self, Compression, Encryption};
 use crate::encryption;
-use crate::etcd::Etcd;
 use crate::zdb::{Key, UserKeyZdb, ZdbConnectionInfo};
 use crate::zdb_meta::ZdbMetaStore;
 use async_trait::async_trait;
@@ -210,10 +209,6 @@ pub async fn new_metastore(
     cfg: &config::Config,
 ) -> MetaStoreResult<Box<dyn MetaStore + Send + Sync>> {
     match cfg.meta() {
-        config::Meta::Etcd(etcd_cfg) => {
-            let store = Etcd::new(&etcd_cfg, cfg.virtual_root().clone()).await?;
-            Ok(Box::new(store))
-        }
         config::Meta::Zdb(zdb_cfg) => {
             let backends = try_join_all(
                 zdb_cfg

@@ -24,12 +24,28 @@ use std::{fmt, io};
 pub struct ZdbMetaStoreConfig {
     data_shards: usize,
     parity_shards: usize,
-    encryption: config::Encryption,
     prefix: String,
+    encryption: config::Encryption,
     backends: Vec<ZdbConnectionInfo>,
 }
 
 impl ZdbMetaStoreConfig {
+    /// Create a new [`ZdbMetaStoreConfig`] with the given data.
+    pub fn new(
+        data_shards: usize,
+        parity_shards: usize,
+        prefix: String,
+        encryption: config::Encryption,
+        backends: Vec<ZdbConnectionInfo>,
+    ) -> ZdbMetaStoreConfig {
+        Self {
+            data_shards,
+            parity_shards,
+            encryption,
+            prefix,
+            backends,
+        }
+    }
     /// Get the connection info for all the specified backends.
     pub fn backends(&self) -> &[ZdbConnectionInfo] {
         &self.backends

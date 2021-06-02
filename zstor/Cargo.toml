@@ -13,10 +13,6 @@ path = "src/main.rs"
 name = "test-zdb"
 path = "src/test_zdb.rs"
 
-[[bin]]
-name = "test-etcd"
-path = "src/test_etcd.rs"
-
 [[bench]]
 name = "aes_encryptor"
 harness = false
