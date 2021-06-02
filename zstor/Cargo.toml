@@ -39,11 +39,10 @@ tokio = { version = "1", features = ["rt", "macros", "fs"] }
 futures = "0.3"
 blake2 = "0.9"
 gray-codes = "0.1"
-etcd-client = { version = "0.6", features = ["tls", "tls-roots"] }
 log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
 async-trait = "0.1"
 bincode = "1"
-openssl = { version = "0.10", features = ["vendored"], optional = true }
+openssl = { version = "0.10", features = ["vendored"], optional = true } # TODO: still needed?
 actix = { git = "https://github.com/actix/actix" }
 
 [dev-dependencies]
