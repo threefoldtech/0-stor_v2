@@ -10,9 +10,9 @@ use crate::{
 };
 use actix::prelude::*;
 use futures::future::{join_all, try_join_all};
-use log::{debug, trace};
+use log::{debug, error, trace};
 use std::{ops::Deref, path::PathBuf};
-use tokio::task::JoinHandle;
+use tokio::{fs, task::JoinHandle};
 
 #[derive(Message)]
 #[rtype(result = "Result<(), ZstorError>")]
@@ -27,6 +27,33 @@ pub struct Store {
     pub save_failure: bool,
     /// Attempt to delete the file after a successful upload.
     pub delete: bool,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ZstorError>")]
+/// Message for the retrieve command of zstor.
+pub struct Retrieve {
+    /// Path of the file to retrieve.
+    pub file: PathBuf,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ZstorError>")]
+/// Message for the rebuild command of zstor.
+pub struct Rebuild {
+    /// Path to the file to rebuild
+    ///
+    /// The path to the file to rebuild. The path is used to create a metadata key (by hashing
+    /// the full path). The original data is decoded, and then reencoded as per the provided
+    /// config. The new metadata is then used to replace the old metadata in the metadata
+    /// store.
+    pub file: Option<PathBuf>,
+    /// Raw key to reconstruct
+    ///
+    /// The raw key to reconstruct. If this argument is given, the metadata store is checked
+    /// for this key. If it exists, the data will be reconstructed according to the new policy,
+    /// and the old metadata is replaced with the new metadata.
+    pub key: Option<String>,
 }
 
 /// Actor for the main zstor object encoding and decoding.
@@ -78,7 +105,7 @@ where
                 let mut cfg = running_cfg.deref().clone();
                 let (mut metadata, key_path, shards) = pipeline
                     .send(StoreFile {
-                        file: msg.file,
+                        file: msg.file.clone(),
                         key_path: msg.key_path,
                         cfg: running_cfg,
                     })
@@ -163,9 +190,39 @@ where
                 })
                 .await??;
 
+                if msg.delete {
+                    if let Err(e) = fs::remove_file(&msg.file).await {
+                        // Log an error however it is not fatal, delete is done on a best effort
+                        // basis.
+                        error!("Failed to delete file {:?}: {}", &msg.file, e);
+                    }
+                }
+
                 Ok(())
             }
             .into_actor(self),
         ))
+    }
+}
+
+impl<T> Handler<Retrieve> for ZstorActor<T>
+where
+    T: MetaStore + Unpin + 'static,
+{
+    type Result = AtomicResponse<Self, Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: Retrieve, ctx: &mut Self::Context) -> Self::Result {
+        todo!();
+    }
+}
+
+impl<T> Handler<Rebuild> for ZstorActor<T>
+where
+    T: MetaStore + Unpin + 'static,
+{
+    type Result = AtomicResponse<Self, Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: Rebuild, ctx: &mut Self::Context) -> Self::Result {
+        todo!();
     }
 }
