@@ -45,10 +45,17 @@ pub struct RecoverFile {
 }
 
 #[derive(Message)]
-#[rtype(result = "Result<(), ZstorError>")]
-/// Required info to rebuild a file from its raw parts as they are stored, to store them again so
+#[rtype(result = "Result<(MetaData, Vec<Shard>), ZstorError>")]
+/// Required info to rebuild file data from its raw parts as they are stored, to store them again so
 /// all parts are available again
-pub struct Rebuild {}
+pub struct RebuildData {
+    /// The original data which was recovered.
+    pub input: Vec<Option<Vec<u8>>>,
+    /// Config to use.
+    pub cfg: Arc<Config>,
+    /// Metadata associated with the file, generated during the upload.
+    pub input_meta: MetaData,
+}
 
 /// The actor implementation of the pipeline
 pub struct PipelineActor;
@@ -124,7 +131,7 @@ impl Handler<StoreFile> for PipelineActor {
 impl Handler<RecoverFile> for PipelineActor {
     type Result = Result<(), ZstorError>;
 
-    fn handle(&mut self, msg: RecoverFile, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RecoverFile, _: &mut Self::Context) -> Self::Result {
         let encoder = Encoder::new(msg.meta.data_shards(), msg.meta.parity_shards());
         let decoded = encoder.decode(msg.shards)?;
 
@@ -159,11 +166,24 @@ impl Handler<RecoverFile> for PipelineActor {
     }
 }
 
-impl Handler<Rebuild> for PipelineActor {
-    type Result = Result<(), ZstorError>;
+impl Handler<RebuildData> for PipelineActor {
+    type Result = Result<(MetaData, Vec<Shard>), ZstorError>;
 
-    fn handle(&mut self, msg: Rebuild, ctx: &mut Self::Context) -> Self::Result {
-        todo!();
+    fn handle(&mut self, msg: RebuildData, _: &mut Self::Context) -> Self::Result {
+        let encoder = Encoder::new(msg.input_meta.data_shards(), msg.input_meta.parity_shards());
+        let decoded = encoder.decode(msg.input)?;
+
+        let encoder = Encoder::new(msg.cfg.data_shards(), msg.cfg.parity_shards());
+        Ok((
+            MetaData::new(
+                msg.input_meta.data_shards(),
+                msg.input_meta.parity_shards(),
+                *msg.input_meta.checksum(),
+                msg.input_meta.encryption().clone(),
+                msg.input_meta.compression().clone(),
+            ),
+            encoder.encode(decoded),
+        ))
     }
 }
 
