@@ -1,16 +1,17 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
-    meta::{MetaStoreActor, SaveMeta},
-    pipeline::{PipelineActor, StoreFile},
+    meta::{LoadMeta, MetaStoreActor, SaveMeta},
+    pipeline::{PipelineActor, RecoverFile, StoreFile},
 };
 use crate::{
+    erasure::Shard,
     meta::{MetaStore, ShardInfo},
     zdb::{SequentialZdb, ZdbError, ZdbResult},
     ZstorError, ZstorResult,
 };
 use actix::prelude::*;
 use futures::future::{join_all, try_join_all};
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use std::{ops::Deref, path::PathBuf};
 use tokio::{fs, task::JoinHandle};
 
@@ -211,8 +212,83 @@ where
 {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
-    fn handle(&mut self, msg: Retrieve, ctx: &mut Self::Context) -> Self::Result {
-        todo!();
+    fn handle(&mut self, msg: Retrieve, _: &mut Self::Context) -> Self::Result {
+        let pipeline = self.pipeline.clone();
+        let config = self.cfg.clone();
+        let meta = self.meta.clone();
+        AtomicResponse::new(Box::pin(
+            async move {
+                let cfg = config.send(GetConfig).await?;
+                let metadata = meta
+                    .send(LoadMeta {
+                        path: msg.file.clone(),
+                    })
+                    .await??
+                    .ok_or_else(|| {
+                        ZstorError::new_io(
+                            "no metadata found for file".to_string(),
+                            std::io::Error::from(std::io::ErrorKind::NotFound),
+                        )
+                    })?;
+                // attempt to retrieve all shards
+                let mut shard_loads: Vec<JoinHandle<(usize, Result<(_, _), ZstorError>)>> =
+                    Vec::with_capacity(metadata.shards().len());
+                for si in metadata.shards().iter().cloned() {
+                    shard_loads.push(tokio::spawn(async move {
+                        let db = match SequentialZdb::new(si.zdb().clone()).await {
+                            Ok(ok) => ok,
+                            Err(e) => return (si.index(), Err(e.into())),
+                        };
+                        match db.get(si.key()).await {
+                            Ok(potential_shard) => match potential_shard {
+                                Some(shard) => (si.index(), Ok((shard, *si.checksum()))),
+                                None => (
+                                    si.index(),
+                                    // TODO: Proper error here?
+                                    Err(ZstorError::new_io(
+                                        "shard not found".to_string(),
+                                        std::io::Error::from(std::io::ErrorKind::NotFound),
+                                    )),
+                                ),
+                            },
+                            Err(e) => (si.index(), Err(e.into())),
+                        }
+                    }));
+                }
+
+                // Since this is the amount of actual shards needed to pass to the encoder, we calculate the
+                // amount we will have from the amount of parity and data shards. Reason is that the `shards()`
+                // might not have all data shards, due to a bug on our end, or later in case we allow for
+                // degraded writes.
+                let mut shards: Vec<Option<Vec<u8>>> =
+                    vec![None; metadata.data_shards() + metadata.parity_shards()];
+                for shard_info in join_all(shard_loads).await {
+                    let (idx, shard) = shard_info?;
+                    match shard {
+                        Err(e) => warn!("could not download shard {}: {}", idx, e),
+                        Ok((raw_shard, saved_checksum)) => {
+                            let shard = Shard::from(raw_shard);
+                            let checksum = shard.checksum();
+                            if saved_checksum != checksum {
+                                warn!("shard {} checksum verification failed", idx);
+                                continue;
+                            }
+                            shards[idx] = Some(shard.into_inner());
+                        }
+                    }
+                }
+
+                pipeline
+                    .send(RecoverFile {
+                        path: msg.file,
+                        shards,
+                        cfg,
+                        meta: metadata,
+                    })
+                    .await?
+            }
+            .into_actor(self),
+        ))
     }
 }
 
