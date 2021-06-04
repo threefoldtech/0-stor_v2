@@ -8,7 +8,7 @@ use crate::{
 };
 use actix::prelude::*;
 use blake2::{digest::VariableOutput, VarBlake2b};
-use log::{debug, trace};
+use log::{debug, info, trace};
 use std::{
     convert::TryInto,
     fs::File,
@@ -34,8 +34,14 @@ pub struct StoreFile {
 #[rtype(result = "Result<(), ZstorError>")]
 /// Required info to recover a file from its raw parts as they are stored.
 pub struct RecoverFile {
-    /// The path to place the recovered file
+    /// The path to place the recovered file.
     pub path: PathBuf,
+    /// The data shards retrieved from the backend
+    pub shards: Vec<Option<Vec<u8>>>,
+    /// Config to use.
+    pub cfg: Arc<Config>,
+    /// Metadata associated with the file, generated during the upload.
+    pub meta: MetaData,
 }
 
 #[derive(Message)]
@@ -119,7 +125,37 @@ impl Handler<RecoverFile> for PipelineActor {
     type Result = Result<(), ZstorError>;
 
     fn handle(&mut self, msg: RecoverFile, ctx: &mut Self::Context) -> Self::Result {
-        todo!();
+        let encoder = Encoder::new(msg.meta.data_shards(), msg.meta.parity_shards());
+        let decoded = encoder.decode(msg.shards)?;
+
+        info!("rebuild data from shards");
+
+        let encryptor = encryption::new(msg.meta.encryption().clone());
+        let decrypted = encryptor.decrypt(&decoded)?;
+
+        // create the file
+        let mut out = if let Some(ref root) = msg.cfg.virtual_root() {
+            File::create(root.join(&msg.path))
+        } else {
+            File::create(&msg.path)
+        }
+        .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
+
+        let mut cursor = Cursor::new(decrypted);
+        Snappy.decompress(&mut cursor, &mut out)?;
+
+        // TODO: whats this supposed to do???
+        // if !std::fs::metadata(&msg.path)
+        //     .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
+        //     .is_file()
+        // {
+        //     return Err(ZstorError::new_io(
+        //         "only files can be stored".to_string(),
+        //         std::io::Error::from(std::io::ErrorKind::InvalidData),
+        //     ));
+        // }
+
+        Ok(())
     }
 }
 
