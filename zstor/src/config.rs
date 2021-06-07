@@ -3,6 +3,7 @@ use gray_codes::{InclusionExclusion, SetMutation};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 
 /// The full configuration for the data encoding and decoding. This included the metastore to save the
 /// data to, as well as all backends which may or may not be used when data is written.
@@ -27,6 +28,11 @@ pub struct Config {
     /// virtual root on the filesystem to use, this path will be removed from all files saved. If
     /// a file path is loaded, the path will be interpreted as relative to this directory
     root: Option<std::path::PathBuf>,
+    /// Optional path to a unix socket. This socket is required in case zstor needs to run in
+    /// daemon mode. If this is present, zstor invocations will first try to connect to the
+    /// socket. If it is not found, the command is run in-process, else it is encoded and send to
+    /// the socket so the daemon can process it.
+    socket: Option<PathBuf>,
     /// configuration to use for the encryption stage
     encryption: Encryption,
     /// configuration to use for the compression stage
@@ -124,6 +130,14 @@ impl Config {
     /// Return the metastore configuration from the config.
     pub fn meta(&self) -> &Meta {
         &self.meta
+    }
+
+    /// Return the socket path if it is set.
+    pub fn socket(&self) -> Option<&Path> {
+        match self.socket {
+            Some(ref sock) => Some(sock),
+            None => None,
+        }
     }
 
     /// Return a list of all available backends in the config.
@@ -374,6 +388,7 @@ mod tests {
             parity_shards: 5,
             redundant_groups: 1,
             redundant_nodes: 1,
+            socket: Some("/tmp/zstor.sock".into()),
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],
@@ -436,6 +451,7 @@ parity_shards = 5
 redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
+socket = "/tmp/zstor.sock"
 
 [encryption]
 algorithm = "AES"
@@ -531,6 +547,7 @@ password = "supersecretpass"
             parity_shards: 5,
             redundant_groups: 1,
             redundant_nodes: 1,
+            socket: Some("/tmp/zstor.sock".into()),
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],
@@ -593,6 +610,7 @@ parity_shards = 5
 redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
+socket = "/tmp/zstor.sock"
 
 [encryption]
 algorithm = "AES"

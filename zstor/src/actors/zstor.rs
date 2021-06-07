@@ -6,17 +6,42 @@ use crate::actors::{
 use crate::{
     config::Config,
     erasure::Shard,
-    meta::{MetaData, MetaStore, ShardInfo},
+    meta::{Checksum, MetaData, MetaStore, ShardInfo},
     zdb::{SequentialZdb, ZdbError, ZdbResult},
     ZstorError, ZstorResult,
 };
 use actix::prelude::*;
 use futures::future::{join_all, try_join_all};
 use log::{debug, error, info, trace, warn};
+use serde::{Deserialize, Serialize};
 use std::{ops::Deref, path::PathBuf};
 use tokio::{fs, task::JoinHandle};
 
-#[derive(Message)]
+#[derive(Serialize, Deserialize, Debug)]
+/// All possible commands zstor operates on.
+pub enum ZstorCommand {
+    /// Command to store a file.
+    Store(Store),
+    /// Command to retrieve a file.
+    Retrieve(Retrieve),
+    /// Command to rebuild file data in the backend.
+    Rebuild(Rebuild),
+    /// Command to check if a file exists in the backend.
+    Check(Check),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+/// All possible responses zstor can send.
+pub enum ZstorResponse {
+    /// Success without any returned data,
+    Success,
+    /// An error, the error message is included.
+    Err(String),
+    /// A checksum of a file.
+    Checksum(Checksum),
+}
+
+#[derive(Serialize, Deserialize, Debug, Message)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the store command of zstor.
 pub struct Store {
@@ -31,7 +56,7 @@ pub struct Store {
     pub delete: bool,
 }
 
-#[derive(Message)]
+#[derive(Serialize, Deserialize, Debug, Message)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the retrieve command of zstor.
 pub struct Retrieve {
@@ -39,7 +64,7 @@ pub struct Retrieve {
     pub file: PathBuf,
 }
 
-#[derive(Message)]
+#[derive(Serialize, Deserialize, Debug, Message)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the rebuild command of zstor.
 pub struct Rebuild {
@@ -56,6 +81,14 @@ pub struct Rebuild {
     /// for this key. If it exists, the data will be reconstructed according to the new policy,
     /// and the old metadata is replaced with the new metadata.
     pub key: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Message)]
+#[rtype(result = "Result<Checksum, ZstorError>")]
+/// Message for the check command of zstor.
+pub struct Check {
+    /// The path to check for the presence of a file.
+    pub path: PathBuf,
 }
 
 /// Actor for the main zstor object encoding and decoding.
@@ -270,6 +303,26 @@ where
             }
             .into_actor(self),
         ))
+    }
+}
+
+impl<T> Handler<Check> for ZstorActor<T>
+where
+    T: MetaStore + Unpin + 'static,
+{
+    type Result = ResponseFuture<Result<Checksum, ZstorError>>;
+
+    fn handle(&mut self, msg: Check, _: &mut Self::Context) -> Self::Result {
+        let meta = self.meta.clone();
+        Box::pin(async move {
+            match meta.send(LoadMeta { path: msg.path }).await?? {
+                Some(meta) => Ok(meta.checksum().clone()),
+                None => Err(ZstorError::new_io(
+                    "Metadata not found".to_string(),
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "Metadata not found"),
+                )),
+            }
+        })
     }
 }
 

@@ -13,9 +13,12 @@ use std::convert::TryInto;
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::process;
 use structopt::StructOpt;
-use tokio::runtime::Builder;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinHandle;
+use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
 use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::Config;
 use zstor_v2::encryption;
@@ -151,14 +154,21 @@ enum Cmd {
         #[structopt(name = "file", long, short, parse(from_os_str))]
         file: PathBuf,
     },
+    /// Run zstor in monitor daemon mode.
+    ///
+    /// Runs the monitor. This keeps running untill an exit signal is send to the process (SIGINT).
+    /// Additional features are available depending on the configuration. All communication happens
+    /// over a unix socket, specified in the config. If such a socket path is present in the
+    /// config, other commands will try to connect to the daemon, and run the commands through the
+    /// daemon.
+    Monitor,
+
     /// Test the configuration and backends
     ///
     /// Tests if the configuration is valid, and all backends are available. Also makes sure the
     /// metadata storage is reachable. Validation of the configuration also includes making sure
     /// at least 1 distribution can be generated for writing files.
     Test,
-    /// Start 0-stor in monitor daemon mode
-    Monitor,
 }
 
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
@@ -179,12 +189,9 @@ impl Filter for ModuleFilter {
     }
 }
 
-fn main() -> ZstorResult<()> {
-    if let Cmd::Monitor = Opts::from_args().cmd {
-        zstor_v2::monitor::start();
-        return Ok(());
-    }
-    if let Err(e) = real_main() {
+#[actix_rt::main]
+async fn main() -> ZstorResult<()> {
+    if let Err(e) = real_main().await {
         error!("{}", e);
         return Err(e);
     }
@@ -192,274 +199,420 @@ fn main() -> ZstorResult<()> {
     Ok(())
 }
 
-fn real_main() -> ZstorResult<()> {
-    // construct an async runtime, do this manually so we can select the single threaded runtime.
-    let rt = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        // Realistically this should never happen. If it does happen, its fatal anyway.
-        .expect("Could not build configure program runtime");
+async fn real_main() -> ZstorResult<()> {
+    let opts = Opts::from_args();
 
-    rt.block_on(async {
-        let opts = Opts::from_args();
+    // TODO: add check for file name
+    let mut rolled_log_file = opts.log_file.clone();
+    let name = if let Some(ext) = rolled_log_file.extension() {
+        format!(
+            "{}.{{}}.{}",
+            rolled_log_file.file_stem().unwrap().to_str().unwrap(),
+            ext.to_str().unwrap(),
+        )
+    } else {
+        format!(
+            "{}.{{}}",
+            rolled_log_file.file_stem().unwrap().to_str().unwrap(),
+        )
+    };
+    rolled_log_file.set_file_name(name);
 
-        // TODO: add check for file name
-        let mut rolled_log_file = opts.log_file.clone();
-        let name = if let Some(ext) = rolled_log_file.extension() {
-            format!(
-                "{}.{{}}.{}",
-                rolled_log_file.file_stem().unwrap().to_str().unwrap(),
-                ext.to_str().unwrap(),
+    // init logger
+    let policy = CompoundPolicy::new(
+        Box::new(SizeTrigger::new(10 * MIB)),
+        Box::new(
+            FixedWindowRoller::builder()
+                .build(rolled_log_file.to_str().unwrap(), 5)
+                .unwrap(),
+        ),
+    );
+    let log_file = RollingFileAppender::builder()
+        .append(true)
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S %Z)(local)}: {l} {m}{n}",
+        )))
+        .build(&opts.log_file, Box::new(policy))
+        .unwrap();
+    let log_config = LogConfig::builder()
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ModuleFilter {
+                    module: "zstor_v2".to_string(),
+                }))
+                .build("logfile", Box::new(log_file)),
+        )
+        .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(log::LevelFilter::Debug),
+        )
+        .unwrap();
+    log4rs::init_config(log_config).unwrap();
+
+    let cfg = read_cfg(&opts.config)?;
+
+    match opts.cmd {
+        Cmd::Store {
+            file,
+            key_path,
+            save_failure,
+            error_on_failure: _error_on_failure,
+            delete,
+        } => {
+            // if file.is_file() {
+            //     handle_file_upload(&mut *cluster, &file, &key_path, save_failure, delete, &cfg)
+            //         .await?;
+            // } else if file.is_dir() {
+            //     for entry in get_dir_entries(&file).map_err(|e| {
+            //         ZstorError::new_io(format!("Could not read dir entries in {:?}", file), e)
+            //     })? {
+            //         if let Err(e) = handle_file_upload(
+            //             &mut *cluster,
+            //             &entry,
+            //             &key_path,
+            //             save_failure,
+            //             delete,
+            //             &cfg,
+            //         )
+            //         .await
+            //         {
+            //             error!("Could not upload file {:?}: {}", entry, e);
+            //             if error_on_failure {
+            //                 return Err(e);
+            //             } else {
+            //                 continue;
+            //             }
+            //         }
+            //     }
+            // } else {
+            //     return Err(ZstorError::new_io(
+            //         "Unknown file type".to_string(),
+            //         std::io::Error::from(std::io::ErrorKind::InvalidData),
+            //     ));
+            // }
+            handle_command(
+                ZstorCommand::Store(Store {
+                    file,
+                    key_path,
+                    save_failure,
+                    delete,
+                }),
+                opts.config,
             )
-        } else {
-            format!(
-                "{}.{{}}",
-                rolled_log_file.file_stem().unwrap().to_str().unwrap(),
+            .await?
+        }
+        Cmd::Retrieve { file } => {
+            // let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
+            //     ZstorError::new_io(
+            //         "no metadata found for file".to_string(),
+            //         std::io::Error::from(std::io::ErrorKind::NotFound),
+            //     )
+            // })?;
+            // let decoded = recover_data(&metadata).await?;
+
+            // let encryptor = encryption::new(metadata.encryption().clone());
+            // let decrypted = encryptor.decrypt(&decoded)?;
+
+            // // create the file
+            // let mut out = if let Some(ref root) = cfg.virtual_root() {
+            //     File::create(root.join(&file))
+            // } else {
+            //     File::create(file)
+            // }
+            // .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
+
+            // let mut cursor = Cursor::new(decrypted);
+            // Snappy.decompress(&mut cursor, &mut out)?;
+
+            // // get file size
+            // let file_size = if let Ok(meta) = out.metadata() {
+            //     Some(meta.len())
+            // } else {
+            //     // TODO: is this possible?
+            //     None
+            // };
+
+            // if !std::fs::metadata(&file)
+            //     .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
+            //     .is_file()
+            // {
+            //     return Err(ZstorError::new_io(
+            //         "only files can be stored".to_string(),
+            //         std::io::Error::from(std::io::ErrorKind::InvalidData),
+            //     ));
+            // }
+
+            // info!(
+            //     "Recovered file {:?} ({} bytes) from {}",
+            //     if let Some(ref root) = cfg.virtual_root() {
+            //         root.join(&file)
+            //     } else {
+            //         file.clone()
+            //     },
+            //     if let Some(size) = file_size {
+            //         size.to_string()
+            //     } else {
+            //         "unknown".to_string()
+            //     },
+            //     metadata
+            //         .shards()
+            //         .iter()
+            //         .map(|si| si.zdb().address().to_string())
+            //         .collect::<Vec<_>>()
+            //         .join(",")
+            // );
+            handle_command(ZstorCommand::Retrieve(Retrieve { file }), opts.config).await?
+        }
+        Cmd::Rebuild { file, key } => {
+            // if file.is_none() && key.is_none() {
+            //     panic!("Either `file` or `key` argument must be set");
+            // }
+            // if file.is_some() && key.is_some() {
+            //     panic!("Only one of `file` or `key` argument must be set");
+            // }
+            // let old_metadata = if let Some(file) = file {
+            //     cluster.load_meta(file).await?.ok_or_else(|| {
+            //         ZstorError::new_io(
+            //             "no metadata found for file".to_string(),
+            //             std::io::Error::from(std::io::ErrorKind::NotFound),
+            //         )
+            //     })?
+            // } else if let Some(key) = key {
+            //     // key is set so the unwrap is safe
+            //     cluster.load_meta_by_key(key).await?.ok_or_else(|| {
+            //         ZstorError::new_io(
+            //             "no metadata found for file".to_string(),
+            //             std::io::Error::from(std::io::ErrorKind::NotFound),
+            //         )
+            //     })?
+            // } else {
+            //     unreachable!();
+            // };
+            // let decoded = recover_data(&old_metadata).await?;
+
+            // let metadata = store_data(decoded, *old_metadata.checksum(), &cfg).await?;
+            // if let Some(file) = file {
+            //     cluster.save_meta(&file, &metadata).await?;
+            // } else if let Some(key) = key {
+            //     cluster.save_meta_by_key(key, &metadata).await?;
+            // };
+            // info!(
+            //     "Rebuild file from {} to {}",
+            //     old_metadata
+            //         .shards()
+            //         .iter()
+            //         .map(|si| si.zdb().address().to_string())
+            //         .collect::<Vec<_>>()
+            //         .join(","),
+            //     metadata
+            //         .shards()
+            //         .iter()
+            //         .map(|si| si.zdb().address().to_string())
+            //         .collect::<Vec<_>>()
+            //         .join(",")
+            // );
+            handle_command(ZstorCommand::Rebuild(Rebuild { file, key }), opts.config).await?
+        }
+        Cmd::Check { file } => {
+            // match cluster.load_meta(file).await? {
+            //     Some(metadata) => {
+            //         let file = canonicalize_path(&file)?;
+            //         // strip the virtual_root, if one is set
+            //         let actual_path = if let Some(ref virtual_root) = cfg.virtual_root() {
+            //             file.strip_prefix(virtual_root).map_err(|_| {
+            //                 ZstorError::new_io(
+            //                     format!(
+            //                         "path prefix {} not found",
+            //                         virtual_root.as_path().to_string_lossy()
+            //                     ),
+            //                     std::io::Error::from(std::io::ErrorKind::NotFound),
+            //                 )
+            //             })?
+            //         } else {
+            //             file.as_path()
+            //         };
+            //         println!(
+            //             "{}\t{}",
+            //             hex::encode(metadata.checksum()),
+            //             actual_path.to_string_lossy()
+            //         );
+            //     }
+            //     None => std::process::exit(1),
+            // };
+            handle_command(ZstorCommand::Check(Check { path: file }), opts.config).await?
+        }
+        Cmd::Test => {
+            // load config => already done
+            // connect to metastore => already done
+            // connect to backends
+            debug!("Testing 0-db reachability");
+            for conn_result in join_all(
+                cfg.backends()
+                    .into_iter()
+                    .cloned()
+                    .map(|ci| tokio::spawn(async move { SequentialZdb::new(ci).await })),
             )
-        };
-        rolled_log_file.set_file_name(name);
+            .await
+            {
+                // type here is Resut<Result<Zdb, ZdbError>, JoinError>
+                // so we need to try on the outer JoinError to get to the possible ZdbError
+                conn_result??;
+            }
 
-        // init logger
-        let policy = CompoundPolicy::new(
-            Box::new(SizeTrigger::new(10 * MIB)),
-            Box::new(
-                FixedWindowRoller::builder()
-                    .build(rolled_log_file.to_str().unwrap(), 5)
-                    .unwrap(),
-            ),
-        );
-        let log_file = RollingFileAppender::builder()
-            .append(true)
-            .encoder(Box::new(PatternEncoder::new(
-                "{d(%Y-%m-%d %H:%M:%S %Z)(local)}: {l} {m}{n}",
-            )))
-            .build(&opts.log_file, Box::new(policy))
-            .unwrap();
-        let log_config = LogConfig::builder()
-            .appender(
-                Appender::builder()
-                    .filter(Box::new(ModuleFilter {
-                        module: "zstor_v2".to_string(),
-                    }))
-                    .build("logfile", Box::new(log_file)),
-            )
-            .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
-            .build(
-                Root::builder()
-                    .appender("logfile")
-                    .build(log::LevelFilter::Debug),
-            )
-            .unwrap();
-        log4rs::init_config(log_config).unwrap();
+            // retrieve a config
+            cfg.shard_stores()?;
+        }
+        Cmd::Monitor => {
+            let server = if let Some(socket) = cfg.socket() {
+                UnixListener::bind(socket)
+                    .map_err(|e| ZstorError::new_io("Failed to bind unix socket".into(), e))?
+            } else {
+                eprintln!("Missing \"socket\" argument in config");
+                process::exit(1);
+            };
+            let zstor = zstor_v2::setup_system(opts.config).await?;
 
-        let cfg = read_cfg(&opts.config)?;
-
-        // Get from config if not present
-        let mut cluster = new_metastore(&cfg).await?;
-
-        match opts.cmd {
-            Cmd::Store {
-                file,
-                key_path,
-                save_failure,
-                error_on_failure,
-                delete,
-            } => {
-                if file.is_file() {
-                    handle_file_upload(&mut *cluster, &file, &key_path, save_failure, delete, &cfg)
-                        .await?;
-                } else if file.is_dir() {
-                    for entry in get_dir_entries(&file).map_err(|e| {
-                        ZstorError::new_io(format!("Could not read dir entries in {:?}", file), e)
-                    })? {
-                        if let Err(e) = handle_file_upload(
-                            &mut *cluster,
-                            &entry,
-                            &key_path,
-                            save_failure,
-                            delete,
-                            &cfg,
-                        )
-                        .await
-                        {
-                            error!("Could not upload file {:?}: {}", entry, e);
-                            if error_on_failure {
-                                return Err(e);
-                            } else {
+            loop {
+                tokio::select! {
+                    accepted = server.accept() => {
+                        let (con, remote) = match accepted {
+                            Err(e) => {
+                                error!("Could not accept client connection: {}", e);
                                 continue;
-                            }
-                        }
-                    }
-                } else {
-                    return Err(ZstorError::new_io(
-                        "Unknown file type".to_string(),
-                        std::io::Error::from(std::io::ErrorKind::InvalidData),
-                    ));
-                }
-            }
-            Cmd::Retrieve { ref file } => {
-                let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
-                    ZstorError::new_io(
-                        "no metadata found for file".to_string(),
-                        std::io::Error::from(std::io::ErrorKind::NotFound),
-                    )
-                })?;
-                let decoded = recover_data(&metadata).await?;
-
-                let encryptor = encryption::new(metadata.encryption().clone());
-                let decrypted = encryptor.decrypt(&decoded)?;
-
-                // create the file
-                let mut out = if let Some(ref root) = cfg.virtual_root() {
-                    File::create(root.join(&file))
-                } else {
-                    File::create(file)
-                }
-                .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
-
-                let mut cursor = Cursor::new(decrypted);
-                Snappy.decompress(&mut cursor, &mut out)?;
-
-                // get file size
-                let file_size = if let Ok(meta) = out.metadata() {
-                    Some(meta.len())
-                } else {
-                    // TODO: is this possible?
-                    None
-                };
-
-                if !std::fs::metadata(&file)
-                    .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
-                    .is_file()
-                {
-                    return Err(ZstorError::new_io(
-                        "only files can be stored".to_string(),
-                        std::io::Error::from(std::io::ErrorKind::InvalidData),
-                    ));
-                }
-
-                info!(
-                    "Recovered file {:?} ({} bytes) from {}",
-                    if let Some(ref root) = cfg.virtual_root() {
-                        root.join(&file)
-                    } else {
-                        file.clone()
-                    },
-                    if let Some(size) = file_size {
-                        size.to_string()
-                    } else {
-                        "unknown".to_string()
-                    },
-                    metadata
-                        .shards()
-                        .iter()
-                        .map(|si| si.zdb().address().to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-            }
-            Cmd::Rebuild { ref file, ref key } => {
-                if file.is_none() && key.is_none() {
-                    panic!("Either `file` or `key` argument must be set");
-                }
-                if file.is_some() && key.is_some() {
-                    panic!("Only one of `file` or `key` argument must be set");
-                }
-                let old_metadata = if let Some(file) = file {
-                    cluster.load_meta(file).await?.ok_or_else(|| {
-                        ZstorError::new_io(
-                            "no metadata found for file".to_string(),
-                            std::io::Error::from(std::io::ErrorKind::NotFound),
-                        )
-                    })?
-                } else if let Some(key) = key {
-                    // key is set so the unwrap is safe
-                    cluster.load_meta_by_key(key).await?.ok_or_else(|| {
-                        ZstorError::new_io(
-                            "no metadata found for file".to_string(),
-                            std::io::Error::from(std::io::ErrorKind::NotFound),
-                        )
-                    })?
-                } else {
-                    unreachable!();
-                };
-                let decoded = recover_data(&old_metadata).await?;
-
-                let metadata = store_data(decoded, *old_metadata.checksum(), &cfg).await?;
-                if let Some(file) = file {
-                    cluster.save_meta(&file, &metadata).await?;
-                } else if let Some(key) = key {
-                    cluster.save_meta_by_key(key, &metadata).await?;
-                };
-                info!(
-                    "Rebuild file from {} to {}",
-                    old_metadata
-                        .shards()
-                        .iter()
-                        .map(|si| si.zdb().address().to_string())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    metadata
-                        .shards()
-                        .iter()
-                        .map(|si| si.zdb().address().to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-            }
-            Cmd::Check { ref file } => {
-                match cluster.load_meta(file).await? {
-                    Some(metadata) => {
-                        let file = canonicalize_path(&file)?;
-                        // strip the virtual_root, if one is set
-                        let actual_path = if let Some(ref virtual_root) = cfg.virtual_root() {
-                            file.strip_prefix(virtual_root).map_err(|_| {
-                                ZstorError::new_io(
-                                    format!(
-                                        "path prefix {} not found",
-                                        virtual_root.as_path().to_string_lossy()
-                                    ),
-                                    std::io::Error::from(std::io::ErrorKind::NotFound),
-                                )
-                            })?
-                        } else {
-                            file.as_path()
+                            },
+                            Ok((con, remote)) => (con, remote),
                         };
-                        println!(
-                            "{}\t{}",
-                            hex::encode(metadata.checksum()),
-                            actual_path.to_string_lossy()
-                        );
+                        let zs = zstor.clone();
+                        tokio::spawn(async move {
+                            debug!("Handling new client connection from {:?}", remote);
+                            if let Err(e) = handle_client(con, zs).await {
+                                error!("Error while handeling client: {}", e);
+                            }
+                        });
                     }
-                    None => std::process::exit(1),
-                };
-            }
-            Cmd::Test => {
-                // load config => already done
-                // connect to metastore => already done
-                // connect to backends
-                debug!("Testing 0-db reachability");
-                for conn_result in join_all(
-                    cfg.backends()
-                        .into_iter()
-                        .cloned()
-                        .map(|ci| tokio::spawn(async move { SequentialZdb::new(ci).await })),
-                )
-                .await
-                {
-                    // type here is Resut<Result<Zdb, ZdbError>, JoinError>
-                    // so we need to try on the outer JoinError to get to the possible ZdbError
-                    conn_result??;
+                    _ = actix_rt::signal::ctrl_c() => break,
                 }
-
-                // retrieve a config
-                cfg.shard_stores()?;
             }
-            _ => unreachable!(),
-        };
+            actix_rt::signal::ctrl_c()
+                .await
+                .map_err(|e| ZstorError::new_io("Failed to wait for CTRL-C".to_string(), e))?;
 
-        Ok(())
-    })
+            info!("Shutting down zstor daemon after receiving CTRL-C");
+
+            // try to remove the socket file
+            if let Err(e) = fs::remove_file(cfg.socket().unwrap()) {
+                error!("Could not remove socket file: {}", e);
+            };
+        }
+    };
+
+    Ok(())
+}
+
+use actix::Addr;
+use zstor_v2::actors::zstor::ZstorActor;
+async fn handle_client<C>(
+    mut con: C,
+    zstor: Addr<ZstorActor<impl MetaStore + Unpin>>,
+) -> ZstorResult<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+{
+    // Read the command from the connection
+    let size = con
+        .read_u16()
+        .await
+        .map_err(|e| ZstorError::new_io("failed to read msg length prefix".into(), e))?;
+    let mut cmd_buf = vec![0; size as usize]; // Fill buffer with 0 bytes, instead of reserving space.
+    let n = con
+        .read_exact(&mut cmd_buf)
+        .await
+        .map_err(|e| ZstorError::new_io("failed to read exact amount of bytes".into(), e))?;
+    if n != size as usize {
+        error!("Could not read exact amount of bytes from connection");
+        return Ok(());
+    }
+    let cmd = bincode::deserialize(&cmd_buf)?;
+    let res = match cmd {
+        ZstorCommand::Store(store) => match zstor.send(store).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(()) => ZstorResponse::Success,
+        },
+        ZstorCommand::Retrieve(retrieve) => match zstor.send(retrieve).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(()) => ZstorResponse::Success,
+        },
+        ZstorCommand::Rebuild(rebuild) => match zstor.send(rebuild).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(()) => ZstorResponse::Success,
+        },
+        ZstorCommand::Check(check) => match zstor.send(check).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(checksum) => ZstorResponse::Checksum(checksum),
+        },
+    };
+
+    let res_buf = bincode::serialize(&res)?;
+    con.write_u16(res_buf.len() as u16)
+        .await
+        .map_err(|e| ZstorError::new_io("failed to write response length".into(), e))?;
+    con.write_all(&res_buf)
+        .await
+        .map_err(|e| ZstorError::new_io("failed to write response buffer".into(), e))?;
+    Ok(())
+}
+
+async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), ZstorError> {
+    let cfg = zstor_v2::load_config(&cfg_path).await?;
+    // If a socket is set, try to send a command to a daemon.
+    if let Some(socket) = cfg.socket() {
+        debug!("Sending command to zstor daemon");
+        let mut con = UnixStream::connect(socket)
+            .await
+            .map_err(|e| ZstorError::new_io("Could not connect to daemon socket".to_string(), e))?;
+        // expect here is fine as its a programming error
+        let buf = bincode::serialize(&zc).expect("Failed to encode command");
+        con.write_u16(buf.len() as u16).await.map_err(|e| {
+            ZstorError::new_io("Could not write command length to socket".into(), e)
+        })?;
+        con.write_all(&buf)
+            .await
+            .map_err(|e| ZstorError::new_io("Could not write command to socket".into(), e))?;
+        // now wait for the response
+        let res_len = con.read_u16().await.map_err(|e| {
+            ZstorError::new_io("Could not read response length from socket".into(), e)
+        })?;
+        let mut res_buf = vec![0; res_len as usize];
+        con.read_exact(&mut res_buf)
+            .await
+            .map_err(|e| ZstorError::new_io("Could not read response from socket".into(), e))?;
+        let res = bincode::deserialize::<ZstorResponse>(&res_buf)
+            .expect("Failed to decode reply from socket");
+
+        match res {
+            ZstorResponse::Checksum(checksum) => println!("{}", hex::encode(checksum)),
+            ZstorResponse::Err(err) => {
+                eprintln!("Zstor error: {}", err);
+                process::exit(1);
+            }
+            _ => {}
+        }
+    } else {
+        debug!("No zstor daemon socket found, running command in process");
+        let zstor = zstor_v2::setup_system(cfg_path).await?;
+        match zc {
+            ZstorCommand::Store(store) => zstor.send(store).await??,
+            ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,
+            ZstorCommand::Rebuild(rebuild) => zstor.send(rebuild).await??,
+            ZstorCommand::Check(check) => {
+                let checksum = zstor.send(check).await??;
+                println!("{}", hex::encode(checksum));
+            }
+        }
+    };
+    Ok(())
 }
 
 // TODO: Async version
