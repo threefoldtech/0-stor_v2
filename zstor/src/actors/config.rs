@@ -19,6 +19,16 @@ pub struct ConfigActor {
     config: Arc<Config>,
 }
 
+impl ConfigActor {
+    /// Create a new config actor.
+    pub fn new(config_path: PathBuf, config: Config) -> ConfigActor {
+        Self {
+            config_path,
+            config: Arc::new(config),
+        }
+    }
+}
+
 impl Actor for ConfigActor {
     type Context = Context<Self>;
 }

@@ -44,6 +44,8 @@ async-trait = "0.1"
 bincode = "1"
 openssl = { version = "0.10", features = ["vendored"], optional = true } # TODO: still needed?
 actix = { git = "https://github.com/actix/actix" }
+actix-rt = "2.2"
+tokio-util = "0.6"
 
 [dev-dependencies]
 rand = "0.7"

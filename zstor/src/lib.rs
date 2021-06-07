@@ -6,15 +6,28 @@
 //! write to 0-dbs, compress, encrypt and erasure code data, and write to etc. There are also
 //! config structs available.
 
-use actix::MailboxError;
+use crate::actors::{
+    config::ConfigActor, meta::MetaStoreActor, pipeline::PipelineActor, zstor::ZstorActor,
+};
+use actix::prelude::*;
+use actix::{Addr, MailboxError};
 use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
+use futures::future::try_join_all;
 use meta::MetaStoreError;
 use std::fmt;
+use std::path::{Path, PathBuf};
+use tokio::fs;
 use tokio::task::JoinError;
 use zdb::ZdbError;
+use {
+    config::{Config, Encryption, Meta},
+    meta::MetaStore,
+    zdb::UserKeyZdb,
+    zdb_meta::ZdbMetaStore,
+};
 
 /// Implementations of all components as actors.
 pub mod actors;
@@ -28,8 +41,6 @@ pub mod encryption;
 pub mod erasure;
 /// Metadata for stored shards after encoding.
 pub mod meta;
-/// Entrypoint for running 0-stor as a daemon.
-pub mod monitor;
 /// The main data pipeline to go from the raw data to the representation which can be saved in the
 /// backend.
 pub mod pipeline;
@@ -41,6 +52,49 @@ pub mod zdb_meta;
 
 /// Global result type for zstor operations
 pub type ZstorResult<T> = Result<T, ZstorError>;
+
+/// Start the 0-stor monitor daemon
+pub async fn setup_system(cfg_path: PathBuf) -> ZstorResult<Addr<ZstorActor<impl MetaStore>>> {
+    let cfg = load_config(&cfg_path).await?;
+
+    let metastore = match cfg.meta() {
+        Meta::Zdb(zdb_cfg) => {
+            let backends = try_join_all(
+                zdb_cfg
+                    .backends()
+                    .iter()
+                    .map(|ci| UserKeyZdb::new(ci.clone())),
+            )
+            .await?;
+            let encryptor = match cfg.encryption() {
+                Encryption::Aes(key) => encryption::AesGcm::new(key.clone()),
+            };
+            let encoder = zdb_cfg.encoder();
+            ZdbMetaStore::new(
+                backends,
+                encoder,
+                encryptor,
+                zdb_cfg.prefix().to_string(),
+                cfg.virtual_root().clone(),
+            )
+        }
+    };
+    let meta_addr = MetaStoreActor::new(metastore).start();
+    let cfg_addr = ConfigActor::new(cfg_path, cfg).start();
+    let pipeline_addr = SyncArbiter::start(1, || PipelineActor);
+
+    let zstor = ZstorActor::new(cfg_addr, pipeline_addr, meta_addr).start();
+
+    Ok(zstor)
+}
+
+/// Load a TOML encoded config file from the given path.
+pub async fn load_config(path: &Path) -> ZstorResult<Config> {
+    let cfg_data = fs::read(path)
+        .await
+        .map_err(|e| ZstorError::new_io("Couldn't load config file".to_string(), e))?;
+    Ok(toml::from_slice(&cfg_data)?)
+}
 
 /// An error originating in zstor
 #[derive(Debug)]
@@ -132,6 +186,8 @@ pub enum ZstorErrorKind {
     Config,
     /// An error while waiting for an asynchronous task to complete.
     Async,
+    /// An error in the (binary) wire format of messages.
+    Serialization,
 }
 
 impl fmt::Display for ZstorErrorKind {
@@ -148,6 +204,7 @@ impl fmt::Display for ZstorErrorKind {
                 ZstorErrorKind::LocalIo(msg) => format!("accessing local storage for {}", msg),
                 ZstorErrorKind::Config => "configuration".to_string(),
                 ZstorErrorKind::Async => "waiting for async task completion".to_string(),
+                ZstorErrorKind::Serialization => "error in the binary wire format".to_string(),
             }
         )
     }
@@ -220,6 +277,15 @@ impl From<toml::de::Error> for ZstorError {
     fn from(e: toml::de::Error) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Config,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<bincode::Error> for ZstorError {
+    fn from(e: bincode::Error) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Serialization,
             internal: InternalError::Other(Box::new(e)),
         }
     }
