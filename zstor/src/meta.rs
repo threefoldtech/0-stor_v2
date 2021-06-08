@@ -25,11 +25,60 @@ pub struct MetaData {
     /// Checksum of the full file
     checksum: Checksum,
     /// configuration to use for the encryption stage
-    encryption: Encryption,
+    encryption: EncryptionMeta,
     /// configuration to use for the compression stage
-    compression: Compression,
+    compression: CompressionMeta,
     /// Information about where the shards are
     shards: Vec<ShardInfo>,
+}
+
+/// Metadata about the used encryption - algorithm and key
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum EncryptionMeta {
+    /// Aes-Gcm authenticated encryption scheme using the AES cipher in GCM mode. The 256 bit
+    /// variant is used, which requires a 32 byte key
+    Aes(encryption::SymmetricKey),
+}
+
+impl From<Encryption> for EncryptionMeta {
+    fn from(e: Encryption) -> Self {
+        match e {
+            Encryption::Aes(key) => EncryptionMeta::Aes(key),
+        }
+    }
+}
+
+impl From<EncryptionMeta> for Encryption {
+    fn from(e: EncryptionMeta) -> Self {
+        match e {
+            EncryptionMeta::Aes(key) => Encryption::Aes(key),
+        }
+    }
+}
+
+/// Metadata about the used compression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum CompressionMeta {
+    /// The snappy encryption algorithm
+    Snappy,
+}
+
+impl From<Compression> for CompressionMeta {
+    fn from(c: Compression) -> Self {
+        match c {
+            Compression::Snappy => CompressionMeta::Snappy,
+        }
+    }
+}
+
+impl From<CompressionMeta> for Compression {
+    fn from(c: CompressionMeta) -> Self {
+        match c {
+            CompressionMeta::Snappy => Compression::Snappy,
+        }
+    }
 }
 
 /// Information needed to store a single data shard
@@ -47,8 +96,8 @@ impl MetaData {
         data_shards: usize,
         parity_shards: usize,
         checksum: Checksum,
-        encryption: Encryption,
-        compression: Compression,
+        encryption: EncryptionMeta,
+        compression: CompressionMeta,
     ) -> Self {
         Self {
             data_shards,
@@ -77,12 +126,12 @@ impl MetaData {
     }
 
     /// Return the encryption config used for encoding this object.
-    pub fn encryption(&self) -> &Encryption {
+    pub fn encryption(&self) -> &EncryptionMeta {
         &self.encryption
     }
 
     /// Return the compression config used for encoding this object.
-    pub fn compression(&self) -> &Compression {
+    pub fn compression(&self) -> &CompressionMeta {
         &self.compression
     }
 

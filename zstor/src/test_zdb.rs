@@ -60,7 +60,13 @@ fn main() {
         // write
         for i in 0..1000 {
             let checksum = (i as u128).to_be_bytes();
-            let meta = MetaData::new(2, 2, checksum, enc.clone(), compression.clone());
+            let meta = MetaData::new(
+                2,
+                2,
+                checksum,
+                enc.clone().into(),
+                compression.clone().into(),
+            );
             metastore
                 .save_meta_by_key(&format!("/some_prefix/meta/{}", i), &meta)
                 .await

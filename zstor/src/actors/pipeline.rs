@@ -137,7 +137,7 @@ impl Handler<RecoverFile> for PipelineActor {
 
         info!("rebuild data from shards");
 
-        let encryptor = encryption::new(msg.meta.encryption().clone());
+        let encryptor = encryption::new(msg.meta.encryption().clone().into());
         let decrypted = encryptor.decrypt(&decoded)?;
 
         // create the file
@@ -218,8 +218,8 @@ fn process_file(data_file: &Path, cfg: &Config) -> ZstorResult<(MetaData, Vec<Sh
         cfg.data_shards(),
         cfg.parity_shards(),
         file_checksum,
-        cfg.encryption().clone(),
-        cfg.compression().clone(),
+        cfg.encryption().clone().into(),
+        cfg.compression().clone().into(),
     );
 
     Ok((metadata, shards))
