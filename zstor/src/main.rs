@@ -893,8 +893,8 @@ async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorRes
         cfg.data_shards(),
         cfg.parity_shards(),
         checksum,
-        cfg.encryption().clone(),
-        cfg.compression().clone(),
+        cfg.encryption().clone().into(),
+        cfg.compression().clone().into(),
     );
 
     let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
