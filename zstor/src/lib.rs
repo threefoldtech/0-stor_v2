@@ -41,9 +41,6 @@ pub mod encryption;
 pub mod erasure;
 /// Metadata for stored shards after encoding.
 pub mod meta;
-/// The main data pipeline to go from the raw data to the representation which can be saved in the
-/// backend.
-pub mod pipeline;
 /// Very basic 0-db client, allowing to connect to a given (password protected) namespace, and
 /// write and read data from it.
 pub mod zdb;

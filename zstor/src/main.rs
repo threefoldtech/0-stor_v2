@@ -23,7 +23,7 @@ use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::Config;
 use zstor_v2::encryption;
 use zstor_v2::erasure::{Encoder, Shard};
-use zstor_v2::meta::{new_metastore, Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
+use zstor_v2::meta::{Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
 use zstor_v2::zdb::{SequentialZdb, ZdbError, ZdbResult};
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 

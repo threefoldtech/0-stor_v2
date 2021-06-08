@@ -41,8 +41,8 @@ impl ZdbMetaStoreConfig {
         Self {
             data_shards,
             parity_shards,
-            encryption,
             prefix,
+            encryption,
             backends,
         }
     }
