@@ -102,7 +102,7 @@ pub async fn monitor_backends(
                         }
                     }
 
-                    let mut cluster = match new_metastore(&zstor_config).await {
+                    let cluster = match new_metastore(&zstor_config).await {
                             Ok(cluster) => cluster,
                             Err(e) => {error!("could not create metadata cluster: {}", e); continue},
                     };

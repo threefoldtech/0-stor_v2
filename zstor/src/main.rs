@@ -1,7 +1,7 @@
-use blake2::{digest::VariableOutput, VarBlake2b};
-use futures::future::{join_all, try_join_all};
+use actix::Addr;
+use futures::future::join_all;
 use log::LevelFilter;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace};
 use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
 };
@@ -9,22 +9,18 @@ use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::{Filter, Response};
-use std::convert::TryInto;
 use std::fs::{self, File};
-use std::io::{self, Cursor, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::task::JoinHandle;
+use zstor_v2::actors::zstor::ZstorActor;
 use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
-use zstor_v2::compression::{Compressor, Snappy};
 use zstor_v2::config::Config;
-use zstor_v2::encryption;
-use zstor_v2::erasure::{Encoder, Shard};
-use zstor_v2::meta::{Checksum, MetaData, MetaStore, ShardInfo, CHECKSUM_LENGTH};
-use zstor_v2::zdb::{SequentialZdb, ZdbError, ZdbResult};
+use zstor_v2::meta::MetaStore;
+use zstor_v2::zdb::SequentialZdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 const MIB: u64 = 1 << 20;
@@ -261,37 +257,6 @@ async fn real_main() -> ZstorResult<()> {
             error_on_failure: _error_on_failure,
             delete,
         } => {
-            // if file.is_file() {
-            //     handle_file_upload(&mut *cluster, &file, &key_path, save_failure, delete, &cfg)
-            //         .await?;
-            // } else if file.is_dir() {
-            //     for entry in get_dir_entries(&file).map_err(|e| {
-            //         ZstorError::new_io(format!("Could not read dir entries in {:?}", file), e)
-            //     })? {
-            //         if let Err(e) = handle_file_upload(
-            //             &mut *cluster,
-            //             &entry,
-            //             &key_path,
-            //             save_failure,
-            //             delete,
-            //             &cfg,
-            //         )
-            //         .await
-            //         {
-            //             error!("Could not upload file {:?}: {}", entry, e);
-            //             if error_on_failure {
-            //                 return Err(e);
-            //             } else {
-            //                 continue;
-            //             }
-            //         }
-            //     }
-            // } else {
-            //     return Err(ZstorError::new_io(
-            //         "Unknown file type".to_string(),
-            //         std::io::Error::from(std::io::ErrorKind::InvalidData),
-            //     ));
-            // }
             handle_command(
                 ZstorCommand::Store(Store {
                     file,
@@ -304,143 +269,12 @@ async fn real_main() -> ZstorResult<()> {
             .await?
         }
         Cmd::Retrieve { file } => {
-            // let metadata = cluster.load_meta(file).await?.ok_or_else(|| {
-            //     ZstorError::new_io(
-            //         "no metadata found for file".to_string(),
-            //         std::io::Error::from(std::io::ErrorKind::NotFound),
-            //     )
-            // })?;
-            // let decoded = recover_data(&metadata).await?;
-
-            // let encryptor = encryption::new(metadata.encryption().clone());
-            // let decrypted = encryptor.decrypt(&decoded)?;
-
-            // // create the file
-            // let mut out = if let Some(ref root) = cfg.virtual_root() {
-            //     File::create(root.join(&file))
-            // } else {
-            //     File::create(file)
-            // }
-            // .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
-
-            // let mut cursor = Cursor::new(decrypted);
-            // Snappy.decompress(&mut cursor, &mut out)?;
-
-            // // get file size
-            // let file_size = if let Ok(meta) = out.metadata() {
-            //     Some(meta.len())
-            // } else {
-            //     // TODO: is this possible?
-            //     None
-            // };
-
-            // if !std::fs::metadata(&file)
-            //     .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
-            //     .is_file()
-            // {
-            //     return Err(ZstorError::new_io(
-            //         "only files can be stored".to_string(),
-            //         std::io::Error::from(std::io::ErrorKind::InvalidData),
-            //     ));
-            // }
-
-            // info!(
-            //     "Recovered file {:?} ({} bytes) from {}",
-            //     if let Some(ref root) = cfg.virtual_root() {
-            //         root.join(&file)
-            //     } else {
-            //         file.clone()
-            //     },
-            //     if let Some(size) = file_size {
-            //         size.to_string()
-            //     } else {
-            //         "unknown".to_string()
-            //     },
-            //     metadata
-            //         .shards()
-            //         .iter()
-            //         .map(|si| si.zdb().address().to_string())
-            //         .collect::<Vec<_>>()
-            //         .join(",")
-            // );
             handle_command(ZstorCommand::Retrieve(Retrieve { file }), opts.config).await?
         }
         Cmd::Rebuild { file, key } => {
-            // if file.is_none() && key.is_none() {
-            //     panic!("Either `file` or `key` argument must be set");
-            // }
-            // if file.is_some() && key.is_some() {
-            //     panic!("Only one of `file` or `key` argument must be set");
-            // }
-            // let old_metadata = if let Some(file) = file {
-            //     cluster.load_meta(file).await?.ok_or_else(|| {
-            //         ZstorError::new_io(
-            //             "no metadata found for file".to_string(),
-            //             std::io::Error::from(std::io::ErrorKind::NotFound),
-            //         )
-            //     })?
-            // } else if let Some(key) = key {
-            //     // key is set so the unwrap is safe
-            //     cluster.load_meta_by_key(key).await?.ok_or_else(|| {
-            //         ZstorError::new_io(
-            //             "no metadata found for file".to_string(),
-            //             std::io::Error::from(std::io::ErrorKind::NotFound),
-            //         )
-            //     })?
-            // } else {
-            //     unreachable!();
-            // };
-            // let decoded = recover_data(&old_metadata).await?;
-
-            // let metadata = store_data(decoded, *old_metadata.checksum(), &cfg).await?;
-            // if let Some(file) = file {
-            //     cluster.save_meta(&file, &metadata).await?;
-            // } else if let Some(key) = key {
-            //     cluster.save_meta_by_key(key, &metadata).await?;
-            // };
-            // info!(
-            //     "Rebuild file from {} to {}",
-            //     old_metadata
-            //         .shards()
-            //         .iter()
-            //         .map(|si| si.zdb().address().to_string())
-            //         .collect::<Vec<_>>()
-            //         .join(","),
-            //     metadata
-            //         .shards()
-            //         .iter()
-            //         .map(|si| si.zdb().address().to_string())
-            //         .collect::<Vec<_>>()
-            //         .join(",")
-            // );
             handle_command(ZstorCommand::Rebuild(Rebuild { file, key }), opts.config).await?
         }
         Cmd::Check { file } => {
-            // match cluster.load_meta(file).await? {
-            //     Some(metadata) => {
-            //         let file = canonicalize_path(&file)?;
-            //         // strip the virtual_root, if one is set
-            //         let actual_path = if let Some(ref virtual_root) = cfg.virtual_root() {
-            //             file.strip_prefix(virtual_root).map_err(|_| {
-            //                 ZstorError::new_io(
-            //                     format!(
-            //                         "path prefix {} not found",
-            //                         virtual_root.as_path().to_string_lossy()
-            //                     ),
-            //                     std::io::Error::from(std::io::ErrorKind::NotFound),
-            //                 )
-            //             })?
-            //         } else {
-            //             file.as_path()
-            //         };
-            //         println!(
-            //             "{}\t{}",
-            //             hex::encode(metadata.checksum()),
-            //             actual_path.to_string_lossy()
-            //         );
-            //     }
-            //     None => std::process::exit(1),
-            // };
             handle_command(ZstorCommand::Check(Check { path: file }), opts.config).await?
         }
         Cmd::Test => {
@@ -511,8 +345,6 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-use actix::Addr;
-use zstor_v2::actors::zstor::ZstorActor;
 async fn handle_client<C>(
     mut con: C,
     zstor: Addr<ZstorActor<impl MetaStore + Unpin>>,
@@ -615,308 +447,6 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
     Ok(())
 }
 
-// TODO: Async version
-fn get_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut dir_entries = Vec::new();
-    for dir_entry in fs::read_dir(&dir)? {
-        let entry = dir_entry?;
-        let ft = entry.file_type()?;
-
-        if !ft.is_file() {
-            debug!(
-                "Skippin entry {:?} for upload as it is not a file",
-                entry.path(),
-            );
-            continue;
-        }
-
-        dir_entries.push(entry.path());
-    }
-
-    Ok(dir_entries)
-}
-
-async fn handle_file_upload(
-    cluster: &mut dyn MetaStore,
-    data_file: &Path,
-    key_path: &Option<PathBuf>,
-    save_failure: bool,
-    delete: bool,
-    cfg: &Config,
-) -> ZstorResult<()> {
-    let (data_file_path, mut key_dir_path) = match key_path {
-        Some(ref kp) => (data_file, kp.to_path_buf()),
-        None => {
-            let mut key_dir = data_file.to_path_buf();
-            if !key_dir.pop() {
-                return Err(ZstorError::new_io(
-                    "Could not remove file name to get parent dir name".to_string(),
-                    std::io::Error::from(std::io::ErrorKind::InvalidData),
-                ));
-            }
-            (data_file, key_dir)
-        }
-    };
-
-    if data_file_path.file_name().is_none() {
-        return Err(ZstorError::new_io(
-            "Could not get file name of data file".to_string(),
-            std::io::Error::from(std::io::ErrorKind::NotFound),
-        ));
-    }
-
-    // check above makes unwrap here safe
-    key_dir_path.push(data_file_path.file_name().unwrap());
-
-    // canonicalize the key path
-    let key_file_path = canonicalize_path(&key_dir_path)?;
-    debug!(
-        "encoding file {:?} with key path {:?}",
-        data_file_path, key_file_path
-    );
-
-    // make sure key path is in root dir
-    if let Some(ref root) = cfg.virtual_root() {
-        if !key_file_path.starts_with(root) {
-            return Err(ZstorError::new_io(
-                format!(
-                    "attempting to store file which is not in the file tree rooted at {}",
-                    root.to_string_lossy()
-                ),
-                std::io::Error::from(std::io::ErrorKind::InvalidData),
-            ));
-        }
-    }
-
-    if !std::fs::metadata(&data_file_path)
-        .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
-        .is_file()
-    {
-        return Err(ZstorError::new_io(
-            "only files can be stored".to_string(),
-            std::io::Error::from(std::io::ErrorKind::InvalidData),
-        ));
-    }
-
-    if let Err(e) = save_file(cluster, &data_file_path, &key_file_path, &cfg).await {
-        error!("Could not save file {:?}: {}", data_file_path, e);
-        if save_failure {
-            debug!("Attempt to save upload failure data");
-            //if let Err(e2) = cluster.save_failure(&dat_file_path, &key_file_path).await {
-            if let Err(e2) = cluster
-                .save_failure(&data_file_path, key_path, delete)
-                .await
-            {
-                error!("Could not save failure metadata: {}", e2);
-            };
-        }
-        // return the original error
-        return Err(e);
-    } else if delete {
-        debug!(
-            "Attempting to delete file {:?} after successful upload",
-            data_file_path
-        );
-        if let Err(e) = std::fs::remove_file(&data_file_path) {
-            warn!("Could not delete uploaded file: {}", e);
-        }
-    };
-
-    Ok(())
-}
-
-async fn save_file(
-    cluster: &mut dyn MetaStore,
-    data_file: &Path,
-    key_file: &Path,
-    cfg: &Config,
-) -> ZstorResult<()> {
-    let file_checksum = checksum(data_file)?;
-    debug!(
-        "file checksum: {} ({:?})",
-        hex::encode(file_checksum),
-        data_file
-    );
-
-    // start reading file to encrypt
-    trace!("loading file data");
-    let mut encoding_file = File::open(&data_file)
-        .map_err(|e| ZstorError::new_io("could not open file to encode".to_string(), e))?;
-
-    let compressed = Vec::new();
-    let mut cursor = Cursor::new(compressed);
-    let original_size = Snappy.compress(&mut encoding_file, &mut cursor)?;
-    let compressed = cursor.into_inner();
-    trace!("compressed size: {} bytes", original_size);
-
-    let encryptor = encryption::new(cfg.encryption().clone());
-    let encrypted = encryptor.encrypt(&compressed)?;
-    trace!("encrypted size: {} bytes", encrypted.len());
-
-    let metadata = store_data(encrypted, file_checksum, &cfg).await?;
-
-    cluster.save_meta(key_file, &metadata).await?;
-    info!(
-        "Stored file {:?} as file {:?} ({} bytes) to {}",
-        data_file,
-        key_file,
-        original_size,
-        metadata
-            .shards()
-            .iter()
-            .map(|si| si.zdb().address().to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-
-    Ok(())
-}
-
-async fn recover_data(metadata: &MetaData) -> ZstorResult<Vec<u8>> {
-    // attempt to retrieve all shards
-    let mut shard_loads: Vec<JoinHandle<(usize, Result<(_, _), ZstorError>)>> =
-        Vec::with_capacity(metadata.shards().len());
-    for si in metadata.shards().iter().cloned() {
-        shard_loads.push(tokio::spawn(async move {
-            let db = match SequentialZdb::new(si.zdb().clone()).await {
-                Ok(ok) => ok,
-                Err(e) => return (si.index(), Err(e.into())),
-            };
-            match db.get(si.key()).await {
-                Ok(potential_shard) => match potential_shard {
-                    Some(shard) => (si.index(), Ok((shard, *si.checksum()))),
-                    None => (
-                        si.index(),
-                        // TODO: Proper error here?
-                        Err(ZstorError::new_io(
-                            "shard not found".to_string(),
-                            std::io::Error::from(std::io::ErrorKind::NotFound),
-                        )),
-                    ),
-                },
-                Err(e) => (si.index(), Err(e.into())),
-            }
-        }));
-    }
-
-    // Since this is the amount of actual shards needed to pass to the encoder, we calculate the
-    // amount we will have from the amount of parity and data shards. Reason is that the `shards()`
-    // might not have all data shards, due to a bug on our end, or later in case we allow for
-    // degraded writes.
-    let mut shards: Vec<Option<Vec<u8>>> =
-        vec![None; metadata.data_shards() + metadata.parity_shards()];
-    for shard_info in join_all(shard_loads).await {
-        let (idx, shard) = shard_info?;
-        match shard {
-            Err(e) => warn!("could not download shard {}: {}", idx, e),
-            Ok((raw_shard, saved_checksum)) => {
-                let shard = Shard::from(raw_shard);
-                let checksum = shard.checksum();
-                if saved_checksum != checksum {
-                    warn!("shard {} checksum verification failed", idx);
-                    continue;
-                }
-                shards[idx] = Some(shard.into_inner());
-            }
-        }
-    }
-
-    let encoder = Encoder::new(metadata.data_shards(), metadata.parity_shards());
-    let decoded = encoder.decode(shards)?;
-
-    info!("rebuild data from shards");
-
-    Ok(decoded)
-}
-
-async fn store_data(data: Vec<u8>, checksum: Checksum, cfg: &Config) -> ZstorResult<MetaData> {
-    let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
-    let shards = encoder.encode(data);
-    trace!("data encoded");
-
-    // craate a local copy of the config which we can modify to remove dead nodes
-    let mut cfg = cfg.clone();
-
-    let shard_len = shards[0].len(); // Safe as a valid encoder needs at least 1 shard
-
-    trace!("verifiying backends");
-
-    let dbs = loop {
-        debug!("Finding backend config");
-        let backends = cfg.shard_stores()?;
-
-        let mut failed_shards: usize = 0;
-        let mut handles: Vec<JoinHandle<ZdbResult<_>>> = Vec::with_capacity(shards.len());
-
-        for backend in backends {
-            handles.push(tokio::spawn(async move {
-                let db = SequentialZdb::new(backend.clone()).await?;
-                // check space in backend
-                let ns_info = db.ns_info().await?;
-                match ns_info.free_space() {
-                    insufficient if (insufficient as usize) < shard_len => {
-                        Err(ZdbError::new_storage_size(
-                            *db.connection_info().address(),
-                            shard_len,
-                            ns_info.free_space() as usize,
-                        ))
-                    }
-                    _ => Ok(db),
-                }
-            }));
-        }
-
-        let mut dbs = Vec::new();
-        for db in join_all(handles).await {
-            match db? {
-                Err(zdbe) => {
-                    debug!("could not connect to 0-db: {}", zdbe);
-                    cfg.remove_shard(zdbe.address());
-                    failed_shards += 1;
-                }
-                Ok(db) => dbs.push(db), // no error so healthy db backend
-            }
-        }
-
-        // if we find one we are good
-        if failed_shards == 0 {
-            debug!("found valid backend configuration");
-            break dbs;
-        }
-
-        debug!("Backend config failed");
-    };
-
-    trace!("store shards in backends");
-
-    let mut metadata = MetaData::new(
-        cfg.data_shards(),
-        cfg.parity_shards(),
-        checksum,
-        cfg.encryption().clone().into(),
-        cfg.compression().clone().into(),
-    );
-
-    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
-    for (db, (shard_idx, shard)) in dbs.into_iter().zip(shards.into_iter().enumerate()) {
-        handles.push(tokio::spawn(async move {
-            let keys = db.set(&shard).await?;
-            Ok(ShardInfo::new(
-                shard_idx,
-                shard.checksum(),
-                keys,
-                db.connection_info().clone(),
-            ))
-        }));
-    }
-
-    for shard_info in try_join_all(handles).await? {
-        metadata.add_shard(shard_info?);
-    }
-
-    Ok(metadata)
-}
-
 fn read_cfg(config: &Path) -> ZstorResult<Config> {
     trace!("opening config file {:?}", config);
     let mut cfg_file = File::open(config)
@@ -932,55 +462,4 @@ fn read_cfg(config: &Path) -> ZstorResult<Config> {
     cfg.validate()?;
     trace!("config validated");
     Ok(cfg)
-}
-
-/// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
-/// work on files which don't exist by creating a dummy file if the file does not exist,
-/// canonicalizing the path, and removing the dummy file.
-fn canonicalize_path(path: &Path) -> ZstorResult<PathBuf> {
-    // annoyingly, the path needs to exist for this to work. So here's the plan:
-    // first we verify that it is actualy there
-    // if it is, no problem
-    // else, create a temp file, canonicalize that path, and remove the temp file again
-    Ok(match std::fs::metadata(path) {
-        Ok(_) => path
-            .canonicalize()
-            .map_err(|e| ZstorError::new_io("could not canonicalize path".to_string(), e))?,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                File::create(path)
-                    .map_err(|e| ZstorError::new_io("could not create temp file".to_string(), e))?;
-                let cp = path.canonicalize().map_err(|e| {
-                    ZstorError::new_io("could not canonicalize path".to_string(), e)
-                })?;
-                std::fs::remove_file(path)
-                    .map_err(|e| ZstorError::new_io("could not remove temp file".to_string(), e))?;
-                cp
-            }
-            _ => {
-                return Err(ZstorError::new_io(
-                    "could not load file metadata".to_string(),
-                    e,
-                ))
-            }
-        },
-    })
-}
-
-/// Get a 16 byte blake2b checksum of a file
-fn checksum(file: &Path) -> ZstorResult<Checksum> {
-    trace!("getting file checksum");
-    let mut file =
-        File::open(file).map_err(|e| ZstorError::new_io("could not open file".to_string(), e))?;
-    // The unwrap here is safe since we know that 16 is a valid output size
-    let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|e| ZstorError::new_io("could not get file hash".to_string(), e))?;
-
-    // expect is safe due to the static size, which is known to be valid
-    Ok(hasher
-        .finalize_boxed()
-        .as_ref()
-        .try_into()
-        .expect("Invalid hash size returned"))
 }
