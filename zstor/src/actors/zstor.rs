@@ -14,8 +14,11 @@ use actix::prelude::*;
 use futures::future::{join_all, try_join_all};
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
-use std::{ops::Deref, path::PathBuf};
-use tokio::{fs, task::JoinHandle};
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+};
+use tokio::{fs, io, task::JoinHandle};
 
 #[derive(Serialize, Deserialize, Debug)]
 /// All possible commands zstor operates on.
@@ -135,30 +138,52 @@ where
         let meta = self.meta.clone();
         AtomicResponse::new(Box::pin(
             async move {
+                let ft = fs::metadata(&msg.file)
+                    .await
+                    .map_err(|e| ZstorError::new_io("Could not load file metadata".into(), e))?
+                    .file_type();
+                let files = if ft.is_file() {
+                    vec![msg.file]
+                } else if ft.is_dir() {
+                    get_dir_entries(&msg.file)
+                        .await
+                        .map_err(|e| ZstorError::new_io("Could not load dir entries".into(), e))?
+                } else {
+                    return Err(ZstorError::new_io(
+                        format!("Unsupported file type {:?}", ft),
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "Unsupported file type",
+                        ),
+                    ));
+                };
                 let running_cfg = config.send(GetConfig).await?;
-                // Explicity clone out the current config so we can modify it in the loop later
-                let cfg = running_cfg.deref().clone();
-                let (mut metadata, key_path, shards) = pipeline
-                    .send(StoreFile {
-                        file: msg.file.clone(),
-                        key_path: msg.key_path,
-                        cfg: running_cfg,
+                // Explicitly clone out the current config so we can modify it in the loop later
+                let mut cfg = running_cfg.deref().clone();
+
+                for file in files {
+                    let (mut metadata, key_path, shards) = pipeline
+                        .send(StoreFile {
+                            file: file.clone(),
+                            key_path: msg.key_path.clone(),
+                            cfg: running_cfg.clone(),
+                        })
+                        .await??;
+
+                    save_data(&mut cfg, shards, &mut metadata).await?;
+
+                    meta.send(SaveMeta {
+                        path: key_path,
+                        meta: metadata,
                     })
                     .await??;
 
-                save_data(cfg, shards, &mut metadata).await?;
-
-                meta.send(SaveMeta {
-                    path: key_path,
-                    meta: metadata,
-                })
-                .await??;
-
-                if msg.delete {
-                    if let Err(e) = fs::remove_file(&msg.file).await {
-                        // Log an error however it is not fatal, delete is done on a best effort
-                        // basis.
-                        error!("Failed to delete file {:?}: {}", &msg.file, e);
+                    if msg.delete {
+                        if let Err(e) = fs::remove_file(&file).await {
+                            // Log an error however it is not fatal, delete is done on a best effort
+                            // basis.
+                            error!("Failed to delete file {:?}: {}", &file, e);
+                        }
                     }
                 }
 
@@ -267,7 +292,7 @@ where
                     })
                     .await??;
 
-                save_data(cfg.deref().clone(), shards, &mut metadata).await?;
+                save_data(&mut cfg.deref().clone(), shards, &mut metadata).await?;
 
                 info!(
                     "Rebuild file from {} to {}",
@@ -379,7 +404,7 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
 }
 
 async fn save_data(
-    mut cfg: Config,
+    cfg: &mut Config,
     shards: Vec<Shard>,
     metadata: &mut MetaData,
 ) -> ZstorResult<()> {
@@ -455,4 +480,25 @@ async fn save_data(
     }
 
     Ok(())
+}
+
+/// Get all file entries in a given directory
+async fn get_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut dir_entries = Vec::new();
+    let mut rd = fs::read_dir(&dir).await?;
+    while let Some(dir_entry) = rd.next_entry().await? {
+        let ft = dir_entry.file_type().await?;
+
+        if !ft.is_file() {
+            debug!(
+                "Skipping entry {:?} for upload as it is not a file",
+                dir_entry.path(),
+            );
+            continue;
+        }
+
+        dir_entries.push(dir_entry.path());
+    }
+
+    Ok(dir_entries)
 }
