@@ -134,10 +134,7 @@ impl Config {
 
     /// Return the socket path if it is set.
     pub fn socket(&self) -> Option<&Path> {
-        match self.socket {
-            Some(ref sock) => Some(sock),
-            None => None,
-        }
+        self.socket.as_ref().map(|x| x as _)
     }
 
     /// Return a list of all available backends in the config.

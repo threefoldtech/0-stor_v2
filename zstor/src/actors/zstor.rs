@@ -316,7 +316,7 @@ where
         let meta = self.meta.clone();
         Box::pin(async move {
             match meta.send(LoadMeta { path: msg.path }).await?? {
-                Some(meta) => Ok(meta.checksum().clone()),
+                Some(meta) => Ok(*meta.checksum()),
                 None => Err(ZstorError::new_io(
                     "Metadata not found".to_string(),
                     std::io::Error::new(std::io::ErrorKind::NotFound, "Metadata not found"),
