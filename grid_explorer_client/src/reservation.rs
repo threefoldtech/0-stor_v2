@@ -34,7 +34,7 @@ pub struct EscrowInformation {
     pub amount: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PoolData {
     pub pool_id: i64,
     pub cus: f64,

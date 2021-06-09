@@ -1,17 +1,18 @@
+use chrono::Utc;
+use reqwest::header::{HeaderMap, HeaderValue};
+use std::fmt;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use stellar_base::crypto::KeyPair;
+use tokio::time;
+pub use types::GridNetwork;
+
+mod auth;
 mod encryption;
 pub mod identity;
 pub mod reservation;
 mod stellar;
 mod types;
 pub mod workload;
-use reqwest::header::{HeaderMap, HeaderValue};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use stellar_base::crypto::KeyPair;
-mod auth;
-use chrono::Utc;
-use std::fmt;
-use tokio::time;
-pub use types::GridNetwork;
 
 #[derive(Debug)]
 pub enum ExplorerError {
@@ -23,6 +24,26 @@ pub enum ExplorerError {
     StellarError(stellar_base::error::Error),
     HorizonError(stellar_horizon::error::Error),
 }
+
+impl fmt::Display for ExplorerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "explorer error: {}",
+            match self {
+                ExplorerError::ExplorerClientError(msg) => msg as &dyn fmt::Display,
+                ExplorerError::WorkloadTimeoutError(msg) => msg,
+                ExplorerError::WorkloadFailedError(msg) => msg,
+                ExplorerError::WorkloadCreationError(be) => be,
+                ExplorerError::Reqwest(re) => re,
+                ExplorerError::StellarError(err) => err,
+                ExplorerError::HorizonError(err) => err,
+            }
+        )
+    }
+}
+
+impl std::error::Error for ExplorerError {}
 
 #[derive(Debug)]
 pub struct ExplorerClientError {

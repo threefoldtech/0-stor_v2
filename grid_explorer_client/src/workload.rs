@@ -12,6 +12,19 @@ pub enum BuilderError {
     EncryptionError(String),
 }
 
+impl fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "builder error: {}",
+            match self {
+                BuilderError::MissingField(msg) => msg,
+                BuilderError::EncryptionError(msg) => msg,
+            }
+        )
+    }
+}
+
 impl From<encryption::EncryptionError> for BuilderError {
     fn from(e: encryption::EncryptionError) -> Self {
         match e {
@@ -143,7 +156,7 @@ impl WorkloadBuilder {
             WorkloadData::GatewaySubdomain(_) => WorkloadType::WorkloadTypeSubDomain,
             WorkloadData::GatewayDelegate(_) => WorkloadType::WorkloadTypeDomainDelegate,
             WorkloadData::Gateway4To6(_) => WorkloadType::WorkloadTypeGateway4To6,
-            WorkloadData::PublicIP(_) => WorkloadType::WorkloadTypePublicIP,
+            WorkloadData::PublicIp(_) => WorkloadType::WorkloadTypePublicIp,
             _ => WorkloadType::WorkloadTypeNetworkResource,
         }
     }
@@ -249,7 +262,7 @@ pub enum WorkloadType {
     WorkloadTypeDomainDelegate,
     WorkloadTypeGateway4To6,
     WorkloadTypeNetworkResource,
-    WorkloadTypePublicIP,
+    WorkloadTypePublicIp,
     WorkloadTypeVirtualMachine,
 }
 
@@ -267,7 +280,7 @@ impl fmt::Display for WorkloadType {
             WorkloadType::WorkloadTypeDomainDelegate => write!(f, "DOMAIN_DELEGATE"),
             WorkloadType::WorkloadTypeGateway4To6 => write!(f, "GATEWAY4TO6"),
             WorkloadType::WorkloadTypeNetworkResource => write!(f, "NETWORK_RESOURCE"),
-            WorkloadType::WorkloadTypePublicIP => write!(f, "PUBLIC_IP"),
+            WorkloadType::WorkloadTypePublicIp => write!(f, "PUBLIC_IP"),
             WorkloadType::WorkloadTypeVirtualMachine => write!(f, "VIRTUAL_MACHINE"),
         }
     }
@@ -280,7 +293,7 @@ pub enum WorkloadData {
     Zdb(ZdbInformation),
     Container(Box<ContainerInformation>),
     K8S(K8SInformation),
-    PublicIP(PublicIPInformation),
+    PublicIp(PublicIpInformation),
     Network(NetworkInformation),
     GatewayProxy(GatewayProxyInformation),
     GatewayReverseProxy(GatewayReverseProxyInformation),
@@ -434,15 +447,15 @@ pub struct K8SInformation {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct PublicIPInformation {
-    pub ipaddress: IPNet,
+pub struct PublicIpInformation {
+    pub ipaddress: IpNet,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NetworkInformation {
     pub name: String,
     pub workload_id: i64,
-    pub iprange: IPNet,
+    pub iprange: IpNet,
     pub network_resources: Vec<NetworkResources>,
     pub farmer_tid: i64,
 }
@@ -536,7 +549,7 @@ pub struct NetworkResources {
     pub wireguard_private_key_encrypted: String,
     pub wireguard_public_key: String,
     pub wireguard_listen_port: i64,
-    pub iprange: IPNet,
+    pub iprange: IpNet,
     pub peers: Vec<WireguardPeer>,
 }
 
@@ -544,12 +557,12 @@ pub struct NetworkResources {
 pub struct WireguardPeer {
     pub public_key: String,
     pub endpoint: String,
-    pub iprange: IPNet,
-    pub allowed_ip_range: Vec<IPNet>,
+    pub iprange: IpNet,
+    pub allowed_ip_range: Vec<IpNet>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct IPNet {
+pub struct IpNet {
     pub ip: std::net::IpAddr,
     pub mask: Vec<u8>,
 }

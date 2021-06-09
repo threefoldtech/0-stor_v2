@@ -47,6 +47,7 @@ actix = "0.12"
 actix-rt = "2.2"
 tokio-util = "0.6"
 grid_explorer_client = { path = "../grid_explorer_client" }
+chrono = "0.4"
 
 [dev-dependencies]
 rand = "0.7"
