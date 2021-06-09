@@ -43,9 +43,10 @@ log4rs = { version = "1", default-features = false, features = ["rolling_file_ap
 async-trait = "0.1"
 bincode = "1"
 openssl = { version = "0.10", features = ["vendored"], optional = true } 
-actix = { git = "https://github.com/actix/actix" }
+actix = "0.12"
 actix-rt = "2.2"
 tokio-util = "0.6"
+grid_explorer_client = { path = "../grid_explorer_client" }
 
 [dev-dependencies]
 rand = "0.7"
