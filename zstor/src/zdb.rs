@@ -5,7 +5,7 @@ use blake2::{
 };
 use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
-use redis::{aio::ConnectionManager, ConnectionAddr, ConnectionInfo};
+use redis::{aio::MultiplexedConnection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
@@ -48,7 +48,7 @@ pub struct UserKeyZdb {
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
 /// the remote closed). No reconnection is attempted.
 struct InternalZdb {
-    conn: ConnectionManager,
+    conn: MultiplexedConnection,
     // connection info tracked to conveniently inspect the remote address and namespace.
     ci: ZdbConnectionInfo,
 }
@@ -67,7 +67,7 @@ type ScanResult = redis::RedisResult<(Vec<u8>, Vec<ScanEntry>)>;
 
 /// A stream over all the keys in a namespace.
 struct CollectionKeys {
-    conn: ConnectionManager,
+    conn: MultiplexedConnection,
     /// Cursor to advance the scan, only set after the first call.
     cursor: Option<Vec<u8>>,
     /// The SCAN commands returns multiple entries per call, yet does not specify how many, so we
@@ -78,7 +78,7 @@ struct CollectionKeys {
     // active scan command, this is the actual command.
     active_scan: Option<&'static redis::Cmd>,
     // address of the active connection used by the running_scan. This is a pointer to a
-    // ['ConnectionManager'].
+    // ['MultiplexedConnection'].
     active_con: Option<*const usize>,
     // An in flight scan request issued by the stream.
     running_scan: Option<Pin<Box<dyn Future<Output = ScanResult> + Send>>>,
@@ -98,13 +98,13 @@ impl CollectionKeys {
             unsafe { Box::from_raw(cmd as *const redis::Cmd as *mut redis::Cmd) };
         }
         if let Some(ca) = self.active_con.take() {
-            // SAFETY: convert a raw pointer to the ConnectionManager. The conversion to a box,
-            // which is then dropped to deallocate the ConnectionManager is safe since the field
+            // SAFETY: convert a raw pointer to the MultiplexedConnection. The conversion to a box,
+            // which is then dropped to deallocate the MultiplexedConnection is safe since the field
             // can only contain a value to such a type through the leak of the boxed value,
             // similarly to the above. The validity of the raw pointer is reliant on the fact that
-            // the ConnectionManager is not moved. This should ideally be a Pin<_>, but the redis
+            // the MultiplexedConnection is not moved. This should ideally be a Pin<_>, but the redis
             // lib does not seem to like that.
-            unsafe { Box::from_raw(ca as *mut ConnectionManager) };
+            unsafe { Box::from_raw(ca as *mut MultiplexedConnection) };
         }
         // Clear the running future, this is needed in case this method gets called while the
         // object is still alive, i.e. as part of the [`Stream`] impl. It is however not strictly
@@ -114,7 +114,7 @@ impl CollectionKeys {
 }
 
 // SAFETY: This is allowed since nothing should be able to change the address of the raw pointer to
-// the `ConnectionManager`.
+// the `MultiplexedConnection`.
 unsafe impl Send for CollectionKeys {}
 
 impl Stream for CollectionKeys {
@@ -160,7 +160,7 @@ impl Stream for CollectionKeys {
             // we temporarily leak a heap allocated value and save the 'static pointer we get from
             // that on the struct in an option. We later reclaim this, by calling
             // `self.dealloc_future`. Important here is that the leaked info is always reclaimed,
-            // either here when more data is returnedm or in the drop implementation.
+            // either here when more data is returned or in the drop implementation.
             // Specifically, we leak 2 things:
             // - A clone of the connection manager, which is the connection used to talk with 0-db.
             // - The command we send. It needs to live for 'static due to the future lifetime, but
@@ -168,16 +168,16 @@ impl Stream for CollectionKeys {
             //      on the struct won't help as the struct itself is not 'static.
             //  Leaking these 2 things means all items in the future have the 'static lifetime,
             //  satisfying it's requirement.
-            //  Because we can't save the leaked `ConnectionManager` on the struct, as that would
+            //  Because we can't save the leaked `MultiplexedConnection` on the struct, as that would
             //  require a 'static lifetime on the struct, we actually take a raw pointer to it, and
-            //  save this. We can use this raw pointer to later drop the leaked `ConnectionManager`.
-            //  NOTE: This relies on the address of the ConnectionManager not changing, i.e. it is
-            //  not moved.
+            //  save this. We can use this raw pointer to later drop the leaked `MultiplexedConnection`.
+            //  NOTE: This relies on the address of the MultiplexedConnection not changing, i.e. it
+            //  is not moved.
             //  NOTE: all of this would not be needed if `Cmd::query_async` would not require
             //  'static lifetimes.
             self.active_scan = Some(Box::leak(Box::new(scan_cmd)));
             let c = Box::leak(Box::new(self.conn.clone()));
-            self.active_con = Some(c as *mut ConnectionManager as *const usize);
+            self.active_con = Some(c as *mut MultiplexedConnection as *const usize);
             if let Some(scan) = self.active_scan {
                 // The future needs to be pin in order to call `poll`, since I don't want to deal with
                 // figuring out if it's safe to pin it on the stack, pin it to the heap for now. The
@@ -298,7 +298,7 @@ impl InternalZdb {
             remote: info.address,
             internal: ErrorCause::Redis(e),
         })?;
-        let mut conn = timeout(ZDB_TIMEOUT, ConnectionManager::new(client))
+        let mut conn = timeout(ZDB_TIMEOUT, client.get_multiplexed_tokio_connection())
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
