@@ -1,3 +1,7 @@
+/// Actor to manage multiple 0-db backends. The actor periodically checks the state of the
+/// connection, and capacity of the db. If a connection is down for some time, or the 0-db runs out
+/// of space, there is an attempt to reserve a new one.
+pub mod backends;
 /// Actor implementation of the configuration manager
 pub mod config;
 /// Actor implementation of an explorer client. The actor takes care of managing capacity pools

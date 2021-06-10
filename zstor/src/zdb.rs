@@ -227,16 +227,23 @@ impl Stream for CollectionKeys {
     }
 }
 
-impl Drop for CollectionKeys {
-    fn drop(&mut self) {}
-}
-
 /// Connection info for a 0-db (namespace).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZdbConnectionInfo {
     address: SocketAddr,
     namespace: Option<String>,
     password: Option<String>,
+}
+
+impl fmt::Display for ZdbConnectionInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {}",
+            self.address,
+            self.namespace.as_deref().unwrap_or("[default namespace]")
+        )
+    }
 }
 
 impl ZdbConnectionInfo {
