@@ -1,7 +1,10 @@
 use crate::actors::config::{ConfigActor, GetConfig};
 use crate::zdb::{SequentialZdb, ZdbConnectionInfo};
 use actix::prelude::*;
-use futures::{stream, StreamExt};
+use futures::{
+    future::join_all,
+    {stream, StreamExt},
+};
 use log::{debug, error, warn};
 use std::{
     collections::HashMap,
@@ -112,7 +115,45 @@ impl Handler<CheckBackends> for BackendManagerActor {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, _: CheckBackends, _: &mut Self::Context) -> Self::Result {
-        todo!();
+        let backend_info = self
+            .managed_seq_dbs
+            .iter()
+            // Can't use `Cloned` here because it expects a ref to a type, while we have a tuple of
+            // refs.
+            .map(|(ci, (db, state))| (ci.clone(), (db.clone(), state.clone())))
+            .collect::<Vec<_>>();
+
+        Box::pin(
+            async move {
+                let futs = backend_info
+                    .into_iter()
+                    .map(|(ci, (db, mut state))| async move {
+                        match db.ns_info().await {
+                            Err(e) => {
+                                warn!("Failed to get ns_info from {}: {}", ci, e);
+                                state.mark_unreachable();
+                            }
+                            Ok(info) => {
+                                state.mark_healthy(info.free_space());
+                            }
+                        }
+                        (ci, state)
+                    });
+                join_all(futs).await
+            }
+            .into_actor(self)
+            .map(|res, actor, _| {
+                for (ci, new_state) in res.into_iter() {
+                    // It _IS_ possible that the entryi is gone here, if another future in the
+                    // actor runs another future in between. But in this case, it was this actor
+                    // which decided to remove the entry, so we don't really care about that
+                    // anyway.
+                    if let Some((_, old_state)) = actor.managed_seq_dbs.get_mut(&ci) {
+                        *old_state = new_state
+                    }
+                }
+            }),
+        )
     }
 }
 
@@ -123,7 +164,7 @@ const MISSING_DURATION: Duration = Duration::from_secs(15 * 60);
 /// 100 MiB.
 const FREESPACE_TRESHOLD: u64 = 100 * (1 << 20);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 /// Information about the state of a backend.
 pub enum BackendState {
     /// The state can't be decided at the moment. The time at which we last saw this backend healthy
