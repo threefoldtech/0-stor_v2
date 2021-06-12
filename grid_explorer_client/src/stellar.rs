@@ -65,7 +65,7 @@ impl StellarClient {
         let sequence = response.sequence.parse::<i64>().unwrap() + 1;
 
         // memo should be "p-reservation_id"
-        let memo = Memo::new_text(format!("p-{:?}", capacity_pool_information.reservation_id))?;
+        let memo = Memo::new_text(format!("p-{}", capacity_pool_information.reservation_id))?;
         let mut tx =
             Transaction::builder(self.keypair.public_key().clone(), sequence, MIN_BASE_FEE)
                 .with_memo(memo)

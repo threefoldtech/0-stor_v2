@@ -11,7 +11,7 @@ mod encryption;
 pub mod identity;
 pub mod reservation;
 mod stellar;
-mod types;
+pub mod types;
 pub mod workload;
 
 #[derive(Debug)]
@@ -213,7 +213,9 @@ impl ExplorerClient {
                     }
                 }
             } else {
-                panic!("result should always exist")
+                return Err(ExplorerError::ExplorerClientError(
+                    "workload result state does not exist - explorer issue".into(),
+                ));
             }
         }
         Err(ExplorerError::WorkloadTimeoutError(String::from(

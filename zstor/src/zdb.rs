@@ -262,6 +262,33 @@ impl ZdbConnectionInfo {
         &self.address
     }
 
+    /// Get a possible reservation id from the [`ZdbConnectionInfo`].
+    pub fn reservation_id(&self) -> Option<i64> {
+        // A namespace usually takes the form of {wid}-{index}, so split on '-', and check if we
+        // have 2 numbers.
+        if let Some(ns) = &self.namespace {
+            let mut parts = ns.split('-');
+            let id = if let Some(head) = parts.next() {
+                match head.parse::<i64>() {
+                    Err(_) => return None,
+                    Ok(id) => id,
+                }
+            } else {
+                return None;
+            };
+            if let Some(trail) = parts.next() {
+                if trail.parse::<u64>().is_err() {
+                    return None;
+                }
+            }
+            if parts.next().is_some() {
+                return None;
+            }
+            return Some(id);
+        }
+        None
+    }
+
     /// Get a hash of the connection info using the blake2b hash algorithm. The output size is 16
     /// bytes.
     pub fn blake2_hash(&self) -> [u8; 16] {

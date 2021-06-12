@@ -3,27 +3,27 @@ use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
-    id: i64,
-    node_id: String,
-    hostname: String,
-    node_id_v1: String,
-    farm_id: i64,
-    os_version: String,
-    created: u64,
-    uptime: u64,
+    pub id: i64,
+    pub node_id: String,
+    pub hostname: String,
+    pub node_id_v1: String,
+    pub farm_id: i64,
+    pub os_version: String,
+    pub created: u64,
+    pub uptime: u64,
     pub updated: u64,
-    address: String,
-    location: Location,
-    total_resources: ResourceAmount,
-    used_resources: ResourceAmount,
-    reserved_resources: ResourceAmount,
-    workloads: WorkloadAmount,
-    free_to_use: bool,
-    approved: bool,
+    pub address: String,
+    pub location: Location,
+    pub total_resources: ResourceAmount,
+    pub used_resources: ResourceAmount,
+    pub reserved_resources: ResourceAmount,
+    pub workloads: WorkloadAmount,
+    pub free_to_use: bool,
+    pub approved: bool,
     pub public_key_hex: String,
-    wg_ports: Option<Vec<i64>>,
-    deleted: bool,
-    reserved: bool,
+    pub wg_ports: Option<Vec<i64>>,
+    pub deleted: bool,
+    pub reserved: bool,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Farm {
@@ -81,34 +81,34 @@ enum PriceCurrency {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Location {
-    city: String,
-    country: String,
-    continent: String,
-    latitude: f64,
-    longitude: f64,
+pub struct Location {
+    pub city: String,
+    pub country: String,
+    pub continent: String,
+    pub latitude: f64,
+    pub longitude: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ResourceAmount {
-    cru: u64,
-    mru: f64,
-    hru: f64,
-    sru: f64,
+pub struct ResourceAmount {
+    pub cru: u64,
+    pub mru: f64,
+    pub hru: f64,
+    pub sru: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct WorkloadAmount {
-    network: u16,
-    network_resource: u16,
-    volume: u16,
-    zdb_namespace: u16,
-    container: u16,
-    k8s_vm: u16,
-    proxy: u16,
-    reverse_proxy: u16,
-    subdomain: u16,
-    delegate_domain: u16,
+pub struct WorkloadAmount {
+    pub network: u16,
+    pub network_resource: u16,
+    pub volume: u16,
+    pub zdb_namespace: u16,
+    pub container: u16,
+    pub k8s_vm: u16,
+    pub proxy: u16,
+    pub reverse_proxy: u16,
+    pub subdomain: u16,
+    pub delegate_domain: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
