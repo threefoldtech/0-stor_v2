@@ -16,6 +16,7 @@ use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
 use futures::future::try_join_all;
+use grid_explorer_client::ExplorerError;
 use meta::MetaStoreError;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -111,6 +112,7 @@ impl std::error::Error for ZstorError {
         match self.internal {
             InternalError::Zdb(ref e) => Some(e),
             InternalError::Other(ref e) => Some(e.as_ref()),
+            InternalError::Msg(_) => None,
         }
     }
 }
@@ -124,11 +126,19 @@ impl ZstorError {
         }
     }
 
-    /// Create a new ZstorError from any kind, with the underlying error included
-    pub fn new(kind: ZstorErrorKind, internal: Box<dyn std::error::Error + Send>) -> Self {
-        ZstorError {
+    /// Create a new [`ZstorError`] from any kind, with the underlying error included.
+    pub fn new(kind: ZstorErrorKind, internal: Box<dyn std::error::Error + Send>) -> ZstorError {
+        Self {
             kind,
             internal: InternalError::Other(internal),
+        }
+    }
+
+    /// Create a new [`ZstorError]` from a [`ZstorErrorKind`] and a custom message.
+    pub fn with_message(kind: ZstorErrorKind, msg: String) -> ZstorError {
+        Self {
+            kind,
+            internal: InternalError::Msg(msg),
         }
     }
 
@@ -147,6 +157,7 @@ impl ZstorError {
 enum InternalError {
     Zdb(ZdbError),
     Other(Box<dyn std::error::Error + Send>),
+    Msg(String),
 }
 
 impl fmt::Display for InternalError {
@@ -155,8 +166,9 @@ impl fmt::Display for InternalError {
             f,
             "{}",
             match self {
-                InternalError::Zdb(ref e) => e as &dyn std::error::Error,
-                InternalError::Other(e) => e.as_ref(),
+                InternalError::Zdb(ref e) => e as &dyn fmt::Display,
+                InternalError::Other(e) => e,
+                InternalError::Msg(string) => string,
             }
         )
     }
@@ -185,6 +197,8 @@ pub enum ZstorErrorKind {
     Async,
     /// An error in the (binary) wire format of messages.
     Serialization,
+    /// An error related to the explorer.
+    Explorer,
 }
 
 impl fmt::Display for ZstorErrorKind {
@@ -202,6 +216,7 @@ impl fmt::Display for ZstorErrorKind {
                 ZstorErrorKind::Config => "configuration".to_string(),
                 ZstorErrorKind::Async => "waiting for async task completion".to_string(),
                 ZstorErrorKind::Serialization => "error in the binary wire format".to_string(),
+                ZstorErrorKind::Explorer => "error in the grid explorer".to_string(),
             }
         )
     }
@@ -279,6 +294,15 @@ impl From<toml::de::Error> for ZstorError {
     }
 }
 
+impl From<toml::ser::Error> for ZstorError {
+    fn from(e: toml::ser::Error) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Config,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
 impl From<bincode::Error> for ZstorError {
     fn from(e: bincode::Error) -> Self {
         ZstorError {
@@ -292,6 +316,15 @@ impl From<MailboxError> for ZstorError {
     fn from(e: MailboxError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Async,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<ExplorerError> for ZstorError {
+    fn from(e: ExplorerError) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Explorer,
             internal: InternalError::Other(Box::new(e)),
         }
     }

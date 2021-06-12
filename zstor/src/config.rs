@@ -51,6 +51,13 @@ pub struct Group {
     backends: Vec<ZdbConnectionInfo>,
 }
 
+impl Group {
+    /// Returns a list of all [`ZdbConnectionInfo`] objects in this [`Group`].
+    pub fn backends(&self) -> &[ZdbConnectionInfo] {
+        &self.backends
+    }
+}
+
 /// Configuration for the used encryption.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,8 +153,14 @@ impl Config {
             .collect()
     }
 
+    /// Returns all backend groups in the config.
+    pub fn groups(&self) -> &[Group] {
+        &self.groups
+    }
+
     /// Remove a shard from the config. If the shard is present multiple times, all instances will
     /// be removed.
+    /// TODO: remove this.
     pub fn remove_shard(&mut self, address: &SocketAddr) {
         for mut group in &mut self.groups {
             group.backends = group
@@ -155,6 +168,26 @@ impl Config {
                 .drain(..)
                 .filter(|backend| backend.address() != address)
                 .collect();
+        }
+    }
+
+    /// Remove a backend from the config. If it should be present multiple times, all instances
+    /// will be removed.
+    pub fn remove_backend(&mut self, backend: &ZdbConnectionInfo) {
+        for mut group in &mut self.groups {
+            group.backends = group.backends.drain(..).filter(|b| b != backend).collect();
+        }
+    }
+
+    /// Add a backend to the config in the specified group. If the group does not exist yet, it
+    /// will be created.
+    pub fn add_backend(&mut self, group_idx: usize, backend: ZdbConnectionInfo) {
+        if group_idx >= self.groups.len() {
+            self.groups.push(Group {
+                backends: vec![backend],
+            });
+        } else {
+            self.groups[group_idx].backends.push(backend);
         }
     }
 

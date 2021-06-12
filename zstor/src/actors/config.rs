@@ -1,6 +1,6 @@
-use crate::{config::Config, ZstorError};
+use crate::{config::Config, zdb::ZdbConnectionInfo, ZstorError};
 use actix::prelude::*;
-use std::{path::PathBuf, sync::Arc};
+use std::{ops::Deref, path::PathBuf, sync::Arc};
 use tokio::fs;
 
 #[derive(Message)]
@@ -12,6 +12,20 @@ pub struct GetConfig;
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message to trigger a config reload
 pub struct ReloadConfig;
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ZstorError>")]
+/// Message to add a new 0-db to the configuration. The group in which to add the 0-db must be
+/// supplied. It is possible to instruct the removal of an old 0-db as well, though this is not
+/// required.
+pub struct AddZdb {
+    /// Group index in which to add the new 0-db
+    pub group_idx: usize,
+    /// [`ZdbConnectionInfo`] of the new 0-db.
+    pub ci: ZdbConnectionInfo,
+    /// [`ZdbConnectionInfo`] to identify the 0-db which needs to be removed.
+    pub replaced: Option<ZdbConnectionInfo>,
+}
 
 /// Actor holding the configuration, and the path where it is saved.
 pub struct ConfigActor {
@@ -60,4 +74,28 @@ impl Handler<ReloadConfig> for ConfigActor {
             }),
         ))
     }
+}
+
+impl Handler<AddZdb> for ConfigActor {
+    type Result = ResponseFuture<Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: AddZdb, _: &mut Self::Context) -> Self::Result {
+        let mut new_config = Arc::clone(&self.config);
+        let config = Arc::make_mut(&mut new_config);
+        config.add_backend(msg.group_idx, msg.ci);
+        if let Some(removed_backend) = msg.replaced {
+            config.remove_backend(&removed_backend);
+        }
+        self.config = new_config.clone();
+        let path = self.config_path.clone();
+        Box::pin(async move { save_config(path, new_config).await })
+    }
+}
+
+/// Save a config to the config file.
+async fn save_config(config_path: PathBuf, config: Arc<Config>) -> Result<(), ZstorError> {
+    let data = toml::to_vec(config.deref()).map_err(ZstorError::from)?;
+    Ok(fs::write(&config_path, data)
+        .await
+        .map_err(|e| ZstorError::new_io("Could not save config file".into(), e))?)
 }

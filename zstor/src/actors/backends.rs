@@ -144,7 +144,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .into_actor(self)
             .map(|res, actor, _| {
                 for (ci, new_state) in res.into_iter() {
-                    // It _IS_ possible that the entryi is gone here, if another future in the
+                    // It _IS_ possible that the entry is gone here, if another future in the
                     // actor runs another future in between. But in this case, it was this actor
                     // which decided to remove the entry, so we don't really care about that
                     // anyway.
