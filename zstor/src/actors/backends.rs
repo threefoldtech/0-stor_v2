@@ -223,7 +223,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
             .managed_seq_dbs
             .iter()
             .filter_map(|(ci, (_, state))| {
-                if !(state.is_writeable() && state.is_readable()) {
+                if state.is_terminal() {
                     Some((ci.clone(), state.clone()))
                 } else {
                     None
@@ -277,6 +277,9 @@ async fn get_seq_zdb(
         .send(ExpandStorage {
             existing_zdb: Some(ci),
             // Only try to decommission the old 0-db if it is no longer readable.
+            // We don't want to decommission backends in an unknown state just yet, but those
+            // should not be included here since [`BackendState::Unknown`] is not considered
+            // terminal.
             decomission: !state.is_readable(),
             size_gib: DEFAULT_BACKEND_SIZE_GIB,
             mode: ZdbRunMode::Seq,
@@ -343,15 +346,14 @@ impl BackendState {
         }
     }
 
-    /// Identify if the backend is considered readable.
+    /// Identify if the backend is considered definitely readable.
     pub fn is_readable(&self) -> bool {
-        // we still consider unknown state to be readable.
-        *self != BackendState::Unreachable
+        matches!(self, BackendState::Healthy | BackendState::Unknown(_))
     }
 
-    /// Identify if the backend is considered writeable.
+    /// Identify if the backend is considered definitely writeable.
     pub fn is_writeable(&self) -> bool {
-        !matches!(self, BackendState::Unreachable | BackendState::LowSpace(_))
+        matches!(self, BackendState::Healthy)
     }
 
     /// Identify if the backend is considered to be in a "terminal" state. A terminal state means
