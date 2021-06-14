@@ -382,7 +382,8 @@ where
         },
         ZstorCommand::Check(check) => match zstor.send(check).await? {
             Err(e) => ZstorResponse::Err(e.to_string()),
-            Ok(checksum) => ZstorResponse::Checksum(checksum),
+            Ok(Some(checksum)) => ZstorResponse::Checksum(checksum),
+            Ok(None) => ZstorResponse::Success,
         },
     };
 
@@ -439,10 +440,11 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
             ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,
             ZstorCommand::Rebuild(rebuild) => zstor.send(rebuild).await??,
             ZstorCommand::Check(check) => {
-                let checksum = zstor.send(check).await??;
-                println!("{}", hex::encode(checksum));
+                if let Some(checksum) = zstor.send(check).await?? {
+                    println!("{}", hex::encode(checksum));
+                }
             }
-        }
+        };
     };
     Ok(())
 }

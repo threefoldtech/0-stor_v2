@@ -4,6 +4,9 @@
 pub mod backends;
 /// Actor implementation of the configuration manager
 pub mod config;
+/// Actor implementation of a monitor that keeps the total size of all files in a directory below a
+/// certain threshold by deleting the least recently accessed one if the size exceeds the limit.
+pub mod dir_monitor;
 /// Actor implementation of an explorer client. The actor takes care of managing capacity pools
 /// automatically.
 pub mod explorer;

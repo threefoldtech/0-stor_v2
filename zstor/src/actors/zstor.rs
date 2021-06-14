@@ -87,7 +87,7 @@ pub struct Rebuild {
 }
 
 #[derive(Serialize, Deserialize, Debug, Message)]
-#[rtype(result = "Result<Checksum, ZstorError>")]
+#[rtype(result = "Result<Option<Checksum>, ZstorError>")]
 /// Message for the check command of zstor.
 pub struct Check {
     /// The path to check for the presence of a file.
@@ -335,18 +335,15 @@ impl<T> Handler<Check> for ZstorActor<T>
 where
     T: MetaStore + Unpin + 'static,
 {
-    type Result = ResponseFuture<Result<Checksum, ZstorError>>;
+    type Result = ResponseFuture<Result<Option<Checksum>, ZstorError>>;
 
     fn handle(&mut self, msg: Check, _: &mut Self::Context) -> Self::Result {
         let meta = self.meta.clone();
         Box::pin(async move {
-            match meta.send(LoadMeta { path: msg.path }).await?? {
-                Some(meta) => Ok(*meta.checksum()),
-                None => Err(ZstorError::new_io(
-                    "Metadata not found".to_string(),
-                    std::io::Error::new(std::io::ErrorKind::NotFound, "Metadata not found"),
-                )),
-            }
+            Ok(meta
+                .send(LoadMeta { path: msg.path })
+                .await??
+                .map(|meta| *meta.checksum()))
         })
     }
 }
