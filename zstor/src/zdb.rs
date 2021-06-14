@@ -34,7 +34,7 @@ const MAX_ZDB_DATA_SIZE: usize = 8 * 1024 * 1024;
 const ZDB_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A connection to a 0-db namespace running in sequential mode
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SequentialZdb {
     internal: InternalZdb,
 }
@@ -47,6 +47,7 @@ pub struct UserKeyZdb {
 
 /// An open connection to a 0-db instance. The connection might not be valid after opening (e.g. if
 /// the remote closed). No reconnection is attempted.
+#[derive(Clone)]
 struct InternalZdb {
     conn: MultiplexedConnection,
     // connection info tracked to conveniently inspect the remote address and namespace.

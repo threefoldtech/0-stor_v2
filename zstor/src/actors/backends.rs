@@ -14,7 +14,6 @@ use futures::{
 use log::{debug, error, warn};
 use std::{
     collections::HashMap,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -33,7 +32,7 @@ const DEFAULT_BACKEND_SIZE_GIB: u64 = 100;
 pub struct BackendManagerActor {
     config_addr: Addr<ConfigActor>,
     explorer: Addr<ExplorerActor>,
-    managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<Arc<SequentialZdb>>, BackendState)>,
+    managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
 }
 
 impl BackendManagerActor {
@@ -101,7 +100,7 @@ impl Actor for BackendManagerActor {
                                         return Some((ci.clone(), (None, BackendState::new())));
                                     }
                                 };
-                                let db = Arc::new(db);
+                                let db = db;
                                 let ns_info = match db.ns_info().await {
                                     Ok(info) => info,
                                     Err(e) => {
@@ -175,7 +174,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                                         state.mark_healthy(info.free_space());
                                     }
                                 }
-                                (ci, Some(Arc::new(db)), state)
+                                (ci, Some(db), state)
                             } else {
                                 state.mark_unreachable();
                                 (ci, None, state)
@@ -272,7 +271,7 @@ async fn get_seq_zdb(
     explorer: Addr<ExplorerActor>,
     ci: ZdbConnectionInfo,
     state: BackendState,
-) -> Result<(ZdbConnectionInfo, Option<Arc<SequentialZdb>>, BackendState), ZstorError> {
+) -> Result<(ZdbConnectionInfo, Option<SequentialZdb>, BackendState), ZstorError> {
     let res = explorer
         .send(ExpandStorage {
             existing_zdb: Some(ci),
@@ -292,7 +291,7 @@ async fn get_seq_zdb(
                 Ok(info) => state.mark_healthy(info.free_space()),
                 Err(_) => state.mark_unreachable(),
             };
-            Ok((res, Some(Arc::new(db)), state))
+            Ok((res, Some(db), state))
         }
         Err(e) => {
             error!("Could not connect to new 0-db: {}", e);
