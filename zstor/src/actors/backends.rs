@@ -71,6 +71,18 @@ struct CheckBackends;
 #[rtype(result = "()")]
 struct ReplaceBackends;
 
+/// Message to request connections to backends with a given capabitlity. If a healthy connection
+/// is being managed to his backend, this is returned. If a connection to this backend is not
+/// managed, or the connection is in an unhealthy state, a new connection is attempted.
+#[derive(Debug, Message)]
+#[rtype(result = "Vec<Result<Option<SequentialZdb>, ZstorError>>")]
+pub struct RequestBackend {
+    /// Connection info identifying the requested backend.
+    backend_requests: Vec<ZdbConnectionInfo>,
+    /// The required state of the connections.
+    interest: StateInterest,
+}
+
 impl Actor for BackendManagerActor {
     type Context = Context<Self>;
 
@@ -261,6 +273,71 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
     }
 }
 
+/// IntermediateRequestState for resolving cached connections
+enum IRState {
+    Cached((SequentialZdb, BackendState)),
+    NotFound(ZdbConnectionInfo),
+}
+impl Handler<RequestBackend> for BackendManagerActor {
+    type Result = ResponseFuture<Vec<Result<Option<SequentialZdb>, ZstorError>>>;
+
+    fn handle(&mut self, msg: RequestBackend, _: &mut Self::Context) -> Self::Result {
+        let mut cached_cons = Vec::with_capacity(msg.backend_requests.len());
+        for request in &msg.backend_requests {
+            let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(&request) {
+                match c {
+                    Some(con) => IRState::Cached((con.clone(), state.clone())),
+                    // None means there is no readily available connection to the backend, so create a
+                    // new one. This means state is not healthy anyway.
+                    None => IRState::NotFound(request.clone()),
+                }
+            } else {
+                IRState::NotFound(request.clone())
+            };
+            cached_cons.push(cached_con);
+        }
+
+        Box::pin(async move {
+            let interest = msg.interest;
+            let futs = cached_cons.into_iter().map(|mut cc| async move {
+                if let IRState::Cached((con, state)) = cc {
+                    match interest {
+                        StateInterest::Writeable if state.is_writeable() => return Ok(Some(con)),
+                        StateInterest::Readable if state.is_readable() => return Ok(Some(con)),
+                        // Connection doesn't have the proper state, extract the connection info so
+                        // we can attempt a reconnect.
+                        _ => {
+                            cc = IRState::NotFound(con.connection_info().clone());
+                        }
+                    }
+                }
+
+                if let IRState::NotFound(ci) = cc {
+                    // No existing connection, attempt a new one
+                    let db = SequentialZdb::new(ci).await?;
+                    if let StateInterest::Readable = interest {
+                        return Ok(Some(db));
+                    }
+
+                    let mut state = BackendState::new();
+                    let ns_info = db.ns_info().await?;
+                    state.mark_healthy(ns_info.free_space());
+
+                    // Interest must be writeable here.
+                    if state.is_writeable() {
+                        return Ok(Some(db));
+                    }
+
+                    Ok(None)
+                } else {
+                    unreachable!();
+                }
+            });
+            join_all(futs).await
+        })
+    }
+}
+
 /// This function is a workaround for the fact that the compiler cannot properly infer the returned
 /// type if it is inlined at the call site as an "async move { ... }". Because "impl Trait" is not
 /// allowed in generics at call sited, the join_all call above will complain as it does not
@@ -298,6 +375,19 @@ async fn get_seq_zdb(
             Ok((res, None, state))
         }
     }
+}
+
+/// An interest in the state of a db connection when requesting one or multiple. Only connections
+/// which are sufficiently capable are returned.
+#[derive(Debug, Clone, Copy)]
+pub enum StateInterest {
+    /// The connection can be read from, i.e. a previously stored object can be recovered. This
+    /// currently means an active / healthy connection.
+    Readable,
+    /// The connection can be written to, i.e. the backend has sufficient space left, and there is
+    /// an active / healthy connection. This also implies the connection is
+    /// [`StateInterest::Readable`].
+    Writeable,
 }
 
 #[derive(Debug, Clone, PartialEq)]
