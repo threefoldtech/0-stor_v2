@@ -431,11 +431,9 @@ mod tests {
             compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::Zdb(crate::zdb_meta::ZdbMetaStoreConfig::new(
-                2,
-                2,
                 "someprefix".to_string(),
                 super::Encryption::Aes(SymmetricKey::new([1u8; 32])),
-                vec![
+                [
                     ZdbConnectionInfo::new(
                         "[2a02:1802:5e::dead:beef]:9900"
                             .to_socket_addrs()
@@ -494,8 +492,6 @@ algorithm = "snappy"
 type = "zdb"
 
 [meta.config]
-data_shards = 2
-parity_shards = 2
 prefix = "someprefix"
 
 [meta.config.encryption]
@@ -590,11 +586,9 @@ password = "supersecretpass"
             compression: super::Compression::Snappy,
             root: Some(std::path::PathBuf::from("/virtualroot")),
             meta: super::Meta::Zdb(crate::zdb_meta::ZdbMetaStoreConfig::new(
-                2,
-                2,
                 "someprefix".to_string(),
                 super::Encryption::Aes(SymmetricKey::new([1u8; 32])),
-                vec![
+                [
                     ZdbConnectionInfo::new(
                         "[2a02:1802:5e::dead:beef]:9900"
                             .to_socket_addrs()
@@ -653,8 +647,6 @@ algorithm = "snappy"
 type = "zdb"
 
 [meta.config]
-data_shards = 2
-parity_shards = 2
 prefix = "someprefix"
 
 [meta.config.encryption]

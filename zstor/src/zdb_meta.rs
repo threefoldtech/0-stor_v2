@@ -19,28 +19,27 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
 
+/// Amount of data shards to use for the encoder used by the 0-db MetaStore.
+const ZDB_METASTORE_DATA_SHARDS: usize = 2;
+/// Amount of parity shards to use for the encoder used by the 0-db MetaStore.
+const ZDB_METASTORE_PARITY_SHARDS: usize = 2;
+
 /// Configuration to create a 0-db based metadata store
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZdbMetaStoreConfig {
-    data_shards: usize,
-    parity_shards: usize,
     prefix: String,
     encryption: config::Encryption,
-    backends: Vec<ZdbConnectionInfo>,
+    backends: [ZdbConnectionInfo; 4],
 }
 
 impl ZdbMetaStoreConfig {
     /// Create a new [`ZdbMetaStoreConfig`] with the given data.
     pub fn new(
-        data_shards: usize,
-        parity_shards: usize,
         prefix: String,
         encryption: config::Encryption,
-        backends: Vec<ZdbConnectionInfo>,
+        backends: [ZdbConnectionInfo; 4],
     ) -> ZdbMetaStoreConfig {
         Self {
-            data_shards,
-            parity_shards,
             prefix,
             encryption,
             backends,
@@ -53,7 +52,7 @@ impl ZdbMetaStoreConfig {
 
     /// Build an encoder from the config.
     pub fn encoder(&self) -> Encoder {
-        Encoder::new(self.data_shards, self.parity_shards)
+        Encoder::new(ZDB_METASTORE_DATA_SHARDS, ZDB_METASTORE_PARITY_SHARDS)
     }
 
     /// Get the encryption configuration from the config
