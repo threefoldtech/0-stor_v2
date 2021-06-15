@@ -76,11 +76,11 @@ struct ReplaceBackends;
 /// managed, or the connection is in an unhealthy state, a new connection is attempted.
 #[derive(Debug, Message)]
 #[rtype(result = "Vec<Result<Option<SequentialZdb>, ZstorError>>")]
-pub struct RequestBackend {
+pub struct RequestBackends {
     /// Connection info identifying the requested backend.
-    backend_requests: Vec<ZdbConnectionInfo>,
+    pub backend_requests: Vec<ZdbConnectionInfo>,
     /// The required state of the connections.
-    interest: StateInterest,
+    pub interest: StateInterest,
 }
 
 impl Actor for BackendManagerActor {
@@ -278,10 +278,10 @@ enum IRState {
     Cached((SequentialZdb, BackendState)),
     NotFound(ZdbConnectionInfo),
 }
-impl Handler<RequestBackend> for BackendManagerActor {
+impl Handler<RequestBackends> for BackendManagerActor {
     type Result = ResponseFuture<Vec<Result<Option<SequentialZdb>, ZstorError>>>;
 
-    fn handle(&mut self, msg: RequestBackend, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RequestBackends, _: &mut Self::Context) -> Self::Result {
         let mut cached_cons = Vec::with_capacity(msg.backend_requests.len());
         for request in &msg.backend_requests {
             let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(&request) {
