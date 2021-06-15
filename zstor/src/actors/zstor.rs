@@ -1,6 +1,7 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
     meta::{LoadMeta, LoadMetaByKey, MetaStoreActor, SaveMeta, SaveMetaByKey},
+    metrics::{MetricsActor, ZstorCommandFinsihed, ZstorCommandID},
     pipeline::{PipelineActor, RebuildData, RecoverFile, StoreFile},
 };
 use crate::{
@@ -99,6 +100,7 @@ pub struct ZstorActor<T: Unpin + 'static> {
     cfg: Addr<ConfigActor>,
     pipeline: Addr<PipelineActor>,
     meta: Addr<MetaStoreActor<T>>,
+    metrics: Addr<MetricsActor>,
 }
 
 impl<T> ZstorActor<T>
@@ -110,11 +112,13 @@ where
         cfg: Addr<ConfigActor>,
         pipeline: Addr<PipelineActor>,
         meta: Addr<MetaStoreActor<T>>,
+        metrics: Addr<MetricsActor>,
     ) -> ZstorActor<T> {
         Self {
             cfg,
             pipeline,
             meta,
+            metrics,
         }
     }
 }
@@ -189,7 +193,14 @@ where
 
                 Ok(())
             }
-            .into_actor(self),
+            .into_actor(self)
+            .then(|res, actor, _| {
+                actor.metrics.do_send(ZstorCommandFinsihed {
+                    id: ZstorCommandID::Store,
+                    success: res.is_ok(),
+                });
+                async move { res }.into_actor(actor)
+            }),
         ))
     }
 }
@@ -230,7 +241,14 @@ where
                     })
                     .await?
             }
-            .into_actor(self),
+            .into_actor(self)
+            .then(|res, actor, _| {
+                actor.metrics.do_send(ZstorCommandFinsihed {
+                    id: ZstorCommandID::Retrieve,
+                    success: res.is_ok(),
+                });
+                async move { res }.into_actor(actor)
+            }),
         ))
     }
 }
@@ -326,7 +344,14 @@ where
 
                 Ok(())
             }
-            .into_actor(self),
+            .into_actor(self)
+            .then(|res, actor, _| {
+                actor.metrics.do_send(ZstorCommandFinsihed {
+                    id: ZstorCommandID::Rebuild,
+                    success: res.is_ok(),
+                });
+                async move { res }.into_actor(actor)
+            }),
         ))
     }
 }
@@ -335,16 +360,26 @@ impl<T> Handler<Check> for ZstorActor<T>
 where
     T: MetaStore + Unpin + 'static,
 {
-    type Result = ResponseFuture<Result<Option<Checksum>, ZstorError>>;
+    type Result = ResponseActFuture<Self, Result<Option<Checksum>, ZstorError>>;
 
     fn handle(&mut self, msg: Check, _: &mut Self::Context) -> Self::Result {
         let meta = self.meta.clone();
-        Box::pin(async move {
-            Ok(meta
-                .send(LoadMeta { path: msg.path })
-                .await??
-                .map(|meta| *meta.checksum()))
-        })
+        Box::pin(
+            async move {
+                Ok(meta
+                    .send(LoadMeta { path: msg.path })
+                    .await??
+                    .map(|meta| *meta.checksum()))
+            }
+            .into_actor(self)
+            .then(|res, actor, _| {
+                actor.metrics.do_send(ZstorCommandFinsihed {
+                    id: ZstorCommandID::Check,
+                    success: res.is_ok(),
+                });
+                async move { res }.into_actor(actor)
+            }),
+        )
     }
 }
 

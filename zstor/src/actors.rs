@@ -12,6 +12,8 @@ pub mod dir_monitor;
 pub mod explorer;
 /// Actor implementation of the [`MetaStore`](crate::meta::MetaStore)
 pub mod meta;
+/// Actor implementation of a metric collector.
+pub mod metrics;
 /// Actor implementation of the pipeline
 pub mod pipeline;
 /// Actor implementation of a repair queue.

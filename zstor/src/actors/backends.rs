@@ -1,6 +1,7 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
     explorer::{ExpandStorage, ExplorerActor},
+    metrics::{MetricsActor, SetBackendInfo},
 };
 use crate::{
     zdb::{SequentialZdb, ZdbConnectionInfo, ZdbRunMode},
@@ -32,6 +33,7 @@ const DEFAULT_BACKEND_SIZE_GIB: u64 = 100;
 pub struct BackendManagerActor {
     config_addr: Addr<ConfigActor>,
     explorer: Addr<ExplorerActor>,
+    metrics: Addr<MetricsActor>,
     managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
 }
 
@@ -40,10 +42,12 @@ impl BackendManagerActor {
     pub fn new(
         config_addr: Addr<ConfigActor>,
         explorer: Addr<ExplorerActor>,
+        metrics: Addr<MetricsActor>,
     ) -> BackendManagerActor {
         Self {
             config_addr,
             explorer,
+            metrics,
             managed_seq_dbs: HashMap::new(),
         }
     }
@@ -164,32 +168,36 @@ impl Handler<CheckBackends> for BackendManagerActor {
                     .into_iter()
                     .map(|(ci, (db, mut state))| async move {
                         if let Some(db) = db {
-                            match db.ns_info().await {
+                            let info = match db.ns_info().await {
                                 Err(e) => {
                                     warn!("Failed to get ns_info from {}: {}", ci, e);
                                     state.mark_unreachable();
+                                    None
                                 }
                                 Ok(info) => {
                                     state.mark_healthy(info.free_space());
+                                    Some(info)
                                 }
-                            }
-                            (ci, None, state)
+                            };
+                            (ci, None, state, info)
                         } else {
                             // Try and get a new connection to the db.
                             if let Ok(db) = SequentialZdb::new(ci.clone()).await {
-                                match db.ns_info().await {
+                                let info = match db.ns_info().await {
                                     Err(e) => {
                                         warn!("Failed to get ns_info from {}: {}", ci, e);
                                         state.mark_unreachable();
+                                        None
                                     }
                                     Ok(info) => {
                                         state.mark_healthy(info.free_space());
+                                        Some(info)
                                     }
-                                }
-                                (ci, Some(db), state)
+                                };
+                                (ci, Some(db), state, info)
                             } else {
                                 state.mark_unreachable();
-                                (ci, None, state)
+                                (ci, None, state, None)
                             }
                         }
                     });
@@ -198,7 +206,12 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .into_actor(self)
             .map(|res, actor, ctx| {
                 let mut should_sweep = false;
-                for (ci, new_db, new_state) in res.into_iter() {
+                for (ci, new_db, new_state, info) in res.into_iter() {
+                    // update metrics
+                    actor.metrics.do_send(SetBackendInfo {
+                        ci: ci.clone(),
+                        info,
+                    });
                     // It _IS_ possible that the entry is gone here, if another future in the
                     // actor runs another future in between. But in this case, it was this actor
                     // which decided to remove the entry, so we don't really care about that
@@ -244,6 +257,10 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
 
         // Now remove the backends to replace from the set of managed ones.
         for (key, _) in &replacements {
+            self.metrics.do_send(SetBackendInfo {
+                ci: key.clone(),
+                info: None,
+            });
             self.managed_seq_dbs.remove(key);
         }
 

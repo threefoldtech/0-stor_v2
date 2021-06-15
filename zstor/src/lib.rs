@@ -7,7 +7,9 @@
 //! config structs available.
 
 use crate::actors::{
-    config::ConfigActor, meta::MetaStoreActor, pipeline::PipelineActor, zstor::ZstorActor,
+    backends::BackendManagerActor, config::ConfigActor, dir_monitor::DirMonitorActor,
+    explorer::ExplorerActor, meta::MetaStoreActor, metrics::MetricsActor, pipeline::PipelineActor,
+    repairer::RepairActor, zstor::ZstorActor,
 };
 use actix::prelude::*;
 use actix::{Addr, MailboxError};
@@ -16,7 +18,10 @@ use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
 use futures::future::try_join_all;
-use grid_explorer_client::ExplorerError;
+use grid_explorer_client::{
+    identity::{Identity, IdentityError},
+    ExplorerClient, ExplorerError,
+};
 use meta::MetaStoreError;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -52,9 +57,17 @@ pub mod zdb_meta;
 pub type ZstorResult<T> = Result<T, ZstorError>;
 
 /// Start the 0-stor monitor daemon
-pub async fn setup_system(cfg_path: PathBuf) -> ZstorResult<Addr<ZstorActor<impl MetaStore>>> {
-    let cfg = load_config(&cfg_path).await?;
-
+pub async fn setup_system(
+    cfg_path: PathBuf,
+    cfg: Config,
+) -> ZstorResult<Addr<ZstorActor<impl MetaStore>>> {
+    let identity = Identity::new(
+        cfg.identity_name().to_string(),
+        cfg.identity_email().to_string(),
+        cfg.identity_id() as i64,
+        cfg.identity_mnemonic(),
+    )?;
+    let explorer_client = ExplorerClient::new(cfg.grid_network(), cfg.wallet_secret(), identity);
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
             let backends = try_join_all(
@@ -77,11 +90,22 @@ pub async fn setup_system(cfg_path: PathBuf) -> ZstorResult<Addr<ZstorActor<impl
             )
         }
     };
+    let metrics_addr = MetricsActor::new().start();
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg).start();
     let pipeline_addr = SyncArbiter::start(1, || PipelineActor);
 
-    let zstor = ZstorActor::new(cfg_addr, pipeline_addr, meta_addr).start();
+    let zstor = ZstorActor::new(
+        cfg_addr.clone(),
+        pipeline_addr,
+        meta_addr.clone(),
+        metrics_addr.clone(),
+    )
+    .start();
+    let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
+    let explorer = ExplorerActor::new(explorer_client, cfg_addr.clone()).start();
+    let backends = BackendManagerActor::new(cfg_addr, explorer, metrics_addr).start();
+    let _ = RepairActor::new(meta_addr, backends, zstor.clone()).start();
 
     Ok(zstor)
 }
@@ -323,6 +347,15 @@ impl From<MailboxError> for ZstorError {
 
 impl From<ExplorerError> for ZstorError {
     fn from(e: ExplorerError) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::Explorer,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<IdentityError> for ZstorError {
+    fn from(e: IdentityError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Explorer,
             internal: InternalError::Other(Box::new(e)),

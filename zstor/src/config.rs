@@ -1,5 +1,6 @@
 use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
 use gray_codes::{InclusionExclusion, SetMutation};
+use grid_explorer_client::GridNetwork;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -42,6 +43,19 @@ pub struct Config {
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
     max_zdb_data_dir_size: Option<u64>,
+    /// The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
+    network: GridNetwork,
+    /// The stellar secret of the wallet used to fund capacity pools. This wallet must have TFT,
+    /// and a small amount of XLM to fund the transactions.
+    wallet_secret: String,
+    /// The name of the identity registered on the explorer to use for pools / reservations.
+    identity_name: String,
+    /// The email associated with the identity on the explorer.
+    identity_email: String,
+    /// The id of the identity.
+    identity_id: u64,
+    /// The mnemonic of the secret used by the identity
+    identity_mnemonic: String,
     /// configuration to use for the encryption stage
     encryption: Encryption,
     /// configuration to use for the compression stage
@@ -131,6 +145,36 @@ impl Config {
     /// Return the virtual root set in the config, if any
     pub fn virtual_root(&self) -> &Option<std::path::PathBuf> {
         &self.root
+    }
+
+    /// Return the grid network used for the explorer to manage the 0-dbs.
+    pub fn grid_network(&self) -> GridNetwork {
+        self.network
+    }
+
+    /// Return the wallet secret of the wallet used to pay for capacity reservations.
+    pub fn wallet_secret(&self) -> &str {
+        &self.wallet_secret
+    }
+
+    /// Returns the name of the identity used.
+    pub fn identity_name(&self) -> &str {
+        &self.identity_name
+    }
+
+    /// Returns the email of the identity used.
+    pub fn identity_email(&self) -> &str {
+        &self.identity_email
+    }
+
+    /// Returns the id of the identity used.
+    pub fn identity_id(&self) -> u64 {
+        self.identity_id
+    }
+
+    /// Returns the mnemonic of the identity used.
+    pub fn identity_mnemonic(&self) -> &str {
+        &self.identity_mnemonic
     }
 
     /// Return the encryption config to use for encoding this object.

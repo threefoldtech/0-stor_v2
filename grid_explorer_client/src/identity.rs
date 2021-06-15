@@ -1,12 +1,30 @@
 use bip39::{Error, Mnemonic};
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, SignatureError, Signer};
 use sha2::{Digest, Sha256};
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 #[derive(Debug)]
 pub enum IdentityError {
     MnemonicError(Error),
     SignatureError(SignatureError),
+}
+
+impl fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IdentityError::MnemonicError(e) => write!(f, "Mnemonic error: {}", e),
+            IdentityError::SignatureError(e) => write!(f, "Signature error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for IdentityError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            IdentityError::MnemonicError(ref e) => Some(e),
+            IdentityError::SignatureError(ref e) => Some(e),
+        }
+    }
 }
 
 impl From<Error> for IdentityError {

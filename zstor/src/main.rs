@@ -306,7 +306,11 @@ async fn real_main() -> ZstorResult<()> {
                 eprintln!("Missing \"socket\" argument in config");
                 process::exit(1);
             };
-            let zstor = zstor_v2::setup_system(opts.config).await?;
+
+            // unwrapping this is safe as we just checked it is Some. We clone the value here to
+            // avoid having to clone the whole config.
+            let socket_path = cfg.socket().unwrap().to_path_buf();
+            let zstor = zstor_v2::setup_system(opts.config, cfg).await?;
 
             loop {
                 tokio::select! {
@@ -336,7 +340,7 @@ async fn real_main() -> ZstorResult<()> {
             info!("Shutting down zstor daemon after receiving CTRL-C");
 
             // try to remove the socket file
-            if let Err(e) = fs::remove_file(cfg.socket().unwrap()) {
+            if let Err(e) = fs::remove_file(socket_path) {
                 error!("Could not remove socket file: {}", e);
             };
         }
@@ -434,7 +438,7 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
         }
     } else {
         debug!("No zstor daemon socket found, running command in process");
-        let zstor = zstor_v2::setup_system(cfg_path).await?;
+        let zstor = zstor_v2::setup_system(cfg_path, cfg).await?;
         match zc {
             ZstorCommand::Store(store) => zstor.send(store).await??,
             ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,
