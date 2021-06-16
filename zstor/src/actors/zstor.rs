@@ -1,7 +1,7 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
     meta::{LoadMeta, LoadMetaByKey, MetaStoreActor, SaveMeta, SaveMetaByKey},
-    metrics::{MetricsActor, ZstorCommandFinsihed, ZstorCommandID},
+    metrics::{MetricsActor, ZstorCommandFinsihed, ZstorCommandId},
     pipeline::{PipelineActor, RebuildData, RecoverFile, StoreFile},
 };
 use crate::{
@@ -196,7 +196,7 @@ where
             .into_actor(self)
             .then(|res, actor, _| {
                 actor.metrics.do_send(ZstorCommandFinsihed {
-                    id: ZstorCommandID::Store,
+                    id: ZstorCommandId::Store,
                     success: res.is_ok(),
                 });
                 async move { res }.into_actor(actor)
@@ -244,7 +244,7 @@ where
             .into_actor(self)
             .then(|res, actor, _| {
                 actor.metrics.do_send(ZstorCommandFinsihed {
-                    id: ZstorCommandID::Retrieve,
+                    id: ZstorCommandId::Retrieve,
                     success: res.is_ok(),
                 });
                 async move { res }.into_actor(actor)
@@ -347,7 +347,7 @@ where
             .into_actor(self)
             .then(|res, actor, _| {
                 actor.metrics.do_send(ZstorCommandFinsihed {
-                    id: ZstorCommandID::Rebuild,
+                    id: ZstorCommandId::Rebuild,
                     success: res.is_ok(),
                 });
                 async move { res }.into_actor(actor)
@@ -374,7 +374,7 @@ where
             .into_actor(self)
             .then(|res, actor, _| {
                 actor.metrics.do_send(ZstorCommandFinsihed {
-                    id: ZstorCommandID::Check,
+                    id: ZstorCommandId::Check,
                     success: res.is_ok(),
                 });
                 async move { res }.into_actor(actor)

@@ -291,7 +291,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
 }
 
 /// IntermediateRequestState for resolving cached connections
-enum IRState {
+enum IrState {
     Cached((SequentialZdb, BackendState)),
     NotFound(ZdbConnectionInfo),
 }
@@ -303,13 +303,13 @@ impl Handler<RequestBackends> for BackendManagerActor {
         for request in &msg.backend_requests {
             let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(&request) {
                 match c {
-                    Some(con) => IRState::Cached((con.clone(), state.clone())),
+                    Some(con) => IrState::Cached((con.clone(), state.clone())),
                     // None means there is no readily available connection to the backend, so create a
                     // new one. This means state is not healthy anyway.
-                    None => IRState::NotFound(request.clone()),
+                    None => IrState::NotFound(request.clone()),
                 }
             } else {
-                IRState::NotFound(request.clone())
+                IrState::NotFound(request.clone())
             };
             cached_cons.push(cached_con);
         }
@@ -317,19 +317,19 @@ impl Handler<RequestBackends> for BackendManagerActor {
         Box::pin(async move {
             let interest = msg.interest;
             let futs = cached_cons.into_iter().map(|mut cc| async move {
-                if let IRState::Cached((con, state)) = cc {
+                if let IrState::Cached((con, state)) = cc {
                     match interest {
                         StateInterest::Writeable if state.is_writeable() => return Ok(Some(con)),
                         StateInterest::Readable if state.is_readable() => return Ok(Some(con)),
                         // Connection doesn't have the proper state, extract the connection info so
                         // we can attempt a reconnect.
                         _ => {
-                            cc = IRState::NotFound(con.connection_info().clone());
+                            cc = IrState::NotFound(con.connection_info().clone());
                         }
                     }
                 }
 
-                if let IRState::NotFound(ci) = cc {
+                if let IrState::NotFound(ci) = cc {
                     // No existing connection, attempt a new one
                     let db = SequentialZdb::new(ci).await?;
                     if let StateInterest::Readable = interest {

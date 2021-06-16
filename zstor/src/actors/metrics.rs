@@ -6,8 +6,8 @@ use std::{collections::HashMap, fmt, string::FromUtf8Error};
 /// A metrics actor collecting metrics from the system.
 pub struct MetricsActor {
     zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
-    successful_zstor_commands: HashMap<ZstorCommandID, usize>,
-    failed_zstor_commands: HashMap<ZstorCommandID, usize>,
+    successful_zstor_commands: HashMap<ZstorCommandId, usize>,
+    failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     prom_metrics: PromMetrics,
 }
 
@@ -157,7 +157,7 @@ pub struct GetPrometheusMetrics;
 #[rtype(result = "()")]
 pub struct ZstorCommandFinsihed {
     /// The command which finished.
-    pub id: ZstorCommandID,
+    pub id: ZstorCommandId,
     /// Whether the command finished successfully or not.
     pub success: bool,
 }
@@ -245,7 +245,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             data_size_bytes_gauge.set(info.data_size_bytes as i64);
             data_limit_bytes_gauge.set(
                 info.data_limit_bytes
-                    .unwrap_or_else(|| info.data_disk_freespace_bytes) as i64,
+                    .unwrap_or(info.data_disk_freespace_bytes) as i64,
             );
             index_size_bytes_gauge.set(info.index_size_bytes as i64);
             index_io_errors_gauge.set(info.index_io_errors as i64);
@@ -268,7 +268,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .successful_zstor_commands
-                    .get(&ZstorCommandID::Store)
+                    .get(&ZstorCommandId::Store)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -277,7 +277,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .successful_zstor_commands
-                    .get(&ZstorCommandID::Retrieve)
+                    .get(&ZstorCommandId::Retrieve)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -286,7 +286,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .successful_zstor_commands
-                    .get(&ZstorCommandID::Rebuild)
+                    .get(&ZstorCommandId::Rebuild)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -295,7 +295,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .successful_zstor_commands
-                    .get(&ZstorCommandID::Check)
+                    .get(&ZstorCommandId::Check)
                     .unwrap_or(&0) as i64,
             );
 
@@ -308,7 +308,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .failed_zstor_commands
-                    .get(&ZstorCommandID::Store)
+                    .get(&ZstorCommandId::Store)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -317,7 +317,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .failed_zstor_commands
-                    .get(&ZstorCommandID::Retrieve)
+                    .get(&ZstorCommandId::Retrieve)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -326,7 +326,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .failed_zstor_commands
-                    .get(&ZstorCommandID::Rebuild)
+                    .get(&ZstorCommandId::Rebuild)
                     .unwrap_or(&0) as i64,
             );
         self.prom_metrics
@@ -335,7 +335,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(
                 *self
                     .failed_zstor_commands
-                    .get(&ZstorCommandID::Check)
+                    .get(&ZstorCommandId::Check)
                     .unwrap_or(&0) as i64,
             );
 
@@ -352,7 +352,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
 
 /// Possible zstor commands.
 #[derive(Hash, PartialEq, Eq)]
-pub enum ZstorCommandID {
+pub enum ZstorCommandId {
     /// Store command.
     Store,
     /// Retrieve command.
@@ -363,16 +363,16 @@ pub enum ZstorCommandID {
     Check,
 }
 
-impl fmt::Display for ZstorCommandID {
+impl fmt::Display for ZstorCommandId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
             "{}",
             match self {
-                ZstorCommandID::Store => "Store",
-                ZstorCommandID::Retrieve => "Retrieve",
-                ZstorCommandID::Rebuild => "Rebuild",
-                ZstorCommandID::Check => "Check",
+                ZstorCommandId::Store => "Store",
+                ZstorCommandId::Retrieve => "Retrieve",
+                ZstorCommandId::Rebuild => "Rebuild",
+                ZstorCommandId::Check => "Check",
             }
         )
     }
