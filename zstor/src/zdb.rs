@@ -830,14 +830,16 @@ impl NsInfo {
     /// space according to the limit is higher than the remaining free disk size, the remainder of
     /// the free disk size is returned.
     pub fn free_space(&self) -> u64 {
-        if let Some(limit) = self.data_limit_bytes {
-            let free_limit = limit - self.data_size_bytes;
-            if free_limit < self.data_disk_freespace_bytes {
-                return free_limit;
-            }
-        }
+        // TODO re enable this check, see https://github.com/threefoldtech/0-stor_v2/issues/38
+        // if let Some(limit) = self.data_limit_bytes {
+        //     let free_limit = limit - self.data_size_bytes;
+        //     if free_limit < self.data_disk_freespace_bytes {
+        //         return free_limit;
+        //     }
+        // }
 
-        self.data_disk_freespace_bytes
+        // self.data_disk_freespace_bytes
+        self.data_limit_bytes.unwrap_or(u64::MAX)
     }
 
     /// Returns the percentage of used data space in this namespace. If no limit is set, the
