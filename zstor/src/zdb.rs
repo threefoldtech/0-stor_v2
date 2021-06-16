@@ -263,6 +263,11 @@ impl ZdbConnectionInfo {
         &self.address
     }
 
+    /// Get the namespace to connect to, if one is set.
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_ref().map(|s| s as _)
+    }
+
     /// Get a possible reservation id from the [`ZdbConnectionInfo`].
     pub fn reservation_id(&self) -> Option<i64> {
         // A namespace usually takes the form of {wid}-{index}, so split on '-', and check if we
@@ -776,24 +781,42 @@ impl UserKeyZdb {
 /// Information about a 0-db namespace, as reported by the db itself.
 #[derive(Debug)]
 pub struct NsInfo {
-    name: String,
-    entries: usize,
-    public: bool,
-    password: bool,
-    data_size_bytes: u64,
-    data_limit_bytes: Option<u64>,
-    index_size_bytes: u64,
-    mode: ZdbRunMode,
-    worm: bool,
-    locked: bool,
-    index_io_errors: u32,
-    index_io_error_last: i64, // TODO: timestamp
-    index_faults: u32,        // currently unused
-    data_io_errors: u32,
-    data_io_error_last: i64, // TODO: timestamp
-    data_faults: u32,        // currently unused
-    index_disk_freespace_bytes: u64,
-    data_disk_freespace_bytes: u64,
+    /// The name of the namespace.
+    pub name: String,
+    /// The amount of entries in the namespace.
+    pub entries: usize,
+    /// Wether the namespace is publicly accessible.
+    pub public: bool,
+    /// Whether the namespace is password protected.
+    pub password: bool,
+    /// The current size of the data in the namespace, in bytes.
+    pub data_size_bytes: u64,
+    /// The maximum size of the data in the namespace, in bytes.
+    pub data_limit_bytes: Option<u64>,
+    /// The current size of the index in the namespace, in bytes.
+    pub index_size_bytes: u64,
+    /// The [`run mode`](ZdbRunMode) of the namespace.
+    pub mode: ZdbRunMode,
+    /// Wether worm mode is enabled for this namespace.
+    pub worm: bool,
+    /// Wether the namespace is currently locked or not.
+    pub locked: bool,
+    /// The amount of io errors which happened in the namespace index.
+    pub index_io_errors: u32,
+    /// The timestamp of the last io error in the namespace index..
+    pub index_io_error_last: i64, // TODO: timestamp
+    /// The amount of faults in the namespace index.
+    pub index_faults: u32, // currently unused
+    /// The amount of io errors which happened in the namespace data.
+    pub data_io_errors: u32,
+    /// The timestamp of the last io error in the namespace data..
+    pub data_io_error_last: i64, // TODO: timestamp
+    /// The amount of faults in the namespace data.
+    pub data_faults: u32, // currently unused
+    /// The amount of bytes free on the disk containing the namespace index.
+    pub index_disk_freespace_bytes: u64,
+    /// The amount of bytes free on the disk containing the namespace data.
+    pub data_disk_freespace_bytes: u64,
 }
 
 impl NsInfo {
