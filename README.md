@@ -1,20 +1,102 @@
 # 0-stor_v2
 
+`zstor` is an object encoding storage system. It can be run in either a
+daemon - client setup, or it can perform single actions without an
+associated daemon, which is mainly useful for uploading/retrieving
+single items. The daemon is part of the same binary, and will run other
+useful features, such as a repair queue which periodically verifies the
+integrity of objects, and automatic expansion of the storage expansion.
+To this end, `zstor` is self contained: after a full setup, the system
+can reserve capacity to keep itself going indefinitely.
+
+## Expected setup
+
+Currently, `zstor` expects a stable system to start from, which is user
+provided. In order for the system to work optimally, the following
+should be considered:
+
+- The system relies on the explorer to automatically manage capacity
+	pools and 0-db reservations. In order to do this, an *already
+	registered* identity must be provided in the config, along with a
+	stellar wallet secret. This wallet is used to fund all capacity
+	reservations. `zstor` will attempt to keep _all_ capacity pools
+	registered to this identity funded. It will *not create capacity
+	pools* currently. This means that all pools to be used should be set
+	up by the user.
+- `zstor` has a redundancy configuration which introduces the notion of
+	`groups`: a list of one or more 0-db backends which are physically
+	together. In practice, it is expected that:
+	- Every group represents a farm
+	- All 0-db's in a group are managed by a single capacity pool.
+	The above will make sure that `zstor` can correctly expand and
+	replace 0-dbs while keeping the group redundancy profile in tact.
+- `zstor` aims to replace backends on the same farm / capacity pool. To
+	do this, it aims to extract reservation ID's from the backends it
+	starts with in the config. The best results will be gained by making
+	sure all 0-db backends are actually running on the grid.
+- Because of the above, it is recommended to run a dedicated identity
+	for the `zstor`, so it only manages pools used by the setup.
+	Optionally, a dedicated wallet can be used (this is probably best
+	security wise).
+- Due to the nature of `TFT`, the wallet must have both `TFT`, and `XLM`
+	to fund the transaction (the latter only being used for the small
+	transaction fee). This is necessary as we don't rely on external
+	services for the payment.
+
+## Daemon - client usage vs standalone usage
+
+The daemon, or monitor, can be started by invoking `zstor` with the
+`monitor` subcommand. This starts a long running process, and opens up a
+unix socket on the path specified in the config. Regular command
+invocations (example "store") of `zstor` will then read the path to the
+unix socket from the config, connect to it, send the command, and wait
+until the monitor daemon returns a response after executing the command.
+This setup is recommended as:
+
+- It actually allows for the automatic expansion / replacement of failed
+	0-dbs.
+- It exposes optional metrics for prometheus to scrape.
+- Only a single upload/download of a file happens at once, meaning you
+	won't burn out your whole cpu by sending multiple upload commands in
+	quick succession.
+
+If the socket path is not specified, `zstor` will fall back to its
+single command flow, where it executes the command in process, and then
+exits. Invoking `zstor` multiple times in quick succession might cause
+multiple uploads to be performed at the same time, causing multiple cpu
+cores to be used for the encryption/compression.
+
 ## Current features
+
+### Supported commands
 
 - `Store` data in multiple chunks on zdb backends, according to a given policy
 - `Retrieve` said data, using just the path and the metadata store. Zdbs can be
 removed, as long as sufficient are left to recover the data.
 - `Rebuild` the data, loading existing data (as long as sufficient zdbs are left),
 reencoding it, and storing it in (new) zdbs according to the current config
+- `Check` a file, returning a 16 byte `blake2b` checksum (in hex) if it
+	is present in the backend (by fetching it from the metastore).
 
-NOTE: currently all backends in the config are assumed to be healthy: they are
-reachable, and the namespace has enough space to hold the data shard which will
-be written
+### Other features
+
+- Monitoring of active 0-db backends. An active backend is considered a
+backend that is tracked in the config, which has sufficient space
+	left to write new blocks. If a backend is full, it will be rotated
+	out by reserving a new one, but the existing backend is not
+	decommissioned.
+- Repair queue: periodically, all 0-db's used are checked, to see if the
+	are still online. If a 0-db is unreachable, all objects which have a
+	chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
+- Explorer client, allowing for full self contained operation (after the
+	initial bootstrap currently).
+- Prometheus metrics. The metrics server is bound to all interfaces, on
+	the port specified in the config. The path is `/metrics`. If no port
+	is set in the config, the metrics server won't be enabled.
 
 ## Building
 
-Make sure you have the lastest Rust stable installed. Clone the repository:
+Make sure you have the latest Rust stable installed. Clone the repository:
 
 ```shell
 git clone https://github.com/threefoldtech/0-stor_v2
@@ -40,179 +122,138 @@ cargo build --target x86_64-unknown-linux-musl --release
 
 ## Config file
 
-Storing data and rebuilding existing data on new backends requires a config file.
-The config file is expected to be in `toml` format. An example config is:
+Running `zstor` requires a config file. An example config, and
+explanation of the parameters is found below.
+
+### Example config file
 
 ```toml
-data_shards = 2
-parity_shards = 1
-redundant_groups = 0
-redundant_nodes = 0
-root = "/some/root"
+data_shards = 10
+parity_shards = 5
+redundant_groups = 1
+redundant_nodes = 1
+root = "/virtualroot"
+socket = "/tmp/zstor.sock"
+network = "Main"
+wallet_secret = "Definitely not a secret"
+identity_name = "testid"
+identity_email = "test@example.com"
+identity_id = 25
+identity_mnemonic = "an unexisting mnemonic"
+prometheus_port = 9100
+zdb_data_dir_path = "/tmp/0-db/data"
+max_zdb_data_dir_size = 25600
 
 [encryption]
 algorithm = "AES"
-key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+key = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [compression]
 algorithm = "snappy"
 
 [meta]
-type = "etcd"
+type = "zdb"
 
 [meta.config]
-endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:22379", "http://127.0.0.1:32379"]
 prefix = "someprefix"
 
+[meta.config.encryption]
+algorithm = "AES"
+key = "0101010101010101010101010101010101010101010101010101010101010101"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9900"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9901"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9902"
+namespace = "test2"
+password = "supersecretpass"
+
+[[meta.config.backends]]
+address = "[2a02:1802:5e::dead:beef]:9903"
+namespace = "test2"
+password = "supersecretpass"
+
 [[groups]]
 [[groups.backends]]
-address = "[::1]:19900"
+address = "[fe80::1]:9900"
 
 [[groups.backends]]
-address = "[::1]:19901"
-namespace = "some_ns"
-password = "supersecretnamespacepass"
+address = "[fe80::1]:9900"
+namespace = "test"
 
 [[groups]]
 [[groups.backends]]
-address = "[::1]:29901"
+address = "[2a02:1802:5e::dead:babe]:9900"
+
+[[groups.backends]]
+address = "[2a02:1802:5e::dead:beef]:9900"
+namespace = "test2"
+password = "supersecretpass"
 ```
+
+### Config file explanation
+
+- `data_shards`: The minimum amount of shards which are needed to recover
+    the original data.
+- `parity_shards`: The amount of redundant data shards which are generated
+    when the data is encoded. Essentially, this many shards can be lost 
+	while still being able to recover the original data.
+- `redundant_groups`: The amount of groups which one should be able to
+    loose while still being able to recover the original data.
+- `redundant_nodes`: The amount of nodes that can be lost in every group
+    while still being able to recover the original data.
+- `root`: virtual root on the filesystem to use, this path will be removed
+    from all files saved. If a file path is loaded, the path will be
+	interpreted as relative to this directory
+- `socket`: Optional path to a unix socket. This socket is required in
+    case zstor needs to run in daemon mode. If this is present, zstor
+	invocations will first try to connect to the socket. If it is not found,
+	the command is run in-process, else it is encoded and send to the socket
+	so the daemon can process it.
+- `zdb_data_dir_path`: Optional path to the local 0-db data file directory.
+    If set, it will be monitored and kept within the size limits.
+- `max_zdb_data_dir_size`: Maximum size of the data dir in MiB, if this
+    is set and the sum of the file sizes in the data dir gets higher than
+	this value, the least used, already encoded file will be removed.
+- `prometheus_port`: An optional port on which prometheus metrics will be
+    exposed. If this is not set, the metrics will not get exposed.
+- `network`: The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
+- `wallet_secret`: The stellar secret of the wallet used to fund capacity
+    pools. This wallet must have TFT, and a small amount of XLM to fund
+	the transactions.
+- `identity_name`: The name of the identity registered on the explorer to
+    use for pools / reservations.
+- `identity_email`: The email associated with the identity on the explorer.
+- `identity_id`: The id of the identity.
+- `identity_mnemonic`: The mnemonic of the secret used by the identity.
+- `encryption`: configuration to use for the encryption stage. Currently
+	only `AES` is supported.
+- `compression`: configuration to use for the compression stage.
+	Currently only `snappy` is supported
+- `meta`: configuration for the metadata store to use, currently only
+	`zdb` is supported
+- `groups`: The backend groups to write the data to.
 
 Explanation:
 
-- `data_shards`: the minimum amount of shards needed to later recover the data
-- `parity_shards`: the amount of redundant shards that will be written
-- `redundant_groups`: the maximum amount of groups that can be lost completely,
-while still retaining the ability to recover the data
-- `redundant_nodes`: the maximim amount of nodes that can be lost in _every_ group
-while still retraining the ability to recover the data
-
-Note that you can lose the complete groups and also the individual nodes in the
-remaining groups, and you should still be able to recover your data
-
-The backends are automatically selected when writing data to guarantee data recovery
-according to these options. If no vaible backend distribution can be generated,
-the program will exit.
-
-- `root`: Optional directory to use as a virtual root for all the files. If set,
-this prefix will be stripped from the full path of the files uploaded or downloaded.
-Example: assume we upload file `/mnt/somedir/somesubdir/file`, and set the `root`
-to `/mnt/somedir`. The key in the metastorage (if supported) will now be built
-from `somesubdir/file`, since the `/mnt/somedir` directories are stripped. Now,
-if you download the file again (possibly on a different machine), with `/mnt/someotherdir`
-as root, the file can be downloaded by given `/mnt/someotherdir/somesubdir/file`
-as argument to the `retrieve` command.
-
-- `encryption`: encryption configuration
-  - `algorithm`: the encryption algorithm to use, currently only `AES` is supported
-  - `key`: hex encoded symmetric key to use for encryption, must be 32 bytes (64
-  hex chars)
-
-- `compression`: compression configuration
-  - `algorithm`: compression algorithm to use, currently only `snappy` is supported
-
-- `groups`: list of backend groups. A group is a list of zdb backends. These are
-intended to represent grouped backends. The setup here will influence the generated
-backend distributions (if any) in accordance with the redundancy parameters
-
-- `backends`: A zdb backend, identified by an IP address and port. Both IPv4 and
-IPv6 are supported. Optionally, a `namespace` can be specified, in which case this
-namespace will be used to write the data. If a namespace is given, you can also
-optionally specify a `password`. In this case, the namespace will be opened via
-means of `SELECT SECURE` (old zdbs might not support this)
-
-- `meta`: The metadata system ot use. Currently `etcd` is the only one supported
-
-- `meta.config`: Configuration for the metadata backend that is used, if required.
-Since only etcd is supported right now, it always needs to be present.
-For `etcd`, there are 2 fields (both required):
-`endpoints`: A list of http listening endpoints for the cluster nodes
-`prefix`: The prefix to use for the keys in etcd. See the `Metadata` section for
-more info.
-
 ## Metadata
 
-When deta is encoded, metadata is generated to later retrieve this data. The metadata
-is stored in etcd, with a given prefix. Both the etcd cluster endpoints and the
-prefix to use must be provided for every action.
+When data is encoded, metadata is generated to later retrieve this data.
+The metadata is stored in 4 0-dbs, with a given prefix.
 
 For every file, we get the full path of the file on the system, generate a 16 byte
 blake2b hash, and hex encode the bytes. We then append this to the prefix to
 generate the final key.
 
-The key structure is: `/{prefix}/{hashed_path_hex}`
+The key structure is: `/{prefix}/meta/{hashed_path_hex}`
 
-The metadata itself is also stored in `TOML` format in etcd.
-
-## Example usage
-
-Note, if the config file is not passed explicitly, it is assumed to be `config.toml`
-in the working directory.
-
-- Store file:
-
-`./target/debug/zstor_v2 store -f file.txt`
-
-- Retrieve file:
-
-`./target/debug/zstor_v2 retrieve -f file.txt`
-
-- Rebuild file (with possibly new configuration)
-
-`./target/debug/zstor_v2 rebuild -f file.txt`
-
-## Monitor
-
-The aim of the monitor is to provide basic health check features.
-Currently there are 3 checks:
-
-- Failed writes of a zstor binary, if the `store` command was given the
-	flag to enable this. If so, the monitor will continuously retry the
-	upload until it succeeds.
-- Health of known backends. If a backend becomes unreachable for some
-	time, it is considered to be dead. Similarly, the amount of
-	available space is periodically checked, to see if it is above
-	a certain treshold. If an eVDC controller is configured, the first
-	time a backend becomes degraded, a new one will be requested from
-	the controller.
-- Space of the local 0-db. If a space limit is configured, there are
-	periodic checks to make sure the limit is not exceeded. If it is,
-	uploaded data files will be removed until the used space is within
-	the requested limit again.
-
-There are no special options to run the monitor. All functionality is
-configured through the configuration file. An example with documentation
-is provided below.
-
-### Monitor config
-
-```
-# directory where zdb stores the index directories
-zdb_index_dir_path = "/tmp/zdb/zdb-index"
-# directory where zdb stores the data directories
-zdb_data_dir_path = "/tmp/zdb/zdb-index"
-# path to the config file for the zstor binary
-zstor_config_path = "tmp/zstor_config.toml"
-# path to the acutal zstor binary
-zstor_bin_path = "/tmp/zstor"
-# Optional maximum size of the zdb data directory, in MiB. If the sum of all
-# files in this directory goes above this trehshold, the least recently
-# accessed data file which is already uploaded will be removed, untill the
-# size is reduced bellow the treshold or no more files can be deleted.
-# If not set, the data dir will not be monitored
-max_zdb_data_dir_size = 51200
-# Trreshold before a backend is marked as filled by the monitor.
-# If this treshold is reached, a new backend will be requested in the
-# eVDC controller, if configured below. If not set, a default of 95% is
-# used.
-zdb_namespace_fill_treshold = 90
-
-# Optional info for the eVDC controller. If given, the monitor will try
-# to request new backends when it detects that a backend is unreachable
-# or filled above the treshold rate.
-[vdc_config]
-url = "https://some.evdc.tech"
-password = "supersecurepassword"
-# Size of the new backend to request, in GB
-new_size = 20
-```
+The metadata itself is encrypted, binary encoded, and then dispersed in
+the metadata 0-dbs.
