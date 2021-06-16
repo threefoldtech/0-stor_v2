@@ -14,6 +14,8 @@ use tokio::{fs, io};
 
 /// Amount of seconds between every [`CheckDir`] command.
 const DIR_MONITOR_INTERVAL_SECONDS: u64 = 60;
+/// 1 MiB.
+const MIB: u64 = 1 << 20;
 
 /// Actor to keep a directory within a size limit.
 pub struct DirMonitorActor<T>
@@ -78,8 +80,10 @@ where
             if !(cfg.zdb_data_dir_path().is_some() && cfg.max_zdb_data_dir_size().is_some()) {
                 return;
             }
+
+            // Unwrap here is safe as we just checked that both are set.
             let dir_path = cfg.zdb_data_dir_path().unwrap();
-            let size_limit = cfg.max_zdb_data_dir_size().unwrap();
+            let size_limit = cfg.max_zdb_data_dir_size().unwrap() * MIB;
 
             debug!("checking data dir size");
 

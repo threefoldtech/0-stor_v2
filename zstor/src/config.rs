@@ -57,13 +57,13 @@ pub struct Config {
     identity_email: String,
     /// The id of the identity.
     identity_id: u64,
-    /// The mnemonic of the secret used by the identity
+    /// The mnemonic of the secret used by the identity.
     identity_mnemonic: String,
-    /// configuration to use for the encryption stage
+    /// configuration to use for the encryption stage.
     encryption: Encryption,
-    /// configuration to use for the compression stage
+    /// configuration to use for the compression stage.
     compression: Compression,
-    /// configuration for the metadata store to use
+    /// configuration for the metadata store to use.
     meta: Meta,
     /// The backend groups to write the data to.
     groups: Vec<Group>,
