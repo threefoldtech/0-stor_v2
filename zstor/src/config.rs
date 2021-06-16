@@ -457,6 +457,7 @@ impl From<String> for ConfigError {
 #[cfg(test)]
 mod tests {
     use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
+    use grid_explorer_client::GridNetwork;
     use std::net::ToSocketAddrs;
 
     #[test]
@@ -497,6 +498,13 @@ mod tests {
             socket: Some("/tmp/zstor.sock".into()),
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
+            identity_id: 25,
+            identity_name: "testid".into(),
+            identity_mnemonic: "an unexisting mnemonic".into(),
+            identity_email: "test@example.com".into(),
+            prometheus_port: None,
+            network: GridNetwork::Main,
+            wallet_secret: "Definitely not a secret".into(),
             max_zdb_data_dir_size: None,
             groups: vec![
                 super::Group {
@@ -559,6 +567,12 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+network = "Main"
+wallet_secret = "Definitely not a secret"
+identity_name = "testid"
+identity_email = "test@example.com"
+identity_id = 25
+identity_mnemonic = "an unexisting mnemonic"
 
 [encryption]
 algorithm = "AES"
@@ -655,6 +669,13 @@ password = "supersecretpass"
             socket: Some("/tmp/zstor.sock".into()),
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
+            identity_id: 25,
+            identity_name: "testid".into(),
+            identity_mnemonic: "an unexisting mnemonic".into(),
+            identity_email: "test@example.com".into(),
+            prometheus_port: None,
+            network: GridNetwork::Main,
+            wallet_secret: "Definitely not a secret".into(),
             max_zdb_data_dir_size: None,
             groups: vec![
                 super::Group {
@@ -717,6 +738,12 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+network = "Main"
+wallet_secret = "Definitely not a secret"
+identity_name = "testid"
+identity_email = "test@example.com"
+identity_id = 25
+identity_mnemonic = "an unexisting mnemonic"
 
 [encryption]
 algorithm = "AES"
