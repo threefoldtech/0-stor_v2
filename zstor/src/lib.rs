@@ -7,9 +7,15 @@
 //! config structs available.
 
 use crate::actors::{
-    backends::BackendManagerActor, config::ConfigActor, dir_monitor::DirMonitorActor,
-    explorer::ExplorerActor, meta::MetaStoreActor, metrics::MetricsActor, pipeline::PipelineActor,
-    repairer::RepairActor, zstor::ZstorActor,
+    backends::BackendManagerActor,
+    config::ConfigActor,
+    dir_monitor::DirMonitorActor,
+    explorer::ExplorerActor,
+    meta::MetaStoreActor,
+    metrics::{GetPrometheusMetrics, MetricsActor},
+    pipeline::PipelineActor,
+    repairer::RepairActor,
+    zstor::ZstorActor,
 };
 use actix::prelude::*;
 use actix::{Addr, MailboxError};
@@ -90,6 +96,7 @@ pub async fn setup_system(
             )
         }
     };
+    let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg).start();
@@ -104,8 +111,21 @@ pub async fn setup_system(
     .start();
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
     let explorer = ExplorerActor::new(explorer_client, cfg_addr.clone()).start();
-    let backends = BackendManagerActor::new(cfg_addr, explorer, metrics_addr).start();
+    let backends = BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone()).start();
     let _ = RepairActor::new(meta_addr, backends, zstor.clone()).start();
+
+    // Setup prometheus endpoint if needed
+    if let Some(port) = prom_port {
+        use tide::Request;
+        let mut app = tide::with_state(metrics_addr);
+        app.at("/metrics")
+            .get(|req: Request<Addr<MetricsActor>>| async move {
+                Ok(req.state().send(GetPrometheusMetrics).await??)
+            });
+        tokio::spawn(async move {
+            app.listen(format!("[::]:{}", port)).await.unwrap();
+        });
+    };
 
     Ok(zstor)
 }

@@ -265,19 +265,39 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         self.prom_metrics
             .zstor_store_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.successful_zstor_commands[&ZstorCommandID::Store] as i64);
+            .set(
+                *self
+                    .successful_zstor_commands
+                    .get(&ZstorCommandID::Store)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_retrieve_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.successful_zstor_commands[&ZstorCommandID::Retrieve] as i64);
+            .set(
+                *self
+                    .successful_zstor_commands
+                    .get(&ZstorCommandID::Retrieve)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_rebuild_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.successful_zstor_commands[&ZstorCommandID::Rebuild] as i64);
+            .set(
+                *self
+                    .successful_zstor_commands
+                    .get(&ZstorCommandID::Rebuild)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_check_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.successful_zstor_commands[&ZstorCommandID::Check] as i64);
+            .set(
+                *self
+                    .successful_zstor_commands
+                    .get(&ZstorCommandID::Check)
+                    .unwrap_or(&0) as i64,
+            );
 
         // Failed calls
         let mut labels = HashMap::new();
@@ -285,19 +305,39 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         self.prom_metrics
             .zstor_store_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.failed_zstor_commands[&ZstorCommandID::Store] as i64);
+            .set(
+                *self
+                    .failed_zstor_commands
+                    .get(&ZstorCommandID::Store)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_retrieve_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.failed_zstor_commands[&ZstorCommandID::Retrieve] as i64);
+            .set(
+                *self
+                    .failed_zstor_commands
+                    .get(&ZstorCommandID::Retrieve)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_rebuild_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.failed_zstor_commands[&ZstorCommandID::Rebuild] as i64);
+            .set(
+                *self
+                    .failed_zstor_commands
+                    .get(&ZstorCommandID::Rebuild)
+                    .unwrap_or(&0) as i64,
+            );
         self.prom_metrics
             .zstor_check_commands_finished_gauges
             .get_metric_with(&labels)?
-            .set(self.failed_zstor_commands[&ZstorCommandID::Check] as i64);
+            .set(
+                *self
+                    .failed_zstor_commands
+                    .get(&ZstorCommandID::Check)
+                    .unwrap_or(&0) as i64,
+            );
 
         let mut buffer = Vec::new();
         let encoder = TextEncoder::new();

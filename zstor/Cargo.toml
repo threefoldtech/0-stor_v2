@@ -50,7 +50,7 @@ grid_explorer_client = { path = "../grid_explorer_client" }
 chrono = "0.4"
 serde_json = "1"
 prometheus = "0.12"
-actix-web = { version = "4.0.0-beta.6", default-features = false }
+tide = "0.16"
 
 [dev-dependencies]
 rand = "0.7"

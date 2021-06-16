@@ -43,6 +43,9 @@ pub struct Config {
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
     max_zdb_data_dir_size: Option<u64>,
+    /// An optional port on which prometheus metrics will be exposed. If this is not set, the
+    /// metrics will not get exposed.
+    prometheus_port: Option<u16>,
     /// The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
     network: GridNetwork,
     /// The stellar secret of the wallet used to fund capacity pools. This wallet must have TFT,
@@ -145,6 +148,11 @@ impl Config {
     /// Return the virtual root set in the config, if any
     pub fn virtual_root(&self) -> &Option<std::path::PathBuf> {
         &self.root
+    }
+
+    /// Return the prometheus port on which prometheus formatted metrics will be served, if one is set.
+    pub fn prometheus_port(&self) -> Option<u16> {
+        self.prometheus_port
     }
 
     /// Return the grid network used for the explorer to manage the 0-dbs.
