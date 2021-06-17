@@ -136,8 +136,6 @@ root = "/virtualroot"
 socket = "/tmp/zstor.sock"
 network = "Main"
 wallet_secret = "Definitely not a secret"
-identity_name = "testid"
-identity_email = "test@example.com"
 identity_id = 25
 identity_mnemonic = "an unexisting mnemonic"
 prometheus_port = 9100
@@ -229,9 +227,6 @@ password = "supersecretpass"
 - `wallet_secret`: The stellar secret of the wallet used to fund capacity
     pools. This wallet must have TFT, and a small amount of XLM to fund
 	the transactions.
-- `identity_name`: The name of the identity registered on the explorer to
-    use for pools / reservations.
-- `identity_email`: The email associated with the identity on the explorer.
 - `identity_id`: The id of the identity.
 - `identity_mnemonic`: The mnemonic of the secret used by the identity.
 - `encryption`: configuration to use for the encryption stage. Currently

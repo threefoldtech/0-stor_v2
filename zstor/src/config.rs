@@ -51,10 +51,6 @@ pub struct Config {
     /// The stellar secret of the wallet used to fund capacity pools. This wallet must have TFT,
     /// and a small amount of XLM to fund the transactions.
     wallet_secret: String,
-    /// The name of the identity registered on the explorer to use for pools / reservations.
-    identity_name: String,
-    /// The email associated with the identity on the explorer.
-    identity_email: String,
     /// The id of the identity.
     identity_id: u64,
     /// The mnemonic of the secret used by the identity.
@@ -163,16 +159,6 @@ impl Config {
     /// Return the wallet secret of the wallet used to pay for capacity reservations.
     pub fn wallet_secret(&self) -> &str {
         &self.wallet_secret
-    }
-
-    /// Returns the name of the identity used.
-    pub fn identity_name(&self) -> &str {
-        &self.identity_name
-    }
-
-    /// Returns the email of the identity used.
-    pub fn identity_email(&self) -> &str {
-        &self.identity_email
     }
 
     /// Returns the id of the identity used.
@@ -415,7 +401,7 @@ impl Config {
                 (orig, group.backends.len() - remainder)
             })
             .collect();
-        // cmp second to first so we sort large -> small TODO: verify
+        // cmp second to first so we sort large -> small
         buckets_used.sort_by(|(_, used_1), (_, used_2)| used_2.cmp(used_1));
         // verify that we still have sufficient data shards left if: we lose all
         // redundant_groups nodes AND we lose redundant_nodes nodes in the remaining
@@ -499,9 +485,7 @@ mod tests {
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
             identity_id: 25,
-            identity_name: "testid".into(),
             identity_mnemonic: "an unexisting mnemonic".into(),
-            identity_email: "test@example.com".into(),
             prometheus_port: None,
             network: GridNetwork::Main,
             wallet_secret: "Definitely not a secret".into(),
@@ -569,8 +553,6 @@ root = "/virtualroot"
 socket = "/tmp/zstor.sock"
 network = "Main"
 wallet_secret = "Definitely not a secret"
-identity_name = "testid"
-identity_email = "test@example.com"
 identity_id = 25
 identity_mnemonic = "an unexisting mnemonic"
 
@@ -670,9 +652,7 @@ password = "supersecretpass"
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
             identity_id: 25,
-            identity_name: "testid".into(),
             identity_mnemonic: "an unexisting mnemonic".into(),
-            identity_email: "test@example.com".into(),
             prometheus_port: None,
             network: GridNetwork::Main,
             wallet_secret: "Definitely not a secret".into(),
@@ -740,8 +720,6 @@ root = "/virtualroot"
 socket = "/tmp/zstor.sock"
 network = "Main"
 wallet_secret = "Definitely not a secret"
-identity_name = "testid"
-identity_email = "test@example.com"
 identity_id = 25
 identity_mnemonic = "an unexisting mnemonic"
 

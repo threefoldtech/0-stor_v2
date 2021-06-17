@@ -67,12 +67,7 @@ pub async fn setup_system(
     cfg_path: PathBuf,
     cfg: Config,
 ) -> ZstorResult<Addr<ZstorActor<impl MetaStore>>> {
-    let identity = Identity::new(
-        cfg.identity_name().to_string(),
-        cfg.identity_email().to_string(),
-        cfg.identity_id() as i64,
-        cfg.identity_mnemonic(),
-    )?;
+    let identity = Identity::new(cfg.identity_id() as i64, cfg.identity_mnemonic())?;
     let explorer_client = ExplorerClient::new(cfg.grid_network(), cfg.wallet_secret(), identity);
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {

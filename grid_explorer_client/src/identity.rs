@@ -40,20 +40,13 @@ impl From<SignatureError> for IdentityError {
 }
 
 pub struct Identity {
-    pub name: String,
-    pub email: String,
     pub user_id: i64,
     pub keypair: Keypair,
     pub mnemonic: Mnemonic,
 }
 
 impl Identity {
-    pub fn new(
-        name: String,
-        email: String,
-        user_id: i64,
-        mnemonic: &str,
-    ) -> Result<Identity, IdentityError> {
+    pub fn new(user_id: i64, mnemonic: &str) -> Result<Identity, IdentityError> {
         let mnemonic = Mnemonic::from_str(mnemonic)?;
         let entropy = mnemonic.to_entropy();
 
@@ -66,8 +59,6 @@ impl Identity {
         };
 
         let id = Identity {
-            name,
-            email,
             user_id,
             keypair,
             mnemonic,
