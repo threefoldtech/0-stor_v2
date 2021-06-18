@@ -1,11 +1,14 @@
 use crate::zdb::{NsInfo, ZdbConnectionInfo};
 use actix::prelude::*;
+use log::warn;
 use prometheus::{register_int_gauge_vec, Encoder, IntGaugeVec, TextEncoder};
+use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
 
 /// A metrics actor collecting metrics from the system.
 pub struct MetricsActor {
     zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
+    removed_zdbs: Vec<ZdbConnectionInfo>,
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     prom_metrics: PromMetrics,
@@ -34,6 +37,7 @@ impl MetricsActor {
     pub fn new() -> MetricsActor {
         Self {
             zdbs: HashMap::new(),
+            removed_zdbs: Vec::new(),
             successful_zstor_commands: HashMap::new(),
             failed_zstor_commands: HashMap::new(),
             prom_metrics: Self::setup_prometheus(),
@@ -174,6 +178,7 @@ impl Handler<SetBackendInfo> for MetricsActor {
             self.zdbs.insert(msg.ci, info);
         } else {
             self.zdbs.remove(&msg.ci);
+            self.removed_zdbs.push(msg.ci);
         }
     }
 }
@@ -196,6 +201,58 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
     fn handle(&mut self, _: GetPrometheusMetrics, _: &mut Self::Context) -> Self::Result {
         // Update metrics.
         //
+        // Remove outdated 0-db stats.
+        if !self.removed_zdbs.is_empty() {
+            // Take ownerhsip of the removed zdb list, and leave an empty (default) list in its
+            // place.
+            let removed_zdbs = mem::take(&mut self.removed_zdbs);
+            for ci in removed_zdbs {
+                let mut labels = HashMap::new();
+                labels.insert("namespace", ci.namespace().unwrap_or(""));
+                let address = ci.address().to_string();
+                labels.insert("address", &address);
+
+                if let Err(e) = self.prom_metrics.entries_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.data_size_bytes_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.data_limit_bytes_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.index_size_bytes_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.index_io_errors_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.index_faults_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.data_io_errors_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self.prom_metrics.data_faults_gauges.remove(&labels) {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self
+                    .prom_metrics
+                    .index_disk_freespace_bytes_gauges
+                    .remove(&labels)
+                {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+                if let Err(e) = self
+                    .prom_metrics
+                    .data_disk_freespace_bytes_gauges
+                    .remove(&labels)
+                {
+                    warn!("Failed to delete removed metric by label: {}", e)
+                };
+            }
+        }
+
         // Update backend 0-db stats.
         for (ci, info) in self.zdbs.iter() {
             let mut labels = HashMap::new();
