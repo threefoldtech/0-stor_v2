@@ -194,7 +194,7 @@ async fn spawn_repairer(mut rx: UnboundedReceiver<String>, zstor: SingleZstor) -
                 }
                 _ = ticker.tick() => {
                     debug!("Processing repair backlog");
-                    for key in std::mem::replace(&mut repair_backlog, Vec::new()).drain(..) {
+                    for key in std::mem::take(&mut repair_backlog).drain(..) {
                         debug!("Trying to rebuild key {}, which is in the repair backlog", key);
                         if let Err(e) = zstor.rebuild_key(&key).await {
                             error!("Could not rebuild item {}: {}", key, e);

@@ -244,13 +244,12 @@ async fn zdb_create(
 
     let result = client.create_zdb_reservation(node_id, pool_id, zdb).await;
     match result {
-        Ok(wid) => {
+        Ok(ref wid) => {
             println!("{:?}", wid);
-            return Ok(wid);
         }
-        Err(err) => {
+        Err(ref err) => {
             println!("{:?}", err);
-            return Err(err);
         }
     }
+    result
 }
