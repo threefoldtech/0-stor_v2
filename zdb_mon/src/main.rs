@@ -3,7 +3,8 @@ use actix_web::{
     error, get, guard, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer, Result,
 };
 use futures::future::join_all;
-use prometheus::{register_gauge_vec, Encoder, Opts, Registry, TextEncoder};
+use prometheus::{register_gauge, register_gauge_vec, Encoder, Opts, Registry, TextEncoder};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use tokio::signal::unix::{signal, SignalKind};
@@ -70,6 +71,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &["address", "namespace"]
     )?;
 
+    let active_cu_gauge =
+        register_gauge!("pool_active_cu", "active compute units drain in the pool")?;
+    let active_su_gauge =
+        register_gauge!("pool_active_su", "active storage units drain in the pool")?;
+    let active_ipv4_gauge =
+        register_gauge!("pool_active_ipv4", "active ipv4 units drain in the pool")?;
+    let cus_gauge = register_gauge!("pool_cus", "total compute units in pool")?;
+    let sus_gauge = register_gauge!("pool_sus", "total storage units in pool")?;
+    let ipv4us_gauge = register_gauge!("pool_ipv4us", "total ipv4 units in pool")?;
+
+    let client = reqwest::Client::new();
+
     for ci in zdbs.into_iter().cloned() {
         let mut labels = HashMap::new();
         labels.insert(
@@ -120,6 +133,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    handles.push(tokio::spawn(async move {
+        loop {
+            let pool = client
+                .get("https://explorer.testnet.grid.tf/api/v1/reservations/pools/22040")
+                .send()
+                .await?
+                .json::<Pool>()
+                .await?;
+
+            active_cu_gauge.set(pool.active_cu);
+            active_su_gauge.set(pool.active_su);
+            active_ipv4_gauge.set(pool.active_ipv4);
+            cus_gauge.set(pool.cus);
+            sus_gauge.set(pool.sus);
+            ipv4us_gauge.set(pool.ipv4us);
+        }
+    }));
+
     // let mut buffer = Vec::new();
     // let encoder = TextEncoder::new();
     // encoder.encode(&prometheus::gather(), &mut buffer)?;
@@ -148,4 +179,16 @@ async fn metrics(_: HttpRequest) -> Result<HttpResponse> {
     Ok(HttpResponse::build(StatusCode::OK)
         .content_type("text/plain; charset=utf-8")
         .body(output))
+}
+
+#[derive(Serialize, Deserialize)]
+struct Pool {
+    pub pool_id: u64,
+    pub cus: f64,
+    pub sus: f64,
+    pub ipv4us: f64,
+    pub active_cu: f64,
+    pub active_su: f64,
+    pub active_ipv4: f64,
+    pub empty_at: u64,
 }
