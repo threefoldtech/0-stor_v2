@@ -3,7 +3,8 @@ members = [
 	"zstor",
 	"monitor",
 	"grid_explorer_client",
-	"playground"
+	"playground",
+	"zdb-mon"
 ]
 
 [profile.release]
