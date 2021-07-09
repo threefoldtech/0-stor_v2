@@ -5,9 +5,13 @@ use prometheus::{register_int_gauge_vec, Encoder, IntGaugeVec, TextEncoder};
 use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
 
+const BACKEND_TYPE_DATA: &str = "data";
+const BACKEND_TYPE_META: &str = "meta";
+
 /// A metrics actor collecting metrics from the system.
 pub struct MetricsActor {
-    zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
+    data_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
+    meta_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
     removed_zdbs: Vec<ZdbConnectionInfo>,
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
@@ -36,7 +40,8 @@ impl MetricsActor {
     /// Create a new [`MetricsActor`].
     pub fn new() -> MetricsActor {
         Self {
-            zdbs: HashMap::new(),
+            data_zdbs: HashMap::new(),
+            meta_zdbs: HashMap::new(),
             removed_zdbs: Vec::new(),
             successful_zstor_commands: HashMap::new(),
             failed_zstor_commands: HashMap::new(),
@@ -49,62 +54,62 @@ impl MetricsActor {
             entries_gauges: register_int_gauge_vec!(
                 "entries",
                 "entries in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
 
             data_size_bytes_gauges: register_int_gauge_vec!(
                 "data_size_bytes",
                 "data_size_bytes in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             data_limit_bytes_gauges: register_int_gauge_vec!(
                 "data_limit_bytes",
                 "data_limit_bytes in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             index_size_bytes_gauges: register_int_gauge_vec!(
                 "index_size_bytes",
                 "index_size_bytes in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             index_io_errors_gauges: register_int_gauge_vec!(
                 "index_io_errors",
                 "index_io_errors in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             index_faults_gauges: register_int_gauge_vec!(
                 "index_faults",
                 "index_faults in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             data_io_errors_gauges: register_int_gauge_vec!(
                 "data_io_errors",
                 "data_io_errors in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             data_faults_gauges: register_int_gauge_vec!(
                 "data_faults",
                 "data_faults in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             index_disk_freespace_bytes_gauges: register_int_gauge_vec!(
                 "index_disk_freespace_bytes",
                 "index_disk_freespace_bytes in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             data_disk_freespace_bytes_gauges: register_int_gauge_vec!(
                 "data_disk_freespace_bytes",
                 "data_disk_freespace_bytes in namespace",
-                &["address", "namespace"]
+                &["address", "namespace", "backend_type"]
             )
             .unwrap(),
             zstor_store_commands_finished_gauges: register_int_gauge_vec!(
@@ -141,10 +146,20 @@ impl Default for MetricsActor {
     }
 }
 
-/// Message updating the status of a backend.
+/// Message updating the status of a data 0-db backend.
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SetBackendInfo {
+pub struct SetDataBackendInfo {
+    /// Info identifying the backend.
+    pub ci: ZdbConnectionInfo,
+    /// The backend stats. If this is None, the backend is removed.
+    pub info: Option<NsInfo>,
+}
+
+/// Message updating the status of a meta 0-db backend.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetMetaBackendInfo {
     /// Info identifying the backend.
     pub ci: ZdbConnectionInfo,
     /// The backend stats. If this is None, the backend is removed.
@@ -170,14 +185,27 @@ impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
 
-impl Handler<SetBackendInfo> for MetricsActor {
+impl Handler<SetDataBackendInfo> for MetricsActor {
     type Result = ();
 
-    fn handle(&mut self, msg: SetBackendInfo, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SetDataBackendInfo, _: &mut Self::Context) -> Self::Result {
         if let Some(info) = msg.info {
-            self.zdbs.insert(msg.ci, info);
+            self.data_zdbs.insert(msg.ci, info);
         } else {
-            self.zdbs.remove(&msg.ci);
+            self.data_zdbs.remove(&msg.ci);
+            self.removed_zdbs.push(msg.ci);
+        }
+    }
+}
+
+impl Handler<SetMetaBackendInfo> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetMetaBackendInfo, _: &mut Self::Context) -> Self::Result {
+        if let Some(info) = msg.info {
+            self.meta_zdbs.insert(msg.ci, info);
+        } else {
+            self.meta_zdbs.remove(&msg.ci);
             self.removed_zdbs.push(msg.ci);
         }
     }
@@ -211,6 +239,11 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 labels.insert("namespace", ci.namespace().unwrap_or(""));
                 let address = ci.address().to_string();
                 labels.insert("address", &address);
+                if self.data_zdbs.contains_key(&ci) {
+                    labels.insert("backend_type", BACKEND_TYPE_DATA);
+                } else {
+                    labels.insert("backend_type", BACKEND_TYPE_META);
+                }
 
                 if let Err(e) = self.prom_metrics.entries_gauges.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
@@ -254,11 +287,21 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         }
 
         // Update backend 0-db stats.
-        for (ci, info) in self.zdbs.iter() {
+        for (ci, (info, backend_type)) in self
+            .data_zdbs
+            .iter()
+            .map(|(ci, info)| (ci, (info, BACKEND_TYPE_DATA)))
+            .chain(
+                self.meta_zdbs
+                    .iter()
+                    .map(|(ci, info)| (ci, (info, BACKEND_TYPE_META))),
+            )
+        {
             let mut labels = HashMap::new();
             labels.insert("namespace", ci.namespace().unwrap_or(""));
             let address = ci.address().to_string();
             labels.insert("address", &address);
+            labels.insert("backend_type", backend_type);
 
             let entries_gauge = self.prom_metrics.entries_gauges.get_metric_with(&labels)?;
             let data_size_bytes_gauge = self

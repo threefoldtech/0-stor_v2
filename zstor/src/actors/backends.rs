@@ -1,10 +1,11 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
     explorer::{ExpandStorage, ExplorerActor},
-    metrics::{MetricsActor, SetBackendInfo},
+    metrics::{MetricsActor, SetDataBackendInfo, SetMetaBackendInfo},
 };
 use crate::{
-    zdb::{SequentialZdb, ZdbConnectionInfo, ZdbRunMode},
+    config::Meta,
+    zdb::{SequentialZdb, UserKeyZdb, ZdbConnectionInfo, ZdbRunMode},
     ZstorError,
 };
 use actix::prelude::*;
@@ -35,6 +36,7 @@ pub struct BackendManagerActor {
     explorer: Addr<ExplorerActor>,
     metrics: Addr<MetricsActor>,
     managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
+    managed_meta_dbs: HashMap<ZdbConnectionInfo, (Option<UserKeyZdb>, BackendState)>,
 }
 
 impl BackendManagerActor {
@@ -49,6 +51,7 @@ impl BackendManagerActor {
             explorer,
             metrics,
             managed_seq_dbs: HashMap::new(),
+            managed_meta_dbs: HashMap::new(),
         }
     }
 
@@ -101,10 +104,10 @@ impl Actor for BackendManagerActor {
                     Err(e) => {
                         error!("Could not get config: {}", e);
                         // we won't manage the dbs
-                        HashMap::new()
+                        (HashMap::new(), HashMap::new())
                     }
                     Ok(config) => {
-                        stream::iter(config.backends())
+                        let managed_seq_dbs = stream::iter(config.backends())
                             .filter_map(|ci| async move {
                                 let db = match SequentialZdb::new(ci.clone()).await {
                                     Ok(db) => db,
@@ -116,7 +119,6 @@ impl Actor for BackendManagerActor {
                                         return Some((ci.clone(), (None, BackendState::new())));
                                     }
                                 };
-                                let db = db;
                                 let ns_info = match db.ns_info().await {
                                     Ok(info) => info,
                                     Err(e) => {
@@ -135,12 +137,47 @@ impl Actor for BackendManagerActor {
                                 Some((ci.clone(), (Some(db), state)))
                             })
                             .collect()
-                            .await
+                            .await;
+                        let managed_meta_dbs = match config.meta() {
+                            Meta::Zdb(zdb_meta_cfg) => {
+                                stream::iter(zdb_meta_cfg.backends())
+                                    .filter_map(|ci| async move { 
+                                        let db = match UserKeyZdb::new(ci.clone()).await {
+                                            Ok(db) => db,
+                                            Err(e) => {
+                                                warn!("Failed to connect to metadata backend {} in config file: {}", ci ,e);
+                                                return Some((ci.clone(), (None, BackendState::new())));
+                                            }
+                                        };
+                                        let ns_info = match db.ns_info().await {
+                                            Ok(info) => info,
+                                            Err(e) => {
+                                                warn!("Failed to get ns info from metadata backend {}: {}", ci, e);
+                                                return Some((ci.clone(), (Some(db), BackendState::new())));
+                                            }
+                                        };
+                                        let free_space = ns_info.free_space();
+                                        let state = if free_space <= FREESPACE_TRESHOLD {
+                                            BackendState::LowSpace(free_space)
+                                        } else {
+                                            BackendState::Healthy
+                                        };
+
+                                        Some((ci.clone(), (Some(db), state)))
+                                    })
+                                    .collect()
+                                    .await
+                            }
+                        };
+                        (managed_seq_dbs, managed_meta_dbs)
                     }
                 }
             }
             .into_actor(self)
-            .map(|res, actor, _| actor.managed_seq_dbs = res),
+            .map(|res, actor, _| {
+                actor.managed_seq_dbs = res.0;
+                actor.managed_meta_dbs = res.1;
+            }),
         );
 
         ctx.run_interval(
@@ -154,8 +191,15 @@ impl Handler<CheckBackends> for BackendManagerActor {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, _: CheckBackends, _: &mut Self::Context) -> Self::Result {
-        let backend_info = self
+        let data_backend_info = self
             .managed_seq_dbs
+            .iter()
+            // Can't use `Cloned` here because it expects a ref to a type, while we have a tuple of
+            // refs.
+            .map(|(ci, (db, state))| (ci.clone(), (db.clone(), state.clone())))
+            .collect::<Vec<_>>();
+        let meta_backend_info = self
+            .managed_meta_dbs
             .iter()
             // Can't use `Cloned` here because it expects a ref to a type, while we have a tuple of
             // refs.
@@ -164,7 +208,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
 
         Box::pin(
             async move {
-                let futs = backend_info
+                let futs = data_backend_info
                     .into_iter()
                     .map(|(ci, (db, mut state))| async move {
                         if let Some(db) = db {
@@ -201,14 +245,73 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             }
                         }
                     });
-                join_all(futs).await
+                let data_info = join_all(futs).await;
+                let futs = meta_backend_info
+                    .into_iter()
+                    .map(|(ci, (db, mut state))| async move {
+                        if let Some(db) = db {
+                            let info = match db.ns_info().await {
+                                Err(e) => {
+                                    warn!("Failed to get ns_info from {}: {}", ci, e);
+                                    state.mark_unreachable();
+                                    None
+                                }
+                                Ok(info) => {
+                                    state.mark_healthy(info.free_space());
+                                    Some(info)
+                                }
+                            };
+                            (ci, None, state, info)
+                        } else {
+                            // Try and get a new connection to the db.
+                            if let Ok(db) = SequentialZdb::new(ci.clone()).await {
+                                let info = match db.ns_info().await {
+                                    Err(e) => {
+                                        warn!("Failed to get ns_info from {}: {}", ci, e);
+                                        state.mark_unreachable();
+                                        None
+                                    }
+                                    Ok(info) => {
+                                        state.mark_healthy(info.free_space());
+                                        Some(info)
+                                    }
+                                };
+                                (ci, Some(db), state, info)
+                            } else {
+                                state.mark_unreachable();
+                                (ci, None, state, None)
+                            }
+                        }
+                    });
+                let meta_info = join_all(futs).await;
+                (data_info, meta_info)
             }
             .into_actor(self)
             .map(|res, actor, ctx| {
                 let mut should_sweep = false;
-                for (ci, new_db, new_state, info) in res.into_iter() {
+                for (ci, new_db, new_state, info) in res.0.into_iter() {
                     // update metrics
-                    actor.metrics.do_send(SetBackendInfo {
+                    actor.metrics.do_send(SetDataBackendInfo {
+                        ci: ci.clone(),
+                        info,
+                    });
+                    // It _IS_ possible that the entry is gone here, if another future in the
+                    // actor runs another future in between. But in this case, it was this actor
+                    // which decided to remove the entry, so we don't really care about that
+                    // anyway.
+                    if let Some((possible_con, old_state)) = actor.managed_seq_dbs.get_mut(&ci) {
+                        if new_db.is_some() {
+                            *possible_con = new_db;
+                        }
+                        if !(new_state.is_readable() && new_state.is_writeable()) {
+                            should_sweep = true;
+                        }
+                        *old_state = new_state
+                    }
+                }
+                for (ci, new_db, new_state, info) in res.1.into_iter() {
+                    // update metrics
+                    actor.metrics.do_send(SetMetaBackendInfo {
                         ci: ci.clone(),
                         info,
                     });
@@ -257,7 +360,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
 
         // Now remove the backends to replace from the set of managed ones.
         for (key, _) in &replacements {
-            self.metrics.do_send(SetBackendInfo {
+            self.metrics.do_send(SetDataBackendInfo {
                 ci: key.clone(),
                 info: None,
             });

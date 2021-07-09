@@ -40,7 +40,7 @@ pub struct SequentialZdb {
 }
 
 /// A connection to a 0-db namespace running in user-key mode
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserKeyZdb {
     internal: InternalZdb,
 }
