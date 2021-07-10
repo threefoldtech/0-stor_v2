@@ -141,7 +141,7 @@ impl Actor for BackendManagerActor {
                         let managed_meta_dbs = match config.meta() {
                             Meta::Zdb(zdb_meta_cfg) => {
                                 stream::iter(zdb_meta_cfg.backends())
-                                    .filter_map(|ci| async move { 
+                                    .filter_map(|ci| async move {
                                         let db = match UserKeyZdb::new(ci.clone()).await {
                                             Ok(db) => db,
                                             Err(e) => {
