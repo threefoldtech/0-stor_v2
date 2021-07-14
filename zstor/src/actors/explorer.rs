@@ -284,6 +284,10 @@ impl Handler<ExpandStorage> for ExplorerActor {
                     "Unable to find valid node to deploy new 0-db on of size {}",
                     msg.size_gib
                 );
+                return Err(ZstorError::with_message(
+                    ZstorErrorKind::Explorer,
+                    "could not deploy new 0-db, no valid node found".into(),
+                ));
             }
 
             // Unwrap is safe as we just checked that this is Some(_).

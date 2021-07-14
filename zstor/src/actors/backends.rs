@@ -566,7 +566,7 @@ impl BackendState {
     }
 
     /// Identify if the backend is considered to be in a "terminal" state. A terminal state means
-    /// that a new backend should be reserved to maintain system .
+    /// that a new backend should be reserved to maintain system stability.
     pub fn is_terminal(&self) -> bool {
         matches!(self, BackendState::Unreachable | BackendState::LowSpace(_))
     }
