@@ -1,3 +1,4 @@
+use log::info;
 use simple_logger::SimpleLogger;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
@@ -27,6 +28,9 @@ fn main() {
         let addr1 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9991);
         let addr2 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9992);
         let addr3 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9993);
+        let addr4 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9994);
+        let addr5 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9995);
+        let addr6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str("::").unwrap()), 9996);
         #[allow(clippy::eval_order_dependence)]
         let backends = vec![
             zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr0, None, None))
@@ -46,7 +50,7 @@ fn main() {
         let encoder = Encoder::new(2, 2);
         let encryptor = AesGcm::new(ENCRYPTIONKEY);
 
-        let metastore = ZdbMetaStore::new(
+        let old_metastore = ZdbMetaStore::new(
             backends,
             encoder,
             encryptor,
@@ -67,19 +71,25 @@ fn main() {
                 enc.clone().into(),
                 compression.clone().into(),
             );
-            metastore
+            old_metastore
                 .save_meta_by_key(&format!("/some_prefix/meta/{}", i), &meta)
                 .await
                 .unwrap();
         }
 
-        // recreate metastore with only 2 shards in different order
+        // recreate metastore with 3 different nodes and different order
         #[allow(clippy::eval_order_dependence)]
         let backends = vec![
             zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr3, None, None))
                 .await
                 .unwrap(),
-            zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr0, None, None))
+            zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr4, None, None))
+                .await
+                .unwrap(),
+            zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr6, None, None))
+                .await
+                .unwrap(),
+            zdb::UserKeyZdb::new(zdb::ZdbConnectionInfo::new(addr5, None, None))
                 .await
                 .unwrap(),
         ];
@@ -94,6 +104,9 @@ fn main() {
             None,
         );
 
+        // rebuild metadata
+        assert!(metastore.rebuild_cluster(&old_metastore).await.is_ok());
+
         // read & verify
         for i in 0..1000 {
             let checksum = (i as u128).to_be_bytes();
@@ -105,6 +118,8 @@ fn main() {
 
             assert_eq!(meta.checksum(), &checksum);
         }
+
+        info!("objects read");
 
         // check key iterator
         let mut count = 0;

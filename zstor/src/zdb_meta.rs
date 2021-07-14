@@ -14,7 +14,7 @@ use futures::{
     future::{join_all, try_join_all},
     stream::{Stream, StreamExt},
 };
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -276,6 +276,7 @@ where
     /// Rebuild an old metdata cluster on a new one. This method does not return untill all known
     /// keys are rebuild.
     pub async fn rebuild_cluster(&self, old_cluster: &Self) -> ZdbMetaStoreResult<()> {
+        info!("Start cluster rebuild");
         if !self.writeable {
             return Err(ZdbMetaStoreError {
                 kind: ErrorKind::InsufficientHealthBackends,
@@ -288,16 +289,15 @@ where
         // Rebuild data, for now we skip keys which error but otherwise attempt to complete the
         // rebuild.
         old_cluster
-            .keys(&self.prefix)
+            .keys(&format!("/{}/", &self.prefix))
             .await?
             .for_each_concurrent(CONCURRENT_KEY_REBUILDS, |key| async move {
-                if old_cluster.encoder.data_shards() == self.encoder.data_shards()
-                    && old_cluster.encoder.parity_shards() == self.encoder.parity_shards()
-                {
+                if old_cluster.encoder == self.encoder {
                     if let Err(e) = self.sparse_rebuild(old_cluster, &key).await {
                         error!("Failed to sparse rebuild key {} on new cluster: {}", key, e);
                     }
                 } else {
+                    trace!("plain rebuild of key {}", key);
                     let value = match old_cluster.read_value(&key).await {
                         Ok(value) => value,
                         Err(e) => {
@@ -329,10 +329,6 @@ where
     /// Panics if the encoder configuration for the old and new cluster is different.
     async fn sparse_rebuild(&self, old_cluster: &Self, key: &str) -> ZdbMetaStoreResult<()> {
         trace!("Sparse rebuild of key {}", key);
-        // let mut read_requests = Vec::with_capacity(old_cluster.backends.len());
-        // for backend in old_cluster.backends.iter() {
-        //     read_requests.push((backend.connection_info(), backend.get(key)));
-        // }
         assert_eq!(old_cluster.encoder, self.encoder);
 
         let shard_count = old_cluster.encoder.data_shards() + old_cluster.encoder.parity_shards();
@@ -440,6 +436,7 @@ where
                     );
                     shard.extend(&checksum);
                     writes.push((backend, shard));
+                    break;
                 }
             }
         }
