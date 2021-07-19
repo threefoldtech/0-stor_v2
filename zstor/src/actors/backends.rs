@@ -264,7 +264,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             (ci, None, state, info)
                         } else {
                             // Try and get a new connection to the db.
-                            if let Ok(db) = SequentialZdb::new(ci.clone()).await {
+                            if let Ok(db) = UserKeyZdb::new(ci.clone()).await {
                                 let info = match db.ns_info().await {
                                     Err(e) => {
                                         warn!("Failed to get ns_info from {}: {}", ci, e);
@@ -319,7 +319,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                     // actor runs another future in between. But in this case, it was this actor
                     // which decided to remove the entry, so we don't really care about that
                     // anyway.
-                    if let Some((possible_con, old_state)) = actor.managed_seq_dbs.get_mut(&ci) {
+                    if let Some((possible_con, old_state)) = actor.managed_meta_dbs.get_mut(&ci) {
                         if new_db.is_some() {
                             *possible_con = new_db;
                         }
