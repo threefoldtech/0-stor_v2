@@ -2,7 +2,7 @@ use crate::actors::{
     config::{ConfigActor, GetConfig},
     zstor::{Check, ZstorActor},
 };
-use crate::{meta::MetaStore, ZstorError, ZstorResult};
+use crate::{ZstorError, ZstorResult};
 use actix::prelude::*;
 use log::{debug, error, info, warn};
 use std::{
@@ -18,12 +18,9 @@ const DIR_MONITOR_INTERVAL_SECONDS: u64 = 60;
 const MIB: u64 = 1 << 20;
 
 /// Actor to keep a directory within a size limit.
-pub struct DirMonitorActor<T>
-where
-    T: Unpin + 'static,
-{
+pub struct DirMonitorActor {
     cfg: Addr<ConfigActor>,
-    zstor: Addr<ZstorActor<T>>,
+    zstor: Addr<ZstorActor>,
 }
 
 /// Message requesting the actor to reduce the watched directory to the size limit.
@@ -31,10 +28,7 @@ where
 #[rtype(result = "()")]
 struct CheckDir;
 
-impl<T> Actor for DirMonitorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Actor for DirMonitorActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -45,12 +39,9 @@ where
     }
 }
 
-impl<T> DirMonitorActor<T>
-where
-    T: MetaStore + Unpin,
-{
+impl DirMonitorActor {
     /// Create a new [`DirMonitorActor`] using the given [`ConfigActor`] and [`ZstorActor`].
-    pub fn new(cfg: Addr<ConfigActor>, zstor: Addr<ZstorActor<T>>) -> DirMonitorActor<T> {
+    pub fn new(cfg: Addr<ConfigActor>, zstor: Addr<ZstorActor>) -> DirMonitorActor {
         Self { cfg, zstor }
     }
 
@@ -60,10 +51,7 @@ where
     }
 }
 
-impl<T> Handler<CheckDir> for DirMonitorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<CheckDir> for DirMonitorActor {
     type Result = ResponseFuture<()>;
 
     fn handle(&mut self, _: CheckDir, _: &mut Self::Context) -> Self::Result {
@@ -175,10 +163,7 @@ async fn get_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, Metadata)>> {
 }
 
 /// Return true if the file was deleted
-async fn attempt_removal<T>(path: &Path, zstor: Addr<ZstorActor<T>>) -> ZstorResult<bool>
-where
-    T: MetaStore + Unpin + 'static,
-{
+async fn attempt_removal(path: &Path, zstor: Addr<ZstorActor>) -> ZstorResult<bool> {
     let path = fs::canonicalize(path).await.map_err(|e| {
         ZstorError::new_io(
             "Could not canonicalize path".into(),

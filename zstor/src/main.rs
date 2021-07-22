@@ -16,10 +16,10 @@ use std::process;
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use zstor_v2::actors::zstor::ZstorActor;
-use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
+use zstor_v2::actors::zstor::{
+    Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand, ZstorResponse,
+};
 use zstor_v2::config::Config;
-use zstor_v2::meta::MetaStore;
 use zstor_v2::zdb::SequentialZdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
@@ -349,10 +349,7 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn handle_client<C>(
-    mut con: C,
-    zstor: Addr<ZstorActor<impl MetaStore + Unpin>>,
-) -> ZstorResult<()>
+async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActor>) -> ZstorResult<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
 {

@@ -7,7 +7,7 @@ use crate::actors::{
 use crate::{
     config::Config,
     erasure::Shard,
-    meta::{Checksum, MetaData, MetaStore, ShardInfo},
+    meta::{Checksum, MetaData, ShardInfo},
     zdb::{SequentialZdb, ZdbError, ZdbResult},
     ZstorError, ZstorResult,
 };
@@ -96,24 +96,21 @@ pub struct Check {
 }
 
 /// Actor for the main zstor object encoding and decoding.
-pub struct ZstorActor<T: Unpin + 'static> {
+pub struct ZstorActor {
     cfg: Addr<ConfigActor>,
     pipeline: Addr<PipelineActor>,
-    meta: Addr<MetaStoreActor<T>>,
+    meta: Addr<MetaStoreActor>,
     metrics: Addr<MetricsActor>,
 }
 
-impl<T> ZstorActor<T>
-where
-    T: Unpin + 'static,
-{
+impl ZstorActor {
     /// new
     pub fn new(
         cfg: Addr<ConfigActor>,
         pipeline: Addr<PipelineActor>,
-        meta: Addr<MetaStoreActor<T>>,
+        meta: Addr<MetaStoreActor>,
         metrics: Addr<MetricsActor>,
-    ) -> ZstorActor<T> {
+    ) -> ZstorActor {
         Self {
             cfg,
             pipeline,
@@ -123,17 +120,11 @@ where
     }
 }
 
-impl<T> Actor for ZstorActor<T>
-where
-    T: Unpin + 'static,
-{
+impl Actor for ZstorActor {
     type Context = Context<Self>;
 }
 
-impl<T> Handler<Store> for ZstorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<Store> for ZstorActor {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Store, _: &mut Self::Context) -> Self::Result {
@@ -205,10 +196,7 @@ where
     }
 }
 
-impl<T> Handler<Retrieve> for ZstorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<Retrieve> for ZstorActor {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Retrieve, _: &mut Self::Context) -> Self::Result {
@@ -253,10 +241,7 @@ where
     }
 }
 
-impl<T> Handler<Rebuild> for ZstorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<Rebuild> for ZstorActor {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Rebuild, _: &mut Self::Context) -> Self::Result {
@@ -356,10 +341,7 @@ where
     }
 }
 
-impl<T> Handler<Check> for ZstorActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<Check> for ZstorActor {
     type Result = ResponseActFuture<Self, Result<Option<Checksum>, ZstorError>>;
 
     fn handle(&mut self, msg: Check, _: &mut Self::Context) -> Self::Result {

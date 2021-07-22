@@ -1,6 +1,11 @@
-use crate::{config::Config, zdb::ZdbConnectionInfo, ZstorError};
+use crate::{
+    config::{Config, Meta},
+    zdb::ZdbConnectionInfo,
+    ZstorError,
+};
 use actix::prelude::*;
-use std::{ops::Deref, path::PathBuf, sync::Arc};
+use log::error;
+use std::{convert::TryInto, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::fs;
 
 #[derive(Message)]
@@ -25,6 +30,14 @@ pub struct AddZdb {
     pub ci: ZdbConnectionInfo,
     /// [`ZdbConnectionInfo`] to identify the 0-db which needs to be removed.
     pub replaced: Option<ZdbConnectionInfo>,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ZstorError>")]
+/// Message to replace the 0-db instances in a 0-db metastore backend.
+pub struct ReplaceMetaBackend {
+    /// Connection info for all the nodes making up the new metadata backend.
+    pub new_nodes: Vec<ZdbConnectionInfo>,
 }
 
 /// Actor holding the configuration, and the path where it is saved.
@@ -86,6 +99,36 @@ impl Handler<AddZdb> for ConfigActor {
         if let Some(removed_backend) = msg.replaced {
             config.remove_backend(&removed_backend);
         }
+        self.config = new_config.clone();
+        let path = self.config_path.clone();
+        Box::pin(async move { save_config(path, new_config).await })
+    }
+}
+
+impl Handler<ReplaceMetaBackend> for ConfigActor {
+    type Result = ResponseFuture<Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: ReplaceMetaBackend, _: &mut Self::Context) -> Self::Result {
+        let mut new_config = Arc::clone(&self.config);
+        let config = Arc::make_mut(&mut new_config);
+        let mut meta = config.meta().clone();
+        match meta {
+            Meta::Zdb(ref mut zdb_meta) => {
+                match msg.new_nodes.try_into() {
+                    Ok(nn) => {
+                        zdb_meta.set_backends(nn);
+                    }
+                    Err(e) => {
+                        // Should not happen
+                        error!(
+                            "Could't convert meta backend slice (len {}) to array of len 4",
+                            e.len()
+                        );
+                    }
+                };
+            }
+        }
+        config.set_meta(meta);
         self.config = new_config.clone();
         let path = self.config_path.clone();
         Box::pin(async move { save_config(path, new_config).await })

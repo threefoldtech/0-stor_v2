@@ -14,7 +14,7 @@ pub type ErasureResult<T> = Result<T, EncodingError>;
 
 /// A data encoder is responsible for encoding original data into multiple shards, and decoding
 /// multiple shards back to the original data, if sufficient shards are available.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Encoder {
     data_shards: usize,
     parity_shards: usize,

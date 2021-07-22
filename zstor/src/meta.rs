@@ -231,10 +231,29 @@ pub struct MetaStoreError {
     error: Box<dyn std::error::Error + Send>,
 }
 
+/// An error indicating that the metastore is not writeable
+#[derive(Debug)]
+pub struct NotWriteableError;
+
+impl fmt::Display for NotWriteableError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "metastore is currently not writeable")
+    }
+}
+
+impl std::error::Error for NotWriteableError {}
+
 impl MetaStoreError {
     /// Create a new metastore error which wraps an existing error
     pub fn new(error: Box<dyn std::error::Error + Send>) -> Self {
         Self { error }
+    }
+
+    /// Create a new [`MetaStoreError`] which represents a [`NotWriteableError`].
+    pub fn not_writeable() -> Self {
+        Self {
+            error: Box::new(NotWriteableError),
+        }
     }
 }
 

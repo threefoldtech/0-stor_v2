@@ -3,7 +3,6 @@ use crate::actors::{
     meta::{MetaStoreActor, ObjectMetas},
     zstor::{Rebuild, ZstorActor},
 };
-use crate::meta::MetaStore;
 use actix::prelude::*;
 use log::{error, warn};
 use std::time::Duration;
@@ -19,26 +18,20 @@ struct SweepObjects;
 
 /// Actor implementation of a repair queue. It periodically sweeps the [`MetaStore`], and verifies
 /// all backends are still reachable.
-pub struct RepairActor<T>
-where
-    T: Unpin + 'static,
-{
-    meta: Addr<MetaStoreActor<T>>,
+pub struct RepairActor {
+    meta: Addr<MetaStoreActor>,
     backend_manager: Addr<BackendManagerActor>,
-    zstor: Addr<ZstorActor<T>>,
+    zstor: Addr<ZstorActor>,
 }
 
-impl<T> RepairActor<T>
-where
-    T: MetaStore + Unpin,
-{
+impl RepairActor {
     /// Create a new [`RepairActor`] checking objects in the provided metastore and using the given
     /// zstor to repair them if needed.
     pub fn new(
-        meta: Addr<MetaStoreActor<T>>,
+        meta: Addr<MetaStoreActor>,
         backend_manager: Addr<BackendManagerActor>,
-        zstor: Addr<ZstorActor<T>>,
-    ) -> RepairActor<T> {
+        zstor: Addr<ZstorActor>,
+    ) -> RepairActor {
         Self {
             meta,
             backend_manager,
@@ -52,10 +45,7 @@ where
     }
 }
 
-impl<T> Actor for RepairActor<T>
-where
-    T: MetaStore + Unpin,
-{
+impl Actor for RepairActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -66,10 +56,7 @@ where
     }
 }
 
-impl<T> Handler<SweepObjects> for RepairActor<T>
-where
-    T: MetaStore + Unpin,
-{
+impl Handler<SweepObjects> for RepairActor {
     type Result = ResponseFuture<()>;
 
     fn handle(&mut self, _: SweepObjects, _: &mut Self::Context) -> Self::Result {

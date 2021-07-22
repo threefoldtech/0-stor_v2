@@ -57,6 +57,11 @@ impl ZdbMetaStoreConfig {
         &self.backends
     }
 
+    /// Set the backends to the provided ones.
+    pub fn set_backends(&mut self, backends: [ZdbConnectionInfo; 4]) {
+        self.backends = backends;
+    }
+
     /// Build an encoder from the config.
     pub fn encoder(&self) -> Encoder {
         Encoder::new(ZDB_METASTORE_DATA_SHARDS, ZDB_METASTORE_PARITY_SHARDS)

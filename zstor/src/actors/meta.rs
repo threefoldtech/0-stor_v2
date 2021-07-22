@@ -87,59 +87,73 @@ pub struct DeleteFailure {
 /// Message for retrieving all [`FailureMeta`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
 pub struct GetFailures;
 
-/// Actor for a metastore
-#[derive(Debug)]
-pub struct MetaStoreActor<T> {
-    meta_store: Arc<T>,
+#[derive(Message)]
+#[rtype(result = "()")]
+/// Message for setting the `writeable` state of the metastore.
+pub struct MarkWriteable {
+    /// Indicates if the metastore is now writable or not.
+    pub writeable: bool,
 }
 
-impl<T> MetaStoreActor<T>
-where
-    T: MetaStore + Send,
-{
+#[derive(Message)]
+#[rtype(result = "()")]
+/// Message to replace the metastore in use.
+pub struct ReplaceMetaStore {
+    /// The new metastore to set
+    pub new_store: Box<dyn MetaStore + Send>,
+}
+
+/// Actor for a metastore
+pub struct MetaStoreActor {
+    meta_store: Arc<Box<dyn MetaStore>>,
+    writeable: bool,
+}
+
+impl MetaStoreActor {
     /// Create a new [`MetaStoreActor`] from a given [`MetaStore`].
-    pub fn new(meta_store: T) -> MetaStoreActor<T> {
+    pub fn new(meta_store: Box<dyn MetaStore>) -> MetaStoreActor {
         Self {
             meta_store: Arc::new(meta_store),
+            writeable: true,
         }
     }
 }
 
-impl<T> Actor for MetaStoreActor<T>
-where
-    T: Unpin + 'static,
-{
+impl Actor for MetaStoreActor {
     type Context = Context<Self>;
 }
 
-impl<T> Handler<SaveMeta> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<SaveMeta> for MetaStoreActor {
     type Result = ResponseFuture<Result<(), MetaStoreError>>;
 
     fn handle(&mut self, msg: SaveMeta, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
         let meta_store = self.meta_store.clone();
-        Box::pin(async move { meta_store.save_meta(&msg.path, &msg.meta).await })
+        Box::pin(async move {
+            if !writeable {
+                return Err(MetaStoreError::not_writeable());
+            }
+            meta_store.save_meta(&msg.path, &msg.meta).await
+        })
     }
 }
 
-impl<T> Handler<SaveMetaByKey> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<SaveMetaByKey> for MetaStoreActor {
     type Result = ResponseFuture<Result<(), MetaStoreError>>;
 
     fn handle(&mut self, msg: SaveMetaByKey, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
         let meta_store = self.meta_store.clone();
-        Box::pin(async move { meta_store.save_meta_by_key(&msg.key, &msg.meta).await })
+        Box::pin(async move {
+            if !writeable {
+                return Err(MetaStoreError::not_writeable());
+            }
+            meta_store.save_meta_by_key(&msg.key, &msg.meta).await
+        })
     }
 }
 
-impl<T> Handler<LoadMeta> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<LoadMeta> for MetaStoreActor {
     type Result = ResponseFuture<Result<Option<MetaData>, MetaStoreError>>;
 
     fn handle(&mut self, msg: LoadMeta, _: &mut Self::Context) -> Self::Result {
@@ -148,10 +162,7 @@ where
     }
 }
 
-impl<T> Handler<LoadMetaByKey> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<LoadMetaByKey> for MetaStoreActor {
     type Result = ResponseFuture<Result<Option<MetaData>, MetaStoreError>>;
 
     fn handle(&mut self, msg: LoadMetaByKey, _: &mut Self::Context) -> Self::Result {
@@ -160,22 +171,22 @@ where
     }
 }
 
-impl<T> Handler<SetReplaced> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<SetReplaced> for MetaStoreActor {
     type Result = ResponseFuture<Result<(), MetaStoreError>>;
 
     fn handle(&mut self, msg: SetReplaced, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
         let meta_store = self.meta_store.clone();
-        Box::pin(async move { meta_store.set_replaced(&msg.ci).await })
+        Box::pin(async move {
+            if !writeable {
+                return Err(MetaStoreError::not_writeable());
+            }
+            meta_store.set_replaced(&msg.ci).await
+        })
     }
 }
 
-impl<T> Handler<IsReplaced> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<IsReplaced> for MetaStoreActor {
     type Result = ResponseFuture<Result<bool, MetaStoreError>>;
 
     fn handle(&mut self, msg: IsReplaced, _: &mut Self::Context) -> Self::Result {
@@ -184,10 +195,7 @@ where
     }
 }
 
-impl<T> Handler<ObjectMetas> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<ObjectMetas> for MetaStoreActor {
     type Result = ResponseFuture<Result<Vec<(String, MetaData)>, MetaStoreError>>;
 
     fn handle(&mut self, _: ObjectMetas, _: &mut Self::Context) -> Self::Result {
@@ -196,15 +204,16 @@ where
     }
 }
 
-impl<T> Handler<SaveFailure> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<SaveFailure> for MetaStoreActor {
     type Result = ResponseFuture<Result<(), MetaStoreError>>;
 
     fn handle(&mut self, msg: SaveFailure, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
         let meta_store = self.meta_store.clone();
         Box::pin(async move {
+            if !writeable {
+                return Err(MetaStoreError::not_writeable());
+            }
             meta_store
                 .save_failure(&msg.data_path, &msg.key_dir_path, msg.should_delete)
                 .await
@@ -212,26 +221,42 @@ where
     }
 }
 
-impl<T> Handler<DeleteFailure> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<DeleteFailure> for MetaStoreActor {
     type Result = ResponseFuture<Result<(), MetaStoreError>>;
 
     fn handle(&mut self, msg: DeleteFailure, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
         let meta_store = self.meta_store.clone();
-        Box::pin(async move { meta_store.delete_failure(&msg.fm).await })
+        Box::pin(async move {
+            if !writeable {
+                return Err(MetaStoreError::not_writeable());
+            }
+            meta_store.delete_failure(&msg.fm).await
+        })
     }
 }
 
-impl<T> Handler<GetFailures> for MetaStoreActor<T>
-where
-    T: MetaStore + Unpin + 'static,
-{
+impl Handler<GetFailures> for MetaStoreActor {
     type Result = ResponseFuture<Result<Vec<FailureMeta>, MetaStoreError>>;
 
     fn handle(&mut self, _: GetFailures, _: &mut Self::Context) -> Self::Result {
         let meta_store = self.meta_store.clone();
         Box::pin(async move { meta_store.get_failures().await })
+    }
+}
+
+impl Handler<MarkWriteable> for MetaStoreActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: MarkWriteable, _: &mut Self::Context) -> Self::Result {
+        self.writeable = msg.writeable;
+    }
+}
+
+impl Handler<ReplaceMetaStore> for MetaStoreActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: ReplaceMetaStore, _: &mut Self::Context) -> Self::Result {
+        self.meta_store = Arc::new(msg.new_store);
     }
 }

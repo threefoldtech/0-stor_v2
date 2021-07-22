@@ -10,7 +10,7 @@ use futures::future::join_all;
 use grid_explorer_client::{
     reservation::{PoolData, ReservationData},
     types::Node,
-    workload::{DiskType, WorkloadType, ZdbInformationBuilder, ZdbMode},
+    workload::{DiskType, WorkloadData, WorkloadType, ZdbInformationBuilder, ZdbMode},
     ExplorerClient,
 };
 use log::{debug, error, warn};
@@ -33,6 +33,8 @@ const POOL_TARGET_LIFETIME_SECONDS: u64 = 60 * 60 * 24 * 7;
 const POOL_REFRESH_LIFETIME_SECONDS: u64 = 60 * 60 * 24 * 2;
 /// The currency identifier for the TFT currency as expected by the explorer.
 const TFT_CURRENCY_ID: &str = "TFT";
+/// The factor to increate the size of old reservations with if a size increase is requested.
+const SIZE_INCREASE: u64 = 2;
 
 /// Actor managing reservatonson the threefold grid with an attached stellar wallet.
 pub struct ExplorerActor {
@@ -75,10 +77,32 @@ pub struct ExpandStorage {
     pub existing_zdb: Option<ZdbConnectionInfo>,
     /// Whether the existing reservation should be decomissioned.
     pub decomission: bool,
-    /// Size in GiB for the new 0-db namespace.
-    pub size_gib: u64,
+    /// Size request for the new 0-db namespace. The default size is specified in GiB.
+    pub size_request: SizeRequest,
     /// The mode the new 0-db should run in.
     pub mode: ZdbRunMode,
+}
+
+/// Requested size for a new 0-db backend. The size will depend on the old reservation if that is
+/// ossible, and only use the provided value if the old reservation could not be found.
+#[derive(Debug)]
+pub enum SizeRequest {
+    /// Reserve the exact size of the existing reservation, if possible, otherwise use the provided
+    /// default.
+    Exact(u64),
+    /// Increase the size compared to the existing reservation, if possible, otherwise use the
+    /// provided default. The amount of increase is an implementation detail.
+    Increase(u64),
+}
+
+impl SizeRequest {
+    /// Extract the default size from the size request.
+    fn default_size(&self) -> u64 {
+        match *self {
+            SizeRequest::Exact(size) => size,
+            SizeRequest::Increase(size) => size,
+        }
+    }
 }
 
 impl Actor for ExplorerActor {
@@ -223,15 +247,20 @@ impl Handler<ExpandStorage> for ExplorerActor {
                 None
             };
             // Try to select a new node from the same pool to deploy on.
-            let mut prefered_node_id: Option<(i64, String, String)> = if let Some(id) =
-                existing_reservation_id
-            {
+            let (mut prefered_node_id, size) = if let Some(id) = existing_reservation_id {
                 let old_workload = client.workload_get_by_id(id).await?;
+                let new_db_size = match old_workload.data {
+                    WorkloadData::Zdb(data) => match msg.size_request {
+                        SizeRequest::Exact(_) => data.size as u64,
+                        SizeRequest::Increase(_) => data.size as u64 * SIZE_INCREASE,
+                    },
+                    _ => msg.size_request.default_size(),
+                };
                 let pool_id = old_workload.pool_id;
                 // prefer to work on the same pool
                 if !own_pool_ids.contains(&pool_id) {
                     warn!("Attempting to get new storage from existing storage which is not managed by our own pools (pool_id: {})", pool_id);
-                    None
+                    (None, new_db_size)
                 } else {
                     // unwrap here is safe since we selected a pool id we own above.
                     let mut pref = None;
@@ -240,15 +269,15 @@ impl Handler<ExpandStorage> for ExplorerActor {
                             continue;
                         }
                         let node = client.node_get_by_id(&node_id).await?;
-                        if is_deployable(&node, msg.size_gib) {
+                        if is_deployable(&node, new_db_size) {
                             pref = Some((pool_id, node_id.clone(), node.public_key_hex));
                             break;
                         }
                     }
-                    pref
+                    (pref, new_db_size)
                 }
             } else {
-                None
+                (None, msg.size_request.default_size())
             };
 
             // TODO: Selecting a random pool here might break the redundancy configuration
@@ -272,7 +301,7 @@ impl Handler<ExpandStorage> for ExplorerActor {
                 // Now pick the first acceptable node
                 for (pool_id, node_id) in nodes.into_iter() {
                     let node = client.node_get_by_id(&node_id).await?;
-                    if is_deployable(&node, msg.size_gib) {
+                    if is_deployable(&node, size) {
                         prefered_node_id = Some((pool_id, node_id, node.public_key_hex));
                         break;
                     }
@@ -282,7 +311,7 @@ impl Handler<ExpandStorage> for ExplorerActor {
             if prefered_node_id.is_none() {
                 error!(
                     "Unable to find valid node to deploy new 0-db on of size {}",
-                    msg.size_gib
+                    size
                 );
                 return Err(ZstorError::with_message(
                     ZstorErrorKind::Explorer,
@@ -299,7 +328,7 @@ impl Handler<ExpandStorage> for ExplorerActor {
                 .map(char::from)
                 .collect();
             let res = ZdbInformationBuilder::new()
-                .size(msg.size_gib as i64)
+                .size(size as i64)
                 .mode(match msg.mode {
                     ZdbRunMode::Seq => ZdbMode::ZdbModeSeq,
                     ZdbRunMode::User => ZdbMode::ZdbModeUser,

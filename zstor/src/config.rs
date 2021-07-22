@@ -253,6 +253,11 @@ impl Config {
         }
     }
 
+    /// Sets the [`Meta`] metastore info of the config to the specified [`Meta`] info.
+    pub fn set_meta(&mut self, meta: Meta) {
+        self.meta = meta;
+    }
+
     /// Returns a list of 0-db's to use for storage of the data shards, in accordance to the
     /// encoding profile and redundancy policies. If no valid configuration can be found, an error
     /// is returned. If multiple valid configurations are found, one is selected at random.

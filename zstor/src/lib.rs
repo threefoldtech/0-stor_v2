@@ -36,7 +36,6 @@ use tokio::task::JoinError;
 use zdb::ZdbError;
 use {
     config::{Config, Encryption, Meta},
-    meta::MetaStore,
     zdb::UserKeyZdb,
     zdb_meta::ZdbMetaStore,
 };
@@ -63,10 +62,7 @@ pub mod zdb_meta;
 pub type ZstorResult<T> = Result<T, ZstorError>;
 
 /// Start the 0-stor monitor daemon
-pub async fn setup_system(
-    cfg_path: PathBuf,
-    cfg: Config,
-) -> ZstorResult<Addr<ZstorActor<impl MetaStore>>> {
+pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<ZstorActor>> {
     let identity = Identity::new(cfg.identity_id() as i64, cfg.identity_mnemonic())?;
     let explorer_client = ExplorerClient::new(cfg.grid_network(), cfg.wallet_secret(), identity);
     let metastore = match cfg.meta() {
@@ -82,13 +78,13 @@ pub async fn setup_system(
                 Encryption::Aes(key) => encryption::AesGcm::new(key.clone()),
             };
             let encoder = zdb_cfg.encoder();
-            ZdbMetaStore::new(
+            Box::new(ZdbMetaStore::new(
                 backends,
                 encoder,
                 encryptor,
                 zdb_cfg.prefix().to_string(),
                 cfg.virtual_root().clone(),
-            )
+            ))
         }
     };
     let prom_port = cfg.prometheus_port();
@@ -106,7 +102,9 @@ pub async fn setup_system(
     .start();
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
     let explorer = ExplorerActor::new(explorer_client, cfg_addr.clone()).start();
-    let backends = BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone()).start();
+    let backends =
+        BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone(), meta_addr.clone())
+            .start();
     let _ = RepairActor::new(meta_addr, backends, zstor.clone()).start();
 
     // Setup prometheus endpoint if needed

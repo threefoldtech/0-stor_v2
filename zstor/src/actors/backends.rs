@@ -1,16 +1,19 @@
 use crate::actors::{
-    config::{ConfigActor, GetConfig},
-    explorer::{ExpandStorage, ExplorerActor},
+    config::{ConfigActor, GetConfig, ReplaceMetaBackend},
+    explorer::{ExpandStorage, ExplorerActor, SizeRequest},
+    meta::{MarkWriteable, MetaStoreActor, ReplaceMetaStore},
     metrics::{MetricsActor, SetDataBackendInfo, SetMetaBackendInfo},
 };
 use crate::{
-    config::Meta,
+    config::{Encryption, Meta},
+    encryption::AesGcm,
     zdb::{SequentialZdb, UserKeyZdb, ZdbConnectionInfo, ZdbRunMode},
+    zdb_meta::ZdbMetaStore,
     ZstorError,
 };
 use actix::prelude::*;
 use futures::{
-    future::join_all,
+    future::{join, join_all},
     {stream, StreamExt},
 };
 use log::{debug, error, warn};
@@ -27,14 +30,17 @@ const MISSING_DURATION: Duration = Duration::from_secs(15 * 60);
 const FREESPACE_TRESHOLD: u64 = 100 * (1 << 20);
 /// Check backends every 3 seconds.
 const BACKEND_CHECK_INTERVAL_SECONDS: u64 = 3;
-/// Default to 0-db backends of 100GiB in size.
-const DEFAULT_BACKEND_SIZE_GIB: u64 = 100;
+/// Default to 0-db data backends of 100GiB in size.
+const DEFAULT_DATA_BACKEND_SIZE_GIB: u64 = 100;
+/// Default to 0-db metadata backends of 25GiB in size.
+const DEFAULT_META_BACKEND_SIZE_GIB: u64 = 25;
 
 /// An actor implementation of a backend manager.
 pub struct BackendManagerActor {
     config_addr: Addr<ConfigActor>,
     explorer: Addr<ExplorerActor>,
     metrics: Addr<MetricsActor>,
+    metastore: Addr<MetaStoreActor>,
     managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
     managed_meta_dbs: HashMap<ZdbConnectionInfo, (Option<UserKeyZdb>, BackendState)>,
 }
@@ -45,11 +51,13 @@ impl BackendManagerActor {
         config_addr: Addr<ConfigActor>,
         explorer: Addr<ExplorerActor>,
         metrics: Addr<MetricsActor>,
+        metastore: Addr<MetaStoreActor>,
     ) -> BackendManagerActor {
         Self {
             config_addr,
             explorer,
             metrics,
+            metastore,
             managed_seq_dbs: HashMap::new(),
             managed_meta_dbs: HashMap::new(),
         }
@@ -346,7 +354,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
     fn handle(&mut self, _: ReplaceBackends, _: &mut Self::Context) -> Self::Result {
         let explorer = self.explorer.clone();
         // Grab all backends which must be replaced.
-        let replacements = self
+        let seq_replacements = self
             .managed_seq_dbs
             .iter()
             .filter_map(|(ci, (_, state))| {
@@ -359,7 +367,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
             .collect::<Vec<_>>();
 
         // Now remove the backends to replace from the set of managed ones.
-        for (key, _) in &replacements {
+        for (key, _) in &seq_replacements {
             self.metrics.do_send(SetDataBackendInfo {
                 ci: key.clone(),
                 info: None,
@@ -368,7 +376,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
         }
 
         // Finally, request new 0-dbs and decommission unreadable ones.
-        let replacements = replacements
+        let seq_replacements = seq_replacements
             .into_iter()
             .map(|(ci, state)| {
                 let explorer = explorer.clone();
@@ -376,17 +384,169 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
             })
             .collect::<Vec<_>>();
 
+        // Same for meta 0-db's really.
+        let user_replacements = self
+            .managed_meta_dbs
+            .iter()
+            .filter_map(|(ci, (_, state))| {
+                if state.is_terminal() {
+                    Some((ci.clone(), state.clone()))
+                } else {
+                    None
+                }
+            })
+            // Don't remove the meta db's from the managed set yet, wait untill the rebuild is complete
+            // for that.
+            // Finally, request new 0-dbs and decommission unreadable ones.
+            .map(|(ci, state)| {
+                let explorer = explorer.clone();
+                get_user_zdb(explorer, ci, state)
+            })
+            .collect::<Vec<_>>();
+
         Box::pin(
-            async move { join_all(replacements).await }
+            async move { join(join_all(user_replacements), join_all(seq_replacements)).await }
                 .into_actor(self)
-                .map(|res, actor, _| {
-                    for result in res {
+                .then(|res, actor, _| {
+                    // Explicit destructure of the tuple. This is needed because:
+                    // - The for loop below would result in a partial move of res.1
+                    // - The async move of res.0 later would error because it moves the entirety of
+                    // res, while its already partially moved.
+                    let (meta_res, data_res) = res;
+                    for result in data_res {
                         match result {
                             Err(e) => error!("Could not provision new 0-db: {}", e),
                             Ok((ci, db, state)) => {
                                 actor.managed_seq_dbs.insert(ci, (db, state));
                             }
                         };
+                    }
+
+                    // Since we need a static return type, remember an eventual error here
+                    let mut error = false;
+                    // Verify new nodes
+                    let mut meta_info = Vec::with_capacity(meta_res.len());
+                    for result in meta_res {
+                        match result {
+                            Err(e) => {
+                                error!("Could not provision new 0-db: {}", e);
+                                error = true;
+                            }
+                            Ok((ci, db, state)) => {
+                                meta_info.push((ci, (db, state)));
+                            }
+                        };
+                    }
+                    let explorer = actor.config_addr.clone();
+                    let metastore = actor.metastore.clone();
+                    let metrics = actor.metrics.clone();
+                    let config_actor = actor.config_addr.clone();
+
+                    let old_nodes = actor
+                        .managed_meta_dbs
+                        .values()
+                        .filter_map(|(con, _)| con.clone())
+                        .collect();
+                    let new_nodes = actor
+                        .managed_meta_dbs
+                        .iter()
+                        .filter_map(|(ci, (con, state))| {
+                            if !state.is_terminal() {
+                                Some((ci.clone(), (con.clone(), state.clone())))
+                            } else {
+                                None
+                            }
+                        })
+                        .chain(meta_info.into_iter())
+                        .collect::<HashMap<_, _>>();
+                    async move {
+                        // If there was an error for one of the nodes, this is pointless.
+                        if error {
+                            return None;
+                        }
+                        // Get config
+                        let config = match explorer.send(GetConfig).await {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                error!("Failed to get running config: {}", e);
+                                return None;
+                            }
+                        };
+                        let Meta::Zdb(meta_config) = config.meta();
+                        let encoder = meta_config.encoder();
+                        let encryptor = match meta_config.encryption() {
+                            Encryption::Aes(key) => AesGcm::new(key.clone()),
+                        };
+                        let old_cluster = ZdbMetaStore::new(
+                            old_nodes,
+                            encoder.clone(),
+                            encryptor.clone(),
+                            meta_config.prefix().to_owned(),
+                            config.virtual_root().clone(),
+                        );
+                        let new_cluster = ZdbMetaStore::new(
+                            new_nodes
+                                .values()
+                                .filter_map(|(con, _)| con.clone())
+                                .collect(),
+                            encoder.clone(),
+                            encryptor.clone(),
+                            meta_config.prefix().to_owned(),
+                            config.virtual_root().clone(),
+                        );
+                        // Disable writes on the metastore during the rebuild.
+                        if let Err(e) = metastore.send(MarkWriteable { writeable: false }).await {
+                            error!("Could not mark metastore as read-only: {}", e);
+                            return None;
+                        }
+                        if let Err(e) = new_cluster.rebuild_cluster(&old_cluster).await {
+                            error!("Could not rebuild cluster: {}", e);
+                            return None;
+                        };
+
+                        // TODO: send new nodes to config and save it
+                        if let Err(e) = metastore
+                            .send(ReplaceMetaStore {
+                                new_store: Box::new(new_cluster),
+                            })
+                            .await
+                        {
+                            error!("Could not send new cluster to metastore: {}", e);
+                            return None;
+                        };
+
+                        if let Err(e) = config_actor
+                            .send(ReplaceMetaBackend {
+                                new_nodes: new_nodes.keys().cloned().collect(),
+                            })
+                            .await
+                        {
+                            error!("Could not update metadata stores in config: {}", e);
+                            return None;
+                        };
+
+                        // Enable writes on the metastore again.
+                        if let Err(e) = metastore.send(MarkWriteable { writeable: true }).await {
+                            error!("Could not mark metadata cluster as writeable: {}", e);
+                            return None;
+                        };
+
+                        // Now remove the backends to replace from the set of managed ones.
+                        for key in new_nodes.keys() {
+                            metrics.do_send(SetDataBackendInfo {
+                                ci: key.clone(),
+                                info: None,
+                            });
+                        }
+
+                        Some(new_nodes)
+                    }
+                    .into_actor(actor)
+                })
+                .map(|res, actor, _| {
+                    // TODO: if an error occurred for metadata nodes, cancel them again.
+                    if let Some(nodes) = res {
+                        actor.managed_meta_dbs = nodes;
                     }
                 }),
         )
@@ -477,12 +637,56 @@ async fn get_seq_zdb(
             // should not be included here since [`BackendState::Unknown`] is not considered
             // terminal.
             decomission: !state.is_readable(),
-            size_gib: DEFAULT_BACKEND_SIZE_GIB,
+            size_request: if state.is_readable() {
+                SizeRequest::Increase(DEFAULT_DATA_BACKEND_SIZE_GIB)
+            } else {
+                SizeRequest::Exact(DEFAULT_DATA_BACKEND_SIZE_GIB)
+            },
             mode: ZdbRunMode::Seq,
         })
         .await??;
     let mut state = BackendState::new();
     match SequentialZdb::new(res.clone()).await {
+        Ok(db) => {
+            match db.ns_info().await {
+                Ok(info) => state.mark_healthy(info.free_space()),
+                Err(_) => state.mark_unreachable(),
+            };
+            Ok((res, Some(db), state))
+        }
+        Err(e) => {
+            error!("Could not connect to new 0-db: {}", e);
+            Ok((res, None, state))
+        }
+    }
+}
+
+/// Reserve a new [`UserKeyZdb`] instance. This is a separate method for the same reasons as
+/// [`get_seq_zdb`].
+async fn get_user_zdb(
+    explorer: Addr<ExplorerActor>,
+    ci: ZdbConnectionInfo,
+    state: BackendState,
+) -> Result<(ZdbConnectionInfo, Option<UserKeyZdb>, BackendState), ZstorError> {
+    let res = explorer
+        .send(ExpandStorage {
+            existing_zdb: Some(ci),
+            // Only try to decommission the old 0-db if it is no longer readable.
+            // We don't want to decommission backends in an unknown state just yet, but those
+            // should not be included here since [`BackendState::Unknown`] is not considered
+            // terminal.
+            // IMPORTANT: this also allows a rebuild if a majority of nodes are full.
+            decomission: !state.is_readable(),
+            size_request: if state.is_readable() {
+                SizeRequest::Increase(DEFAULT_META_BACKEND_SIZE_GIB)
+            } else {
+                SizeRequest::Exact(DEFAULT_META_BACKEND_SIZE_GIB)
+            },
+            mode: ZdbRunMode::User,
+        })
+        .await??;
+    let mut state = BackendState::new();
+    match UserKeyZdb::new(res.clone()).await {
         Ok(db) => {
             match db.ns_info().await {
                 Ok(info) => state.mark_healthy(info.free_space()),
