@@ -1,4 +1,7 @@
-use crate::actors::config::{AddZdb, ConfigActor, GetConfig};
+use crate::actors::{
+    config::{AddZdb, ConfigActor, GetConfig},
+    metrics::{MetricsActor, UpdatePoolData},
+};
 use crate::{
     config::Group,
     zdb::{ZdbConnectionInfo, ZdbRunMode},
@@ -40,17 +43,23 @@ const SIZE_INCREASE: u64 = 2;
 pub struct ExplorerActor {
     client: Arc<ExplorerClient>,
     cfg_addr: Addr<ConfigActor>,
+    metrics_addr: Addr<MetricsActor>,
     managed_pools: HashMap<i64, PoolData>,
 }
 
 impl ExplorerActor {
     /// Create a new [`ExplorerActor`] from an existing [`ExplorerClient`], and a
     /// [`ConfigActor`].
-    pub fn new(client: ExplorerClient, cfg_addr: Addr<ConfigActor>) -> ExplorerActor {
+    pub fn new(
+        client: ExplorerClient,
+        cfg_addr: Addr<ConfigActor>,
+        metrics_addr: Addr<MetricsActor>,
+    ) -> ExplorerActor {
         let client = Arc::new(client);
         Self {
             client,
             cfg_addr,
+            metrics_addr,
             managed_pools: HashMap::new(),
         }
     }
@@ -160,60 +169,89 @@ impl Handler<CheckPools> for ExplorerActor {
     fn handle(&mut self, _: CheckPools, _: &mut Self::Context) -> Self::Result {
         debug!("Attempting to refresh pool expiration");
 
+        // First update all pools we own
         let client = self.client.clone();
-        let now = Utc::now();
-
-        let pools_to_extend = self
-            .managed_pools
-            .iter()
-            .filter_map(|(id, pool)| {
-                let expiration = Utc.timestamp(pool.empty_at, 0);
-                if (expiration - now).num_seconds() <= POOL_REFRESH_LIFETIME_SECONDS as i64 {
-                    // Found a pool which is about to expire, start refresh operaton
-                    debug!("Pool {} is about to expire, attempting to refresh", id);
-                    return Some(pool);
-                };
-                None
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let metrics = self.metrics_addr.clone();
 
         Box::pin(
             async move {
-                let extensions = pools_to_extend.iter().map(|pool| {
-                    let missing_cu =
-                        pool.active_cu * POOL_TARGET_LIFETIME_SECONDS as f64 - pool.cus;
-                    let missing_su =
-                        pool.active_su * POOL_TARGET_LIFETIME_SECONDS as f64 - pool.sus;
-
-                    let rd = ReservationData {
-                        pool_id: pool.pool_id,
-                        cus: missing_cu.ceil() as u64,
-                        sus: missing_su.ceil() as u64,
-                        ipv4us: 0,
-                        node_ids: pool.node_ids.clone(),
-                        currencies: vec![String::from(TFT_CURRENCY_ID)],
-                    };
-
-                    client.create_capacity_pool(rd)
-                });
-
-                for result in join_all(extensions).await {
-                    match result {
-                        Err(e) => error!("Failed to extend pool: {}", e),
-                        Ok(success) if !success => {
-                            error!("Got unexpected failed response from explorer")
+                match client.pools_by_owner().await {
+                    Err(e) => {
+                        error!("Could not get capacity pools we currently own: {}", e);
+                        None
+                    }
+                    Ok(pools) => {
+                        for pool in pools.iter().cloned() {
+                            if let Err(e) = metrics.send(UpdatePoolData { pool }).await {
+                                warn!("Could not update pool data metrics: {}", e);
+                            }
                         }
-                        Ok(success) if success => debug!("Successfully extended pool"),
-                        // compiler does not understand that we exhauted al bool options above
-                        Ok(_) => unreachable!(),
+                        Some(pools)
                     }
                 }
-
-                // Fetch all pools again to get latest status.
-                client.pools_by_owner().await
             }
             .into_actor(self)
+            .then(|res, actor, _| {
+                // If we managed to fetch the pools, update them first
+                if let Some(pools) = res {
+                    actor.managed_pools = pools.into_iter().map(|pd| (pd.pool_id, pd)).collect();
+                }
+
+                let client = actor.client.clone();
+                let now = Utc::now();
+
+                let pools_to_extend = actor
+                    .managed_pools
+                    .iter()
+                    .filter_map(|(id, pool)| {
+                        let expiration = Utc.timestamp(pool.empty_at, 0);
+                        if (expiration - now).num_seconds() <= POOL_REFRESH_LIFETIME_SECONDS as i64
+                        {
+                            // Found a pool which is about to expire, start refresh operaton
+                            debug!("Pool {} is about to expire, attempting to refresh", id);
+                            return Some(pool);
+                        };
+                        None
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                async move {
+                    let extensions = pools_to_extend.iter().map(|pool| {
+                        let missing_cu =
+                            pool.active_cu * POOL_TARGET_LIFETIME_SECONDS as f64 - pool.cus;
+                        let missing_su =
+                            pool.active_su * POOL_TARGET_LIFETIME_SECONDS as f64 - pool.sus;
+
+                        let rd = ReservationData {
+                            pool_id: pool.pool_id,
+                            cus: missing_cu.ceil() as u64,
+                            sus: missing_su.ceil() as u64,
+                            ipv4us: 0,
+                            node_ids: pool.node_ids.clone(),
+                            currencies: vec![String::from(TFT_CURRENCY_ID)],
+                        };
+
+                        client.create_capacity_pool(rd)
+                    });
+
+                    for result in join_all(extensions).await {
+                        match result {
+                            Err(e) => error!("Failed to extend pool: {}", e),
+                            Ok(success) if !success => {
+                                error!("Got unexpected failed response from explorer")
+                            }
+                            Ok(success) if success => debug!("Successfully extended pool"),
+                            // compiler does not understand that we exhauted al bool options above
+                            Ok(_) => unreachable!(),
+                        }
+                    }
+
+                    // Fetch all pools again to get latest status.
+                    client.pools_by_owner().await
+                }
+                .into_actor(actor)
+            })
             .map(|pools, actor, _| match pools {
                 Err(e) => error!("Failed to refresh pools: {}", e),
                 Ok(pools) => {

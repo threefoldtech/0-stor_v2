@@ -101,7 +101,8 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     )
     .start();
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
-    let explorer = ExplorerActor::new(explorer_client, cfg_addr.clone()).start();
+    let explorer =
+        ExplorerActor::new(explorer_client, cfg_addr.clone(), metrics_addr.clone()).start();
     let backends =
         BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone(), meta_addr.clone())
             .start();

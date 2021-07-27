@@ -1,7 +1,10 @@
 use crate::zdb::{NsInfo, ZdbConnectionInfo};
 use actix::prelude::*;
+use grid_explorer_client::reservation::PoolData;
 use log::warn;
-use prometheus::{register_int_gauge_vec, Encoder, IntGaugeVec, TextEncoder};
+use prometheus::{
+    register_gauge_vec, register_int_gauge_vec, Encoder, GaugeVec, IntGaugeVec, TextEncoder,
+};
 use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
 
@@ -15,6 +18,7 @@ pub struct MetricsActor {
     removed_zdbs: Vec<ZdbConnectionInfo>,
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
+    pool_data: HashMap<i64, PoolData>,
     prom_metrics: PromMetrics,
 }
 
@@ -34,6 +38,13 @@ struct PromMetrics {
     zstor_retrieve_commands_finished_gauges: IntGaugeVec,
     zstor_rebuild_commands_finished_gauges: IntGaugeVec,
     zstor_check_commands_finished_gauges: IntGaugeVec,
+
+    pool_cu_gauges: GaugeVec,
+    pool_su_gauges: GaugeVec,
+    pool_ip4_gauges: GaugeVec,
+    pool_active_cu_gauges: GaugeVec,
+    pool_active_su_gauges: GaugeVec,
+    pool_active_ip4_gauges: GaugeVec,
 }
 
 impl MetricsActor {
@@ -45,6 +56,8 @@ impl MetricsActor {
             removed_zdbs: Vec::new(),
             successful_zstor_commands: HashMap::new(),
             failed_zstor_commands: HashMap::new(),
+            pool_data: HashMap::new(),
+
             prom_metrics: Self::setup_prometheus(),
         }
     }
@@ -136,6 +149,42 @@ impl MetricsActor {
                 &["success"]
             )
             .unwrap(),
+            pool_cu_gauges: register_gauge_vec!(
+                "pool_cu",
+                "Amount of compute units left in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
+            pool_su_gauges: register_gauge_vec!(
+                "pool_su",
+                "Amount of storage units left in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
+            pool_ip4_gauges: register_gauge_vec!(
+                "pool_ip4",
+                "Amount of ipV4 units left in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
+            pool_active_cu_gauges: register_gauge_vec!(
+                "pool_active_cu",
+                "Amount of compute units active in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
+            pool_active_su_gauges: register_gauge_vec!(
+                "pool_active_su",
+                "Amount of storage units active in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
+            pool_active_ip4_gauges: register_gauge_vec!(
+                "pool_active_ip4",
+                "Amount of ipV4 units active in the pool",
+                &["pool_id"]
+            )
+            .unwrap(),
         }
     }
 }
@@ -181,6 +230,14 @@ pub struct ZstorCommandFinsihed {
     pub success: bool,
 }
 
+/// Message updating the data of a pool.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct UpdatePoolData {
+    /// The new pool data. The pool ID is extracted from the data.
+    pub pool: PoolData,
+}
+
 impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
@@ -220,6 +277,14 @@ impl Handler<ZstorCommandFinsihed> for MetricsActor {
         } else {
             *self.failed_zstor_commands.entry(msg.id).or_insert(0) += 1;
         }
+    }
+}
+
+impl Handler<UpdatePoolData> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: UpdatePoolData, _: &mut Self::Context) -> Self::Result {
+        self.pool_data.insert(msg.pool.pool_id, msg.pool);
     }
 }
 
@@ -438,6 +503,37 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                     .get(&ZstorCommandId::Check)
                     .unwrap_or(&0) as i64,
             );
+
+        // pool data
+        for (pool_id, pool_data) in &self.pool_data {
+            let mut labels = HashMap::new();
+            let pool_id_str = format!("{}", pool_id);
+            labels.insert("pool_id", &*pool_id_str);
+            self.prom_metrics
+                .pool_cu_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.cus);
+            self.prom_metrics
+                .pool_su_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.sus);
+            self.prom_metrics
+                .pool_ip4_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.ipv4us);
+            self.prom_metrics
+                .pool_active_cu_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.active_cu);
+            self.prom_metrics
+                .pool_active_su_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.active_su);
+            self.prom_metrics
+                .pool_active_ip4_gauges
+                .get_metric_with(&labels)?
+                .set(pool_data.active_ipv4);
+        }
 
         let mut buffer = Vec::new();
         let encoder = TextEncoder::new();
