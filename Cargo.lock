@@ -1395,6 +1395,7 @@ dependencies = [
  "hex",
  "http-sig",
  "libsodium-sys",
+ "log",
  "reqwest",
  "serde",
  "serde_json",

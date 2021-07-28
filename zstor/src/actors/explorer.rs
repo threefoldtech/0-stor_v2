@@ -1,6 +1,6 @@
 use crate::actors::{
     config::{AddZdb, ConfigActor, GetConfig},
-    metrics::{MetricsActor, UpdatePoolData},
+    metrics::{MetricsActor, UpdatePoolData, UpdateWalletBalances},
 };
 use crate::{
     config::Group,
@@ -28,6 +28,8 @@ use std::{
 
 /// The amount of seconds between each pool check.
 const POOL_CHECK_INTERVAL_SECONDS: u64 = 60 * 60;
+/// The amount of seconds between each wallet balance check.
+const BALANCE_CHECK_INTERVAL_SECONDS: u64 = 60 * 10;
 /// The amount of seconds a pool should live after we extend it. I.e. the pool should be extended
 /// so that pool.empty_at - time::now() >= this value.
 const POOL_TARGET_LIFETIME_SECONDS: u64 = 60 * 60 * 24 * 7;
@@ -68,6 +70,11 @@ impl ExplorerActor {
     fn check_pools(&mut self, ctx: &mut <Self as Actor>::Context) {
         ctx.notify(CheckPools);
     }
+
+    /// Send a [`CheckWalletBalances`] command to this actor.
+    fn check_balances(&mut self, ctx: &mut <Self as Actor>::Context) {
+        ctx.notify(CheckWalletBalances);
+    }
 }
 
 /// Message requesting the actor checks the pools, and fills them if their expiration time is lower
@@ -75,6 +82,11 @@ impl ExplorerActor {
 #[derive(Debug, Message)]
 #[rtype(result = "()")]
 struct CheckPools;
+
+/// Message to trigger a balance check on the wallet used.
+#[derive(Debug, Message)]
+#[rtype(result = "()")]
+struct CheckWalletBalances;
 
 /// Message requesting the actor to expand the backend storage. An optional existing reservation
 /// ID can be passed. In this case, an attempt is made to reserve the storage on the same pool. If
@@ -151,6 +163,11 @@ impl Actor for ExplorerActor {
             Self::check_pools,
         );
 
+        ctx.run_interval(
+            Duration::from_secs(BALANCE_CHECK_INTERVAL_SECONDS),
+            Self::check_balances,
+        );
+
         debug!(
             "Explorer actor initialization finished, managing {} pools (ids {})",
             self.managed_pools.len(),
@@ -160,6 +177,29 @@ impl Actor for ExplorerActor {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+    }
+}
+
+impl Handler<CheckWalletBalances> for ExplorerActor {
+    type Result = ResponseFuture<()>;
+
+    fn handle(&mut self, _: CheckWalletBalances, _: &mut Self::Context) -> Self::Result {
+        let explorer = self.client.clone();
+        let metrics_addr = self.metrics_addr.clone();
+
+        Box::pin(async move {
+            let balances = match explorer.stellar_client.get_balances().await {
+                Err(e) => {
+                    error!("Could not get wallet balances: {}", e);
+                    return;
+                }
+                Ok(balances) => balances,
+            };
+
+            if let Err(e) = metrics_addr.send(UpdateWalletBalances { balances }).await {
+                error!("Could not update wallet balance metrics: {}", e);
+            }
+        })
     }
 }
 

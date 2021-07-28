@@ -1,6 +1,7 @@
 use super::reservation;
 use crate::types::GridNetwork;
-use std::str::FromStr;
+use log::warn;
+use std::{collections::HashMap, str::FromStr};
 use stellar_base::amount::{Amount, Stroops};
 use stellar_base::asset::Asset;
 use stellar_base::crypto::{KeyPair, PublicKey};
@@ -80,6 +81,41 @@ impl StellarClient {
         let (_, response) = client.request(res).await?;
 
         Ok(response.successful)
+    }
+
+    /// Returns the balances of the wallet assets. Currently only the xlm and tft balance are
+    /// returned. The balance is expressed as stropes.
+    pub async fn get_balances(&self) -> Result<HashMap<String, i64>, super::ExplorerError> {
+        let client = HorizonHttpClient::new_from_str(self.get_horizon_url())?;
+        let request = api::accounts::single(&self.keypair.public_key().clone());
+        let (_headers, response) = client.request(request).await?;
+
+        Ok(response
+            .balances
+            .into_iter()
+            .filter_map(|balance| {
+                let asset = balance
+                    .asset
+                    .asset_code
+                    .unwrap_or_else(|| "XLM".to_string());
+                match Amount::from_str(&balance.balance) {
+                    Ok(amount) => match amount.to_stroops() {
+                        Ok(stroops) => Some((asset, stroops.to_i64())),
+                        Err(e) => {
+                            warn!(
+                                "Failed to express asset {} balance as stroops: {}",
+                                asset, e
+                            );
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Failed to parse balance of asset {}: {}", asset, e);
+                        None
+                    }
+                }
+            })
+            .collect())
     }
 
     fn get_network(&self) -> Network {

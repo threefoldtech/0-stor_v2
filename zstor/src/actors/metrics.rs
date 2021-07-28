@@ -19,6 +19,7 @@ pub struct MetricsActor {
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     pool_data: HashMap<i64, PoolData>,
+    balances: HashMap<String, i64>,
     prom_metrics: PromMetrics,
 }
 
@@ -45,6 +46,8 @@ struct PromMetrics {
     pool_active_cu_gauges: GaugeVec,
     pool_active_su_gauges: GaugeVec,
     pool_active_ip4_gauges: GaugeVec,
+
+    balance_gauges: IntGaugeVec,
 }
 
 impl MetricsActor {
@@ -57,6 +60,7 @@ impl MetricsActor {
             successful_zstor_commands: HashMap::new(),
             failed_zstor_commands: HashMap::new(),
             pool_data: HashMap::new(),
+            balances: HashMap::new(),
 
             prom_metrics: Self::setup_prometheus(),
         }
@@ -185,6 +189,13 @@ impl MetricsActor {
                 &["pool_id"]
             )
             .unwrap(),
+
+            balance_gauges: register_int_gauge_vec!(
+                "asset_balance",
+                "amount of stroops available in the wallet for the given balance",
+                &["asset_code"]
+            )
+            .unwrap(),
         }
     }
 }
@@ -238,6 +249,14 @@ pub struct UpdatePoolData {
     pub pool: PoolData,
 }
 
+/// Message updating the balances of the wallet.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct UpdateWalletBalances {
+    /// A map of all supported assets for the wallet and their balances.
+    pub balances: HashMap<String, i64>,
+}
+
 impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
@@ -285,6 +304,14 @@ impl Handler<UpdatePoolData> for MetricsActor {
 
     fn handle(&mut self, msg: UpdatePoolData, _: &mut Self::Context) -> Self::Result {
         self.pool_data.insert(msg.pool.pool_id, msg.pool);
+    }
+}
+
+impl Handler<UpdateWalletBalances> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: UpdateWalletBalances, _: &mut Self::Context) -> Self::Result {
+        self.balances = msg.balances;
     }
 }
 
@@ -533,6 +560,16 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 .pool_active_ip4_gauges
                 .get_metric_with(&labels)?
                 .set(pool_data.active_ipv4);
+        }
+
+        // asset balances
+        for (asset, balance) in &self.balances {
+            let mut labels = HashMap::new();
+            labels.insert("asset_code", asset.as_str());
+            self.prom_metrics
+                .balance_gauges
+                .get_metric_with(&labels)?
+                .set(*balance);
         }
 
         let mut buffer = Vec::new();
