@@ -89,10 +89,15 @@ impl ExplorerClient {
         network: GridNetwork,
         secret: &str,
         user_identity: identity::Identity,
+        horizon_url: Option<String>,
     ) -> ExplorerClient {
         let keypair = KeyPair::from_secret_seed(&secret).unwrap();
 
-        let stellar_client = stellar::StellarClient { network, keypair };
+        let stellar_client = stellar::StellarClient {
+            network,
+            keypair,
+            horizon_url,
+        };
         let client = reqwest::Client::new();
         ExplorerClient {
             network,

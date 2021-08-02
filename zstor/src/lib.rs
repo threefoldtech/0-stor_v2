@@ -64,7 +64,12 @@ pub type ZstorResult<T> = Result<T, ZstorError>;
 /// Start the 0-stor monitor daemon
 pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<ZstorActor>> {
     let identity = Identity::new(cfg.identity_id() as i64, cfg.identity_mnemonic())?;
-    let explorer_client = ExplorerClient::new(cfg.grid_network(), cfg.wallet_secret(), identity);
+    let explorer_client = ExplorerClient::new(
+        cfg.grid_network(),
+        cfg.wallet_secret(),
+        identity,
+        cfg.horizon_url().map(|x| x.to_string()),
+    );
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
             let backends = try_join_all(

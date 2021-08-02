@@ -138,6 +138,7 @@ network = "Main"
 wallet_secret = "Definitely not a secret"
 identity_id = 25
 identity_mnemonic = "an unexisting mnemonic"
+horizon_url = "https://my.horizon.server"
 prometheus_port = 9100
 zdb_data_dir_path = "/tmp/0-db/data"
 max_zdb_data_dir_size = 25600
@@ -229,6 +230,8 @@ password = "supersecretpass"
 	the transactions.
 - `identity_id`: The id of the identity.
 - `identity_mnemonic`: The mnemonic of the secret used by the identity.
+- `horizon_url`: An optional url for a stellar horizon server to use. If this is
+    not set, a default one is used.
 - `encryption`: configuration to use for the encryption stage. Currently
 	only `AES` is supported.
 - `compression`: configuration to use for the compression stage.

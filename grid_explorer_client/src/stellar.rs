@@ -27,6 +27,7 @@ impl From<stellar_horizon::error::Error> for super::ExplorerError {
 pub struct StellarClient {
     pub network: GridNetwork,
     pub keypair: KeyPair,
+    pub horizon_url: Option<String>,
 }
 
 impl StellarClient {
@@ -123,6 +124,9 @@ impl StellarClient {
     }
 
     fn get_horizon_url(&self) -> &str {
-        "https://horizon.stellar.org"
+        match self.horizon_url {
+            None => "https://horizon.stellar.org",
+            Some(ref url) => &*url,
+        }
     }
 }

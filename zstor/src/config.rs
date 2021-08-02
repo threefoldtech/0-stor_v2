@@ -51,6 +51,9 @@ pub struct Config {
     /// The stellar secret of the wallet used to fund capacity pools. This wallet must have TFT,
     /// and a small amount of XLM to fund the transactions.
     wallet_secret: String,
+    /// A custom horizon url to  use instead of the default one. If not set, the default one is
+    /// used.
+    horizon_url: Option<String>,
     /// The id of the identity.
     identity_id: u64,
     /// The mnemonic of the secret used by the identity.
@@ -159,6 +162,11 @@ impl Config {
     /// Return the wallet secret of the wallet used to pay for capacity reservations.
     pub fn wallet_secret(&self) -> &str {
         &self.wallet_secret
+    }
+
+    /// Return the optional user configured horizon url to use.
+    pub fn horizon_url(&self) -> Option<&str> {
+        self.horizon_url.as_ref().map(|x| x as _)
     }
 
     /// Returns the id of the identity used.
@@ -493,6 +501,7 @@ mod tests {
             identity_mnemonic: "an unexisting mnemonic".into(),
             prometheus_port: None,
             network: GridNetwork::Main,
+            horizon_url: None,
             wallet_secret: "Definitely not a secret".into(),
             max_zdb_data_dir_size: None,
             groups: vec![
@@ -660,6 +669,7 @@ password = "supersecretpass"
             identity_mnemonic: "an unexisting mnemonic".into(),
             prometheus_port: None,
             network: GridNetwork::Main,
+            horizon_url: None,
             wallet_secret: "Definitely not a secret".into(),
             max_zdb_data_dir_size: None,
             groups: vec![
