@@ -122,7 +122,7 @@ impl Handler<StoreFile> for PipelineActor {
             ));
         }
 
-        let (meta, shards) = process_file(&data_file_path, &msg.cfg)?;
+        let (meta, shards) = process_file(data_file_path, &msg.cfg)?;
 
         Ok((meta, key_file_path, shards))
     }

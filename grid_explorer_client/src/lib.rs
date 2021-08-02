@@ -91,7 +91,7 @@ impl ExplorerClient {
         user_identity: identity::Identity,
         horizon_url: Option<String>,
     ) -> ExplorerClient {
-        let keypair = KeyPair::from_secret_seed(&secret).unwrap();
+        let keypair = KeyPair::from_secret_seed(secret).unwrap();
 
         let stellar_client = stellar::StellarClient {
             network,

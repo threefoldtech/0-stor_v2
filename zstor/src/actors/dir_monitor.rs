@@ -75,7 +75,7 @@ impl Handler<CheckDir> for DirMonitorActor {
 
             debug!("checking data dir size");
 
-            let mut entries = match get_dir_entries(&dir_path).await {
+            let mut entries = match get_dir_entries(dir_path).await {
                 Ok(entries) => entries,
                 Err(e) => {
                     error!("Couldn't get directory entries for {:?}: {}", dir_path, e);

@@ -564,7 +564,7 @@ impl Handler<RequestBackends> for BackendManagerActor {
     fn handle(&mut self, msg: RequestBackends, _: &mut Self::Context) -> Self::Result {
         let mut cached_cons = Vec::with_capacity(msg.backend_requests.len());
         for request in &msg.backend_requests {
-            let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(&request) {
+            let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(request) {
                 match c {
                     Some(con) => IrState::Cached((con.clone(), state.clone())),
                     // None means there is no readily available connection to the backend, so create a

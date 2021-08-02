@@ -346,7 +346,7 @@ impl Handler<ExpandStorage> for ExplorerActor {
                         if node_id == &old_workload.node_id && msg.decomission {
                             continue;
                         }
-                        let node = client.node_get_by_id(&node_id).await?;
+                        let node = client.node_get_by_id(node_id).await?;
                         if is_deployable(&node, new_db_size) {
                             pref = Some((pool_id, node_id.clone(), node.public_key_hex));
                             break;
@@ -535,7 +535,7 @@ async fn group_pool(client: Arc<ExplorerClient>, group: &Group) -> Option<i64> {
     }
 
     // Find the pool with the most attached 0-dbs in the group.
-    let most_frequent_pool = pools.iter().max_by(|a, b| a.1.cmp(&b.1)).map(|(k, _)| k);
+    let most_frequent_pool = pools.iter().max_by(|a, b| a.1.cmp(b.1)).map(|(k, _)| k);
     if let Some(id) = most_frequent_pool {
         // make sure at least half of the 0-dbs belong to the same pool, otherwise return [`None`]
         // to indicate that we don't know.
