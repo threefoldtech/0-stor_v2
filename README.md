@@ -222,6 +222,9 @@ password = "supersecretpass"
 - `max_zdb_data_dir_size`: Maximum size of the data dir in MiB, if this
     is set and the sum of the file sizes in the data dir gets higher than
 	this value, the least used, already encoded file will be removed.
+- `zdbfs_mountpoint`: Optional path of a 0-db-fs mount. If present, a syscall
+    will be executed periodically to retrieve file system statistics, which will
+	then be exposed through the build-in prometheus server.
 - `prometheus_port`: An optional port on which prometheus metrics will be
     exposed. If this is not set, the metrics will not get exposed.
 - `network`: The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
