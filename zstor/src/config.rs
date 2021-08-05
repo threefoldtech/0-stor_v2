@@ -43,6 +43,9 @@ pub struct Config {
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
     max_zdb_data_dir_size: Option<u64>,
+    /// The mount point of an optional 0-db-fs. If present, stats will be collected from the
+    /// 0-db-fs process.
+    zdbfs_mountpoint: Option<PathBuf>,
     /// An optional port on which prometheus metrics will be exposed. If this is not set, the
     /// metrics will not get exposed.
     prometheus_port: Option<u16>,
@@ -226,6 +229,11 @@ impl Config {
     /// Returns the local 0-db maximum data file directory size that is requested.
     pub fn max_zdb_data_dir_size(&self) -> Option<u64> {
         self.max_zdb_data_dir_size
+    }
+
+    /// Returns the mountpoint of 0-db-fs, if present.
+    pub fn zdbfs_mountpoint(&self) -> Option<&Path> {
+        self.zdbfs_mountpoint.as_ref().map(|x| x as _)
     }
 
     /// Remove a shard from the config. If the shard is present multiple times, all instances will
@@ -497,6 +505,7 @@ mod tests {
             socket: Some("/tmp/zstor.sock".into()),
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
+            zdbfs_mountpoint: Some("/tmp/test".into()),
             identity_id: 25,
             identity_mnemonic: "an unexisting mnemonic".into(),
             prometheus_port: None,
@@ -565,6 +574,7 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+zdbfs_mountpoint = "/tmp/test"
 network = "Main"
 wallet_secret = "Definitely not a secret"
 identity_id = 25
@@ -665,6 +675,7 @@ password = "supersecretpass"
             socket: Some("/tmp/zstor.sock".into()),
             zdb_index_dir_path: None,
             zdb_data_dir_path: None,
+            zdbfs_mountpoint: Some("/tmp/test".into()),
             identity_id: 25,
             identity_mnemonic: "an unexisting mnemonic".into(),
             prometheus_port: None,
@@ -733,6 +744,7 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+zdbfs_mountpoint = "/tmp/test"
 network = "Main"
 wallet_secret = "Definitely not a secret"
 identity_id = 25

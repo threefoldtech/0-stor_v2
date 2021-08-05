@@ -18,6 +18,8 @@ pub mod metrics;
 pub mod pipeline;
 /// Actor implementation of a repair queue.
 pub mod repairer;
+/// Actor which periodically gets stats from a 0-db-fs.
+pub mod zdbfs;
 /// Actor implementation of the main zstor functionality. This actor takes care of the actual
 /// object manipulation.
 pub mod zstor;

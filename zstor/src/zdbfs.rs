@@ -1,0 +1,61 @@
+use std::{
+    fs::OpenOptions,
+    os::unix::prelude::{AsRawFd, RawFd},
+    path::Path,
+};
+
+pub use types::stats_t;
+
+/// Tools to work with zdbfs. For now, this just allows to get zdbfs stats for a zdbfs which is
+/// curentl mounted through means of a syscall.
+use nix::ioctl_read;
+
+const ZDBFS_IOC_MAGIC: u8 = b'E';
+const ZDBFS_IOC_TYPE_MODE: u8 = 1;
+
+ioctl_read! {
+    /// Read the statistics of a 0-db-fs process which is currenlty mounted.
+    zdbfs_read_stats,
+    ZDBFS_IOC_MAGIC,
+    ZDBFS_IOC_TYPE_MODE,
+    types::fs_stats_t
+}
+
+/// An instance of a 0-db-fs mountpoint which supports fetching stats.
+pub struct ZdbFsStats {
+    /// A file descriptor for the mountpoint of 0-db-fs.
+    fd: RawFd,
+}
+
+impl ZdbFsStats {
+    /// Attempt to create a new ZdbFsStats with the given possible mountpoint.
+    pub fn try_new(mountpoint: &Path) -> Result<ZdbFsStats, std::io::Error> {
+        let fd = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .create(false)
+            .truncate(false)
+            .open(&mountpoint)?
+            .as_raw_fd();
+        Ok(ZdbFsStats { fd })
+    }
+
+    /// Get the current stats from the 0-db-fs.
+    pub fn get_stats(&self) -> Result<stats_t, std::io::Error> {
+        let mut stats = types::fs_stats_t::default();
+        // SAFETY: This is safe as we properly return the error, and only return the struct if
+        // there is no error.
+        unsafe {
+            zdbfs_read_stats(self.fd, &mut stats as *mut _)?;
+        }
+        Ok(stats)
+    }
+}
+
+mod types {
+    #![allow(non_camel_case_types)]
+    // TODO: remove this once bindgen stops using nullptr derefs for the layout tests.
+    #![allow(deref_nullptr)]
+    #![allow(missing_docs)]
+    include!(concat!(env!("OUT_DIR"), "/zdbfs_stats.rs"));
+}

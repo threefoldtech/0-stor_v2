@@ -15,6 +15,7 @@ use crate::actors::{
     metrics::{GetPrometheusMetrics, MetricsActor},
     pipeline::PipelineActor,
     repairer::RepairActor,
+    zdbfs::ZdbFsStatsActor,
     zstor::ZstorActor,
 };
 use actix::prelude::*;
@@ -34,6 +35,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::task::JoinError;
 use zdb::ZdbError;
+use zdbfs::ZdbFsStats;
 use {
     config::{Config, Encryption, Meta},
     zdb::UserKeyZdb,
@@ -57,6 +59,8 @@ pub mod meta;
 pub mod zdb;
 /// A metadata implementation on top of zdb.
 pub mod zdb_meta;
+/// Zdbfs related tools.
+pub mod zdbfs;
 
 /// Global result type for zstor operations
 pub type ZstorResult<T> = Result<T, ZstorError>;
@@ -94,6 +98,11 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     };
     let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
+    if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
+        let zdbfs_stats = ZdbFsStats::try_new(mountpoint)
+            .map_err(|e| ZstorError::new_io("Could not get 0-db-fs stats".into(), e))?;
+        let _ = ZdbFsStatsActor::new(zdbfs_stats, metrics_addr.clone()).start();
+    }
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg).start();
     let pipeline_addr = SyncArbiter::start(1, || PipelineActor);

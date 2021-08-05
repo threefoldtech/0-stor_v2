@@ -1,9 +1,13 @@
-use crate::zdb::{NsInfo, ZdbConnectionInfo};
+use crate::{
+    zdb::{NsInfo, ZdbConnectionInfo},
+    zdbfs::stats_t,
+};
 use actix::prelude::*;
 use grid_explorer_client::reservation::PoolData;
 use log::warn;
 use prometheus::{
-    register_gauge_vec, register_int_gauge_vec, Encoder, GaugeVec, IntGaugeVec, TextEncoder,
+    register_gauge_vec, register_int_gauge, register_int_gauge_vec, Encoder, GaugeVec, IntGauge,
+    IntGaugeVec, TextEncoder,
 };
 use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
@@ -20,6 +24,7 @@ pub struct MetricsActor {
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     pool_data: HashMap<i64, PoolData>,
     balances: HashMap<String, i64>,
+    zdbfs_stats: stats_t,
     prom_metrics: PromMetrics,
 }
 
@@ -48,6 +53,17 @@ struct PromMetrics {
     pool_active_ip4_gauges: GaugeVec,
 
     balance_gauges: IntGaugeVec,
+
+    fs_fuse_reqs: IntGauge,
+    fs_cache_hits: IntGauge,
+    fs_cache_miss: IntGauge,
+    fs_cache_full: IntGauge,
+    fs_cache_linear_flush: IntGauge,
+    fs_cache_random_flush: IntGauge,
+    fs_syscalls: IntGaugeVec,
+    fs_bytes_read: IntGauge,
+    fs_bytes_written: IntGauge,
+    fs_fuse_errors: IntGauge,
 }
 
 impl MetricsActor {
@@ -61,6 +77,7 @@ impl MetricsActor {
             failed_zstor_commands: HashMap::new(),
             pool_data: HashMap::new(),
             balances: HashMap::new(),
+            zdbfs_stats: stats_t::default(),
 
             prom_metrics: Self::setup_prometheus(),
         }
@@ -196,6 +213,55 @@ impl MetricsActor {
                 &["asset_code"]
             )
             .unwrap(),
+
+            fs_fuse_reqs: register_int_gauge!("fs_fuse_reqs", "Total amount of fuse requests")
+                .unwrap(),
+            fs_cache_hits: register_int_gauge!(
+                "fs_cache_hits",
+                "Total amount of cache hits in the filesystem"
+            )
+            .unwrap(),
+            fs_cache_miss: register_int_gauge!(
+                "fs_cache_miss",
+                "Total amount of cache misses in the filesystem"
+            )
+            .unwrap(),
+            fs_cache_full: register_int_gauge!(
+                "fs_cache_full",
+                "Total amount of times the cache was completely filled"
+            )
+            .unwrap(),
+            fs_cache_linear_flush: register_int_gauge!(
+                "fs_cache_linear_flush",
+                "Total amount of linear flushes"
+            )
+            .unwrap(),
+            fs_cache_random_flush: register_int_gauge!(
+                "fs_cache_random_flush",
+                "Total amount of random flushes"
+            )
+            .unwrap(),
+            fs_syscalls: register_int_gauge_vec!(
+                "fs_syscalls",
+                "Total amount of syscalls done on the filesystem",
+                &["syscall"]
+            )
+            .unwrap(),
+            fs_bytes_read: register_int_gauge!(
+                "fs_bytes_read",
+                "Total amount of bytes read from the filessytem"
+            )
+            .unwrap(),
+            fs_bytes_written: register_int_gauge!(
+                "fs_bytes_written",
+                "Total amount of bytes written to the filessytem"
+            )
+            .unwrap(),
+            fs_fuse_errors: register_int_gauge!(
+                "fs_fuse_errors",
+                "Total amount of errors returned by fuse calls"
+            )
+            .unwrap(),
         }
     }
 }
@@ -257,6 +323,14 @@ pub struct UpdateWalletBalances {
     pub balances: HashMap<String, i64>,
 }
 
+/// Message updating the stats of a monitored 0-db-fs.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct UpdateZdbFsStats {
+    /// The stats of the 0-db-fs.
+    pub stats: stats_t,
+}
+
 impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
@@ -312,6 +386,14 @@ impl Handler<UpdateWalletBalances> for MetricsActor {
 
     fn handle(&mut self, msg: UpdateWalletBalances, _: &mut Self::Context) -> Self::Result {
         self.balances = msg.balances;
+    }
+}
+
+impl Handler<UpdateZdbFsStats> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: UpdateZdbFsStats, _: &mut Self::Context) -> Self::Result {
+        self.zdbfs_stats = msg.stats;
     }
 }
 
@@ -571,6 +653,112 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 .get_metric_with(&labels)?
                 .set(*balance);
         }
+
+        // 0-db-fs info
+        self.prom_metrics
+            .fs_fuse_reqs
+            .set(self.zdbfs_stats.fuse_reqs as i64);
+        self.prom_metrics
+            .fs_cache_hits
+            .set(self.zdbfs_stats.cache_hit as i64);
+        self.prom_metrics
+            .fs_cache_miss
+            .set(self.zdbfs_stats.cache_miss as i64);
+        self.prom_metrics
+            .fs_cache_full
+            .set(self.zdbfs_stats.cache_full as i64);
+        self.prom_metrics
+            .fs_cache_linear_flush
+            .set(self.zdbfs_stats.cache_linear_flush as i64);
+        self.prom_metrics
+            .fs_cache_random_flush
+            .set(self.zdbfs_stats.cache_random_flush as i64);
+        self.prom_metrics
+            .fs_bytes_read
+            .set(self.zdbfs_stats.read_bytes as i64);
+        self.prom_metrics
+            .fs_bytes_written
+            .set(self.zdbfs_stats.write_bytes as i64);
+        self.prom_metrics
+            .fs_fuse_errors
+            .set(self.zdbfs_stats.errors as i64);
+        // set syscall info
+        let mut labels = HashMap::new();
+        labels.insert("syscall", "getattr");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_getattr as i64);
+        labels.insert("syscall", "setattr");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_setattr as i64);
+        labels.insert("syscall", "create");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_create as i64);
+        labels.insert("syscall", "readdir");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_readdir as i64);
+        labels.insert("syscall", "open");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_open as i64);
+        labels.insert("syscall", "read");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_read as i64);
+        labels.insert("syscall", "write");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_write as i64);
+        labels.insert("syscall", "mkdir");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_mkdir as i64);
+        labels.insert("syscall", "unlink");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_unlink as i64);
+        labels.insert("syscall", "rmdir");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_rmdir as i64);
+        labels.insert("syscall", "rename");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_rename as i64);
+        labels.insert("syscall", "link");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_link as i64);
+        labels.insert("syscall", "symlink");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_symlink as i64);
+        labels.insert("syscall", "statsfs");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_statsfs as i64);
+        labels.insert("syscall", "ioctl");
+        self.prom_metrics
+            .fs_syscalls
+            .get_metric_with(&labels)?
+            .set(self.zdbfs_stats.syscall_ioctl as i64);
 
         let mut buffer = Vec::new();
         let encoder = TextEncoder::new();
