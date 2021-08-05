@@ -1,6 +1,6 @@
 [package]
 name = "zstor_v2"
-version = "0.3.0-rc.2"
+version = "0.3.0-rc.3"
 authors = ["The Threefold Tech developers <info@threefold.tech>"]
 edition = "2018"
 repository = "https://github.com/threefoldtech/0-stor_v2"
