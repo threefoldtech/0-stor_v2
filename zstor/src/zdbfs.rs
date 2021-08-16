@@ -1,6 +1,6 @@
 use std::{
-    fs::OpenOptions,
-    os::unix::prelude::{AsRawFd, RawFd},
+    fs::{File, OpenOptions},
+    os::unix::prelude::{FromRawFd, IntoRawFd, RawFd},
     path::Path,
 };
 
@@ -27,6 +27,17 @@ pub struct ZdbFsStats {
     fd: RawFd,
 }
 
+impl Drop for ZdbFsStats {
+    fn drop(&mut self) {
+        // Don't assing the return value as that is pointless anyway, we just care about taking
+        // ownership of the Fd again in a proper struct so it's drop can properly clean up
+        // associated resources.
+        // SAFETY: This is safe as the fd is private and was aquired by calling `into_raw_fd` in
+        // the constructor.
+        let _ = unsafe { File::from_raw_fd(self.fd) };
+    }
+}
+
 impl ZdbFsStats {
     /// Attempt to create a new ZdbFsStats with the given possible mountpoint.
     pub fn try_new(mountpoint: &Path) -> Result<ZdbFsStats, std::io::Error> {
@@ -36,7 +47,7 @@ impl ZdbFsStats {
             .create(false)
             .truncate(false)
             .open(&mountpoint)?
-            .as_raw_fd();
+            .into_raw_fd();
         Ok(ZdbFsStats { fd })
     }
 
