@@ -99,7 +99,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
-        let zdbfs_stats = ZdbFsStats::try_new(mountpoint)
+        let zdbfs_stats = ZdbFsStats::try_new(mountpoint.to_path_buf())
             .map_err(|e| ZstorError::new_io("Could not get 0-db-fs stats".into(), e))?;
         let _ = ZdbFsStatsActor::new(zdbfs_stats, metrics_addr.clone()).start();
     }

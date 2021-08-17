@@ -1,7 +1,7 @@
 use std::{
     fs::{File, OpenOptions},
     os::unix::prelude::{FromRawFd, IntoRawFd, RawFd},
-    path::Path,
+    path::PathBuf,
 };
 
 pub use types::stats_t;
@@ -25,6 +25,8 @@ ioctl_read! {
 pub struct ZdbFsStats {
     /// A file descriptor for the mountpoint of 0-db-fs.
     fd: RawFd,
+    /// Full path of the mountpoint.
+    mountpoint: PathBuf,
 }
 
 impl Drop for ZdbFsStats {
@@ -40,7 +42,7 @@ impl Drop for ZdbFsStats {
 
 impl ZdbFsStats {
     /// Attempt to create a new ZdbFsStats with the given possible mountpoint.
-    pub fn try_new(mountpoint: &Path) -> Result<ZdbFsStats, std::io::Error> {
+    pub fn try_new(mountpoint: PathBuf) -> Result<ZdbFsStats, std::io::Error> {
         let fd = OpenOptions::new()
             .read(true)
             .write(false)
@@ -48,7 +50,7 @@ impl ZdbFsStats {
             .truncate(false)
             .open(&mountpoint)?
             .into_raw_fd();
-        Ok(ZdbFsStats { fd })
+        Ok(ZdbFsStats { fd, mountpoint })
     }
 
     /// Get the current stats from the 0-db-fs.
@@ -60,6 +62,13 @@ impl ZdbFsStats {
             zdbfs_read_stats(self.fd, &mut stats as *mut _)?;
         }
         Ok(stats)
+    }
+
+    /// Get a copy of the mountpoint.
+    pub fn mountpoint(&self) -> PathBuf {
+        // Clone here because we are not allowed to move out of self, as we have a drop
+        // implementation.
+        self.mountpoint.clone()
     }
 }
 

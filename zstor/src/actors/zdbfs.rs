@@ -41,20 +41,35 @@ impl Actor for ZdbFsStatsActor {
 }
 
 impl Handler<GetStats> for ZdbFsStatsActor {
-    type Result = ResponseFuture<()>;
+    type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, _: GetStats, _: &mut Self::Context) -> Self::Result {
         let res = self.stats.get_stats();
         let metrics = self.metrics.clone();
-        Box::pin(async move {
-            match res {
-                Err(e) => warn!("Could not get 0-db-fs stats: {}", e),
-                Ok(stats) => {
-                    if let Err(e) = metrics.send(UpdateZdbFsStats { stats }).await {
-                        error!("Could not update 0-db-fs stats: {}", e);
+        Box::pin(
+            async move {
+                match res {
+                    Err(ref e) => {
+                        warn!("Could not get 0-db-fs stats: {}", e);
+                    }
+                    Ok(stats) => {
+                        if let Err(e) = metrics.send(UpdateZdbFsStats { stats }).await {
+                            error!("Could not update 0-db-fs stats: {}", e);
+                        };
+                    }
+                };
+                res
+            }
+            .into_actor(self)
+            .map(|res, actor, _| {
+                if res.is_err() {
+                    let mountpoint = actor.stats.mountpoint();
+                    match ZdbFsStats::try_new(mountpoint) {
+                        Err(e) => warn!("Can't recreate zdbfs stats fd: {}", e),
+                        Ok(stats) => actor.stats = stats,
                     };
                 }
-            }
-        })
+            }),
+        )
     }
 }
