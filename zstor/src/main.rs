@@ -310,6 +310,8 @@ async fn real_main() -> ZstorResult<()> {
             // unwrapping this is safe as we just checked it is Some. We clone the value here to
             // avoid having to clone the whole config.
             let socket_path = cfg.socket().unwrap().to_path_buf();
+            let _f = DropFile::new(&socket_path);
+
             let zstor = zstor_v2::setup_system(opts.config, cfg).await?;
 
             loop {
@@ -338,11 +340,6 @@ async fn real_main() -> ZstorResult<()> {
                 .map_err(|e| ZstorError::new_io("Failed to wait for CTRL-C".to_string(), e))?;
 
             info!("Shutting down zstor daemon after receiving CTRL-C");
-
-            // try to remove the socket file
-            if let Err(e) = fs::remove_file(socket_path) {
-                error!("Could not remove socket file: {}", e);
-            };
         }
     };
 
@@ -465,4 +462,25 @@ fn read_cfg(config: &Path) -> ZstorResult<Config> {
     cfg.validate()?;
     trace!("config validated");
     Ok(cfg)
+}
+
+/// A struct which removes the file at the Path it wraps when it goes out of scope.
+struct DropFile<'a> {
+    path: &'a Path,
+}
+
+impl<'a> DropFile<'a> {
+    /// Create a new DropFile with the given Path.
+    fn new(path: &'a Path) -> Self {
+        Self { path }
+    }
+}
+
+impl<'a> Drop for DropFile<'a> {
+    fn drop(&mut self) {
+        // try to remove the file
+        if let Err(e) = fs::remove_file(self.path) {
+            error!("Could not remove file: {}", e);
+        };
+    }
 }
