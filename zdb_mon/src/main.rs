@@ -135,19 +135,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     handles.push(tokio::spawn(async move {
         loop {
-            let pool = client
-                .get("https://explorer.testnet.grid.tf/api/v1/reservations/pools/22040")
-                .send()
-                .await?
-                .json::<Pool>()
-                .await?;
-
-            active_cu_gauge.set(pool.active_cu);
-            active_su_gauge.set(pool.active_su);
-            active_ipv4_gauge.set(pool.active_ipv4);
-            cus_gauge.set(pool.cus);
-            sus_gauge.set(pool.sus);
-            ipv4us_gauge.set(pool.ipv4us);
+            match fetch_pool(&client).await {
+                Ok(pool) => {
+                    active_cu_gauge.set(pool.active_cu);
+                    active_su_gauge.set(pool.active_su);
+                    active_ipv4_gauge.set(pool.active_ipv4);
+                    cus_gauge.set(pool.cus);
+                    sus_gauge.set(pool.sus);
+                    ipv4us_gauge.set(pool.ipv4us);
+                }
+                Err(e) => eprintln!("Could not get pool info: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }));
 
@@ -191,4 +190,13 @@ struct Pool {
     pub active_su: f64,
     pub active_ipv4: f64,
     pub empty_at: u64,
+}
+
+async fn fetch_pool(client: &reqwest::Client) -> Result<Pool, reqwest::Error> {
+    Ok(client
+        .get("https://explorer.testnet.grid.tf/api/v1/reservations/pools/22040")
+        .send()
+        .await?
+        .json::<Pool>()
+        .await?)
 }
