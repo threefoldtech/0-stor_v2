@@ -134,14 +134,16 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+prometheus_port = 9100
+zdb_data_dir_path = "/tmp/0-db/data"
+max_zdb_data_dir_size = 25600
+
+[explorer]
 network = "Main"
 wallet_secret = "Definitely not a secret"
 identity_id = 25
 identity_mnemonic = "an unexisting mnemonic"
 horizon_url = "https://my.horizon.server"
-prometheus_port = 9100
-zdb_data_dir_path = "/tmp/0-db/data"
-max_zdb_data_dir_size = 25600
 
 [encryption]
 algorithm = "AES"
@@ -203,44 +205,47 @@ password = "supersecretpass"
 - `data_shards`: The minimum amount of shards which are needed to recover
     the original data.
 - `parity_shards`: The amount of redundant data shards which are generated
-    when the data is encoded. Essentially, this many shards can be lost 
-	while still being able to recover the original data.
+    when the data is encoded. Essentially, this many shards can be lost
+    while still being able to recover the original data.
 - `redundant_groups`: The amount of groups which one should be able to
     loose while still being able to recover the original data.
 - `redundant_nodes`: The amount of nodes that can be lost in every group
     while still being able to recover the original data.
 - `root`: virtual root on the filesystem to use, this path will be removed
     from all files saved. If a file path is loaded, the path will be
-	interpreted as relative to this directory
+    interpreted as relative to this directory
 - `socket`: Optional path to a unix socket. This socket is required in
     case zstor needs to run in daemon mode. If this is present, zstor
-	invocations will first try to connect to the socket. If it is not found,
-	the command is run in-process, else it is encoded and send to the socket
-	so the daemon can process it.
+    invocations will first try to connect to the socket. If it is not found,
+    the command is run in-process, else it is encoded and send to the socket
+    so the daemon can process it.
 - `zdb_data_dir_path`: Optional path to the local 0-db data file directory.
     If set, it will be monitored and kept within the size limits.
 - `max_zdb_data_dir_size`: Maximum size of the data dir in MiB, if this
     is set and the sum of the file sizes in the data dir gets higher than
-	this value, the least used, already encoded file will be removed.
+    this value, the least used, already encoded file will be removed.
 - `zdbfs_mountpoint`: Optional path of a 0-db-fs mount. If present, a syscall
     will be executed periodically to retrieve file system statistics, which will
-	then be exposed through the build-in prometheus server.
+    then be exposed through the build-in prometheus server.
 - `prometheus_port`: An optional port on which prometheus metrics will be
     exposed. If this is not set, the metrics will not get exposed.
-- `network`: The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
-- `wallet_secret`: The stellar secret of the wallet used to fund capacity
-    pools. This wallet must have TFT, and a small amount of XLM to fund
-	the transactions.
-- `identity_id`: The id of the identity.
-- `identity_mnemonic`: The mnemonic of the secret used by the identity.
-- `horizon_url`: An optional url for a stellar horizon server to use. If this is
-    not set, a default one is used.
+- `explorer`: Optional configuration for the explorer and wallet to use. If this
+    is set, automatic provisioning of additional storage, and payment of capacity
+    pools will be enabled. This is made up of the following fields:
+  - `network`: The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
+  - `wallet_secret`: The stellar secret of the wallet used to fund capacity
+      pools. This wallet must have TFT, and a small amount of XLM to fund
+      the transactions.
+  - `identity_id`: The id of the identity.
+  - `identity_mnemonic`: The mnemonic of the secret used by the identity.
+  - `horizon_url`: An optional url for a stellar horizon server to use. If this is
+      not set, a default one is used.
 - `encryption`: configuration to use for the encryption stage. Currently
-	only `AES` is supported.
+    only `AES` is supported.
 - `compression`: configuration to use for the compression stage.
-	Currently only `snappy` is supported
+    Currently only `snappy` is supported
 - `meta`: configuration for the metadata store to use, currently only
-	`zdb` is supported
+    `zdb` is supported
 - `groups`: The backend groups to write the data to.
 
 Explanation:
