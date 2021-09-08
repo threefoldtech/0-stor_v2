@@ -49,6 +49,9 @@ pub struct ExplorerActor {
     managed_pools: HashMap<i64, PoolData>,
 }
 
+/// Drop in replacement for the [`ExplorerActor`] which does not connect to the threefold grid.
+pub struct NopExplorerActor;
+
 impl ExplorerActor {
     /// Create a new [`ExplorerActor`] from an existing [`ExplorerClient`], and a
     /// [`ConfigActor`].
@@ -74,6 +77,19 @@ impl ExplorerActor {
     /// Send a [`CheckWalletBalances`] command to this actor.
     fn check_balances(&mut self, ctx: &mut <Self as Actor>::Context) {
         ctx.notify(CheckWalletBalances);
+    }
+}
+
+impl NopExplorerActor {
+    /// Create a new [`NopExplorerActor`].
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for NopExplorerActor {
+    fn default() -> Self {
+        Self
     }
 }
 
@@ -177,6 +193,14 @@ impl Actor for ExplorerActor {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+    }
+}
+
+impl Actor for NopExplorerActor {
+    type Context = Context<Self>;
+
+    fn started(&mut self, _: &mut Self::Context) {
+        warn!("NopExplorer started, automatic capacity managment is disabled");
     }
 }
 
@@ -506,6 +530,23 @@ impl Handler<ExpandStorage> for ExplorerActor {
                 .await??;
 
             Ok(ci)
+        })
+    }
+}
+
+impl Handler<ExpandStorage> for NopExplorerActor {
+    type Result = ResponseFuture<Result<ZdbConnectionInfo, ZstorError>>;
+
+    fn handle(&mut self, msg: ExpandStorage, _: &mut Self::Context) -> Self::Result {
+        Box::pin(async move {
+            warn!(
+                "Requesting storage expansion, but capacity managment is disabled. Request: {:?}",
+                msg
+            );
+            Err(ZstorError::with_message(
+                ZstorErrorKind::Explorer,
+                "capacity management disabled".into(),
+            ))
         })
     }
 }

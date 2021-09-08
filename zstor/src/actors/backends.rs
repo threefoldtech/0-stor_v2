@@ -1,6 +1,6 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig, ReplaceMetaBackend},
-    explorer::{ExpandStorage, ExplorerActor, SizeRequest},
+    explorer::{ExpandStorage, SizeRequest},
     meta::{MarkWriteable, MetaStoreActor, ReplaceMetaStore},
     metrics::{MetricsActor, SetDataBackendInfo, SetMetaBackendInfo},
 };
@@ -38,7 +38,7 @@ const DEFAULT_META_BACKEND_SIZE_GIB: u64 = 25;
 /// An actor implementation of a backend manager.
 pub struct BackendManagerActor {
     config_addr: Addr<ConfigActor>,
-    explorer: Addr<ExplorerActor>,
+    explorer: Recipient<ExpandStorage>,
     metrics: Addr<MetricsActor>,
     metastore: Addr<MetaStoreActor>,
     managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
@@ -49,7 +49,7 @@ impl BackendManagerActor {
     /// Create a new [`BackendManagerActor`].
     pub fn new(
         config_addr: Addr<ConfigActor>,
-        explorer: Addr<ExplorerActor>,
+        explorer: Recipient<ExpandStorage>,
         metrics: Addr<MetricsActor>,
         metastore: Addr<MetaStoreActor>,
     ) -> BackendManagerActor {
@@ -625,7 +625,7 @@ impl Handler<RequestBackends> for BackendManagerActor {
 /// FnMut which returns "something which impls Future", and this something has to be precisely
 /// named sadly.
 async fn get_seq_zdb(
-    explorer: Addr<ExplorerActor>,
+    explorer: Recipient<ExpandStorage>,
     ci: ZdbConnectionInfo,
     state: BackendState,
 ) -> Result<(ZdbConnectionInfo, Option<SequentialZdb>, BackendState), ZstorError> {
@@ -664,7 +664,7 @@ async fn get_seq_zdb(
 /// Reserve a new [`UserKeyZdb`] instance. This is a separate method for the same reasons as
 /// [`get_seq_zdb`].
 async fn get_user_zdb(
-    explorer: Addr<ExplorerActor>,
+    explorer: Recipient<ExpandStorage>,
     ci: ZdbConnectionInfo,
     state: BackendState,
 ) -> Result<(ZdbConnectionInfo, Option<UserKeyZdb>, BackendState), ZstorError> {

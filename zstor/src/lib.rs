@@ -10,7 +10,7 @@ use crate::actors::{
     backends::BackendManagerActor,
     config::ConfigActor,
     dir_monitor::DirMonitorActor,
-    explorer::ExplorerActor,
+    explorer::{ExplorerActor, NopExplorerActor},
     meta::MetaStoreActor,
     metrics::{GetPrometheusMetrics, MetricsActor},
     pipeline::PipelineActor,
@@ -67,13 +67,6 @@ pub type ZstorResult<T> = Result<T, ZstorError>;
 
 /// Start the 0-stor monitor daemon
 pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<ZstorActor>> {
-    let identity = Identity::new(cfg.identity_id() as i64, cfg.identity_mnemonic())?;
-    let explorer_client = ExplorerClient::new(
-        cfg.grid_network(),
-        cfg.wallet_secret(),
-        identity,
-        cfg.horizon_url().map(|x| x.to_string()),
-    );
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
             let backends = try_join_all(
@@ -104,7 +97,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
         let _ = ZdbFsStatsActor::new(zdbfs_stats, metrics_addr.clone()).start();
     }
     let meta_addr = MetaStoreActor::new(metastore).start();
-    let cfg_addr = ConfigActor::new(cfg_path, cfg).start();
+    let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
     let pipeline_addr = SyncArbiter::start(1, || PipelineActor);
 
     let zstor = ZstorActor::new(
@@ -115,8 +108,26 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     )
     .start();
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
-    let explorer =
-        ExplorerActor::new(explorer_client, cfg_addr.clone(), metrics_addr.clone()).start();
+
+    let explorer = if let Some(explorer_cfg) = cfg.explorer() {
+        let identity = Identity::new(
+            explorer_cfg.identity_id() as i64,
+            explorer_cfg.identity_mnemonic(),
+        )?;
+        let explorer_client = ExplorerClient::new(
+            explorer_cfg.grid_network(),
+            explorer_cfg.wallet_secret(),
+            identity,
+            explorer_cfg.horizon_url().map(|x| x.to_string()),
+        );
+        let explorer =
+            ExplorerActor::new(explorer_client, cfg_addr.clone(), metrics_addr.clone()).start();
+        explorer.recipient()
+    } else {
+        let ne = NopExplorerActor::new().start();
+        ne.recipient()
+    };
+
     let backends =
         BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone(), meta_addr.clone())
             .start();
