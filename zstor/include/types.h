@@ -3,6 +3,8 @@
 #include <stdio.h>
 
 typedef struct stats_t {
+	size_t version;
+
     size_t fuse_reqs;
 
     size_t cache_hit;
@@ -10,6 +12,11 @@ typedef struct stats_t {
     size_t cache_full;
     size_t cache_linear_flush;
     size_t cache_random_flush;
+	size_t cache_branches;
+	size_t cache_branches_allocated;
+	size_t cache_entries;
+	size_t cache_blocks;
+	size_t cache_blocksize;
 
     size_t syscall_getattr;
     size_t syscall_setattr;

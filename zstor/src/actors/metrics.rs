@@ -60,6 +60,11 @@ struct PromMetrics {
     fs_cache_full: IntGauge,
     fs_cache_linear_flush: IntGauge,
     fs_cache_random_flush: IntGauge,
+    fs_cache_branches: IntGauge,
+    fs_cache_branches_allocated: IntGauge,
+    fs_cache_entries: IntGauge,
+    fs_cache_blocks: IntGauge,
+    fs_cache_blocksize: IntGauge,
     fs_syscalls: IntGaugeVec,
     fs_bytes_read: IntGauge,
     fs_bytes_written: IntGauge,
@@ -239,6 +244,31 @@ impl MetricsActor {
             fs_cache_random_flush: register_int_gauge!(
                 "fs_cache_random_flush",
                 "Total amount of random flushes"
+            )
+            .unwrap(),
+            fs_cache_branches: register_int_gauge!(
+                "fs_cache_branches",
+                "Total amount of cache branches"
+            )
+            .unwrap(),
+            fs_cache_branches_allocated: register_int_gauge!(
+                "fs_cache_branches_allocated",
+                "Amount of cache branches allocated"
+            )
+            .unwrap(),
+            fs_cache_entries: register_int_gauge!(
+                "fs_cache_entries",
+                "Amount of memory cache entries"
+            )
+            .unwrap(),
+            fs_cache_blocks: register_int_gauge!(
+                "fs_cache_blocks",
+                "Amount of blocks in the memory cache"
+            )
+            .unwrap(),
+            fs_cache_blocksize: register_int_gauge!(
+                "fs_cache_blocksize",
+                "Amount of bytes used by cache blocks"
             )
             .unwrap(),
             fs_syscalls: register_int_gauge_vec!(
@@ -682,6 +712,21 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         self.prom_metrics
             .fs_fuse_errors
             .set(self.zdbfs_stats.errors as i64);
+        self.prom_metrics
+            .fs_cache_branches
+            .set(self.zdbfs_stats.cache_branches as i64);
+        self.prom_metrics
+            .fs_cache_branches_allocated
+            .set(self.zdbfs_stats.cache_branches_allocated as i64);
+        self.prom_metrics
+            .fs_cache_entries
+            .set(self.zdbfs_stats.cache_entries as i64);
+        self.prom_metrics
+            .fs_cache_blocks
+            .set(self.zdbfs_stats.cache_blocks as i64);
+        self.prom_metrics
+            .fs_cache_blocksize
+            .set(self.zdbfs_stats.cache_blocksize as i64);
         // set syscall info
         let mut labels = HashMap::new();
         labels.insert("syscall", "getattr");
