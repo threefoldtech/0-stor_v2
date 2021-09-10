@@ -105,7 +105,7 @@ pub struct ReplaceMetaStore {
 
 /// Actor for a metastore
 pub struct MetaStoreActor {
-    meta_store: Arc<Box<dyn MetaStore>>,
+    meta_store: Arc<dyn MetaStore>,
     writeable: bool,
 }
 
@@ -113,7 +113,7 @@ impl MetaStoreActor {
     /// Create a new [`MetaStoreActor`] from a given [`MetaStore`].
     pub fn new(meta_store: Box<dyn MetaStore>) -> MetaStoreActor {
         Self {
-            meta_store: Arc::new(meta_store),
+            meta_store: Arc::from(meta_store),
             writeable: true,
         }
     }
@@ -257,6 +257,6 @@ impl Handler<ReplaceMetaStore> for MetaStoreActor {
     type Result = ();
 
     fn handle(&mut self, msg: ReplaceMetaStore, _: &mut Self::Context) -> Self::Result {
-        self.meta_store = Arc::new(msg.new_store);
+        self.meta_store = Arc::from(msg.new_store as Box<dyn MetaStore>);
     }
 }
