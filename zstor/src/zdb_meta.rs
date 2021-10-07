@@ -24,8 +24,8 @@ use std::{
 
 /// Amount of data shards to use for the encoder used by the 0-db MetaStore.
 const ZDB_METASTORE_DATA_SHARDS: usize = 2;
-/// Amount of parity shards to use for the encoder used by the 0-db MetaStore.
-const ZDB_METASTORE_PARITY_SHARDS: usize = 2;
+/// Amount of disposable shards to use for the encoder used by the 0-db MetaStore.
+const ZDB_METASTORE_DISPOSABLE_SHARDS: usize = 2;
 
 // TODO: find a good limit here
 /// Concurrent amount of keys being rebuild in a rebuild operation.
@@ -64,7 +64,7 @@ impl ZdbMetaStoreConfig {
 
     /// Build an encoder from the config.
     pub fn encoder(&self) -> Encoder {
-        Encoder::new(ZDB_METASTORE_DATA_SHARDS, ZDB_METASTORE_PARITY_SHARDS)
+        Encoder::new(ZDB_METASTORE_DATA_SHARDS, ZDB_METASTORE_DISPOSABLE_SHARDS)
     }
 
     /// Get the encryption configuration from the config
@@ -336,7 +336,8 @@ where
         trace!("Sparse rebuild of key {}", key);
         assert_eq!(old_cluster.encoder, self.encoder);
 
-        let shard_count = old_cluster.encoder.data_shards() + old_cluster.encoder.disposable_shards();
+        let shard_count =
+            old_cluster.encoder.data_shards() + old_cluster.encoder.disposable_shards();
         let mut shard_idx: HashMap<&ZdbConnectionInfo, usize> = HashMap::with_capacity(shard_count);
         let mut shards = vec![None; shard_count as usize];
         for (ci, read_result) in join_all(

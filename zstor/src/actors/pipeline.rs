@@ -170,7 +170,10 @@ impl Handler<RebuildData> for PipelineActor {
     type Result = Result<(MetaData, Vec<Shard>), ZstorError>;
 
     fn handle(&mut self, msg: RebuildData, _: &mut Self::Context) -> Self::Result {
-        let encoder = Encoder::new(msg.input_meta.data_shards(), msg.input_meta.disposable_shards());
+        let encoder = Encoder::new(
+            msg.input_meta.data_shards(),
+            msg.input_meta.disposable_shards(),
+        );
         let decoded = encoder.decode(msg.input)?;
 
         let encoder = Encoder::new(msg.cfg.data_shards(), msg.cfg.disposable_shards());

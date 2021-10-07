@@ -393,7 +393,7 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
     }
 
     // Since this is the amount of actual shards needed to pass to the encoder, we calculate the
-    // amount we will have from the amount of parity and data shards. Reason is that the `shards()`
+    // amount we will have from the amount of disposable and data shards. Reason is that the shards
     // might not have all data shards, due to a bug on our end, or later in case we allow for
     // degraded writes.
     let mut shards: Vec<Option<Vec<u8>>> =

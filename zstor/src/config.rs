@@ -16,10 +16,10 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// The minimum amount of shards which are needed to recover the original data.
-    data_shards: usize,
+    minimal_shards: usize,
     /// The amount of redundant data shards which are generated when the data is encoded. Essentially,
     /// this many shards can be lost while still being able to recover the original data.
-    parity_shards: usize,
+    expected_shards: usize,
     /// The amount of groups which one should be able to loose while still being able to recover
     /// the original data.
     redundant_groups: usize,
@@ -160,11 +160,10 @@ impl Config {
             .groups
             .iter()
             .fold(0, |total, group| total + group.backends.len());
-        if backend_len < self.parity_shards + self.data_shards {
+        if backend_len < self.expected_shards {
             return Err(format!(
                 "insufficient data backends, require at least {}, only found {}",
-                self.data_shards + self.parity_shards,
-                backend_len
+                self.expected_shards, backend_len
             )
             .into());
         };
@@ -174,12 +173,12 @@ impl Config {
 
     /// Get the amount of data shards to use for the encoding
     pub fn data_shards(&self) -> usize {
-        self.data_shards
+        self.minimal_shards
     }
 
     /// Get the amount of disposable_shards shards to use for the encoding
     pub fn disposable_shards(&self) -> usize {
-        self.parity_shards
+        self.expected_shards - self.minimal_shards
     }
 
     /// Return the virtual root set in the config, if any
@@ -294,20 +293,20 @@ impl Config {
     /// is returned. If multiple valid configurations are found, one is selected at random.
     pub fn shard_stores(&self) -> Result<Vec<ZdbConnectionInfo>, ConfigError> {
         // The challenge here is to find a valid list of shards. We need exactly `data_shards +
-        // parity_shards` shards in total. We assume every shard in every group is valid.
+        // disposable_shards` shards in total. We assume every shard in every group is valid.
         // Furthermore, we need to make sure that if any `redundant_groups` groups are lost, we
         // still have sufficient shards left to recover the data. Also, for every group we should
         // be able to loose `redundant_nodes` nodes, and still be able to recover the data. It is
         // acceptable to not find any good setup.
 
-        // used groups must be <= parity_shards/redundant_nodes, otherwise losing the max amount of
-        // nodes per group will lose too many shards
+        // used groups must be <= disposable_shards/redundant_nodes, otherwise losing the max amount
+        // of nodes per group will lose too many shards
         let max_groups = if self.redundant_nodes == 0 {
             self.groups.len()
         } else {
             // add the redundant groups to the max groups, if we lose the entire group we no longer
             // care about the individual nodes in the group after all
-            self.parity_shards / self.redundant_nodes + self.redundant_groups
+            self.disposable_shards() / self.redundant_nodes + self.redundant_groups
         };
 
         // Get the index of every group for later lookup, eliminate groups which are statically too
@@ -336,7 +335,7 @@ impl Config {
                     .iter()
                     .map(|(_, group)| group.backends.len() - self.redundant_nodes)
                     .sum::<usize>()
-                    >= self.data_shards
+                    >= self.minimal_shards
             {
                 candidates.push(candidate.clone());
             }
@@ -363,7 +362,7 @@ impl Config {
                 .map(|(_, group)| group.backends.len())
                 .collect();
             self.build_configs(
-                self.data_shards + self.parity_shards,
+                self.expected_shards,
                 &mut buckets,
                 &mut possible_configs,
                 &candidate,
@@ -383,7 +382,7 @@ impl Config {
         // unwrap is safe as we already established that we have at least 1 solution
         let shard_distribution = possible_configs.choose(&mut rand::thread_rng()).unwrap();
 
-        let mut backends = Vec::with_capacity(self.data_shards + self.parity_shards);
+        let mut backends = Vec::with_capacity(self.expected_shards);
         for (group_idx, amount) in shard_distribution {
             backends.extend(
                 self.groups[*group_idx]
@@ -447,7 +446,7 @@ impl Config {
             .skip(self.redundant_groups)
             .map(|(_, shard_count)| shard_count - self.redundant_nodes)
             .sum::<usize>()
-            >= self.data_shards
+            >= self.minimal_shards
         {
             possible_configs.push(buckets_used);
         }
@@ -513,8 +512,8 @@ mod tests {
             Some("supersecretpass".to_string()),
         );
         let cfg = super::Config {
-            data_shards: 10,
-            parity_shards: 5,
+            minimal_shards: 10,
+            expected_shards: 15,
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
@@ -585,8 +584,8 @@ mod tests {
             )),
         };
 
-        let expected = r#"data_shards = 10
-parity_shards = 5
+        let expected = r#"minimal_shards = 10
+expected_shards = 15
 redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
@@ -687,8 +686,8 @@ password = "supersecretpass"
             Some("supersecretpass".to_string()),
         );
         let expected_cfg = super::Config {
-            data_shards: 10,
-            parity_shards: 5,
+            minimal_shards: 10,
+            expected_shards: 15,
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
@@ -759,8 +758,8 @@ password = "supersecretpass"
             )),
         };
 
-        let input = r#"data_shards = 10
-parity_shards = 5
+        let input = r#"minimal_shards = 10
+expected_shards = 15
 redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"

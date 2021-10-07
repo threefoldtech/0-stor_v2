@@ -128,8 +128,8 @@ explanation of the parameters is found below.
 ### Example config file
 
 ```toml
-data_shards = 10
-parity_shards = 5
+minimal_shards = 10
+expected_shards = 15
 redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
@@ -202,11 +202,13 @@ password = "supersecretpass"
 
 ### Config file explanation
 
-- `data_shards`: The minimum amount of shards which are needed to recover
+- `minimal_shards`: The minimum amount of shards which are needed to recover
     the original data.
-- `parity_shards`: The amount of redundant data shards which are generated
-    when the data is encoded. Essentially, this many shards can be lost
-    while still being able to recover the original data.
+- `expected_shards`: The amount of shards which are generated when the data is
+    encoded. Essentially, this is the amount of shards which is needed to be able
+    to recover the data, and some disposable shards which could be lost. The
+    amount of disposable shards can be calculated as
+    `expected_shards - minimal_shards`.
 - `redundant_groups`: The amount of groups which one should be able to
     loose while still being able to recover the original data.
 - `redundant_nodes`: The amount of nodes that can be lost in every group
