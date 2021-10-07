@@ -397,7 +397,7 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
     // might not have all data shards, due to a bug on our end, or later in case we allow for
     // degraded writes.
     let mut shards: Vec<Option<Vec<u8>>> =
-        vec![None; metadata.data_shards() + metadata.parity_shards()];
+        vec![None; metadata.data_shards() + metadata.disposable_shards()];
     for shard_info in join_all(shard_loads).await {
         let (idx, shard) = shard_info?;
         match shard {

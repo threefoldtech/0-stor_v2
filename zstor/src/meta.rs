@@ -21,7 +21,7 @@ pub struct MetaData {
     data_shards: usize,
     /// The amount of redundant data shards which are generated when the data is encoded. Essentially,
     /// this many shards can be lost while still being able to recover the original data.
-    parity_shards: usize,
+    disposable_shards: usize,
     /// Checksum of the full file
     checksum: Checksum,
     /// configuration to use for the encryption stage
@@ -94,18 +94,18 @@ impl MetaData {
     /// Create new encoding metadata.
     pub fn new(
         data_shards: usize,
-        parity_shards: usize,
+        disposable_shards: usize,
         checksum: Checksum,
         encryption: EncryptionMeta,
         compression: CompressionMeta,
     ) -> Self {
         Self {
             data_shards,
-            parity_shards,
+            disposable_shards,
             checksum,
             encryption,
             compression,
-            shards: Vec::with_capacity(data_shards + parity_shards),
+            shards: Vec::with_capacity(data_shards + disposable_shards),
         }
     }
 
@@ -120,9 +120,9 @@ impl MetaData {
         self.data_shards
     }
 
-    /// Return the amount of parity shards used for encoding this object.
-    pub fn parity_shards(&self) -> usize {
-        self.parity_shards
+    /// Return the amount of disposable shards used for encoding this object.
+    pub fn disposable_shards(&self) -> usize {
+        self.disposable_shards
     }
 
     /// Return the encryption config used for encoding this object.

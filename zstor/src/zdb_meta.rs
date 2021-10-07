@@ -103,7 +103,7 @@ where
         prefix: String,
         virtual_root: Option<PathBuf>,
     ) -> Self {
-        let writeable = backends.len() >= encoder.data_shards() + encoder.parity_shards();
+        let writeable = backends.len() >= encoder.data_shards() + encoder.disposable_shards();
         Self {
             backends,
             encoder,
@@ -165,7 +165,7 @@ where
         }
 
         let mut shards: Vec<Option<Vec<u8>>> =
-            vec![None; self.encoder.data_shards() + self.encoder.parity_shards()];
+            vec![None; self.encoder.data_shards() + self.encoder.disposable_shards()];
         for read_result in join_all(read_requests).await {
             if let Some(mut data) = read_result? {
                 if data.is_empty() {
@@ -336,7 +336,7 @@ where
         trace!("Sparse rebuild of key {}", key);
         assert_eq!(old_cluster.encoder, self.encoder);
 
-        let shard_count = old_cluster.encoder.data_shards() + old_cluster.encoder.parity_shards();
+        let shard_count = old_cluster.encoder.data_shards() + old_cluster.encoder.disposable_shards();
         let mut shard_idx: HashMap<&ZdbConnectionInfo, usize> = HashMap::with_capacity(shard_count);
         let mut shards = vec![None; shard_count as usize];
         for (ci, read_result) in join_all(

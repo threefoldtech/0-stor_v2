@@ -177,8 +177,8 @@ impl Config {
         self.data_shards
     }
 
-    /// Get the amount of parity shards to use for the encoding
-    pub fn parity_shards(&self) -> usize {
+    /// Get the amount of disposable_shards shards to use for the encoding
+    pub fn disposable_shards(&self) -> usize {
         self.parity_shards
     }
 

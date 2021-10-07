@@ -17,7 +17,7 @@ pub type ErasureResult<T> = Result<T, EncodingError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Encoder {
     data_shards: usize,
-    parity_shards: usize,
+    disposable_shards: usize,
 }
 
 /// A data shard resulting from encoding data
@@ -32,16 +32,16 @@ impl Encoder {
     /// Panics when attempting to create an encoder with more than 255 data shards.
     ///
     /// Panics when attempting to create an encoder with 0 data shards.
-    pub fn new(data_shards: usize, parity_shards: usize) -> Self {
+    pub fn new(data_shards: usize, disposable_shards: usize) -> Self {
         trace!(
-            "creating new encoder, data shards {}, parity shards {}",
+            "creating new encoder, data shards {}, disposable shards {}",
             data_shards,
-            parity_shards
+            disposable_shards
         );
         assert!(data_shards < 256);
         Encoder {
             data_shards,
-            parity_shards,
+            disposable_shards,
         }
     }
 
@@ -64,18 +64,18 @@ impl Encoder {
             .chunks_exact(data.len() / self.data_shards) // we already padded so this is always exact
             .map(|chunk| Shard::from(Vec::from(chunk)))
             .collect();
-        // add parity shards
+        // add disposable shards
         // NOTE: we don't need to do a float division with ceiling, since integer division
         // essentially always rounds down, and we always add padding
-        trace!("preparing parity shards");
+        trace!("preparing disposable shards");
         shards.extend(vec![
             Shard::from(vec![0; data.len() / self.data_shards]); // data is padded so this is a perfect division
-            self.parity_shards
+            self.disposable_shards
         ]);
 
         // encode
         trace!("start encoding shards");
-        let enc = ReedSolomon::new(self.data_shards, self.parity_shards).unwrap();
+        let enc = ReedSolomon::new(self.data_shards, self.disposable_shards).unwrap();
         enc.encode(&mut shards).unwrap();
 
         shards
@@ -89,7 +89,7 @@ impl Encoder {
     pub fn decode(&self, mut shards: Vec<Option<Vec<u8>>>) -> ErasureResult<Vec<u8>> {
         trace!("decoding data");
         // reconstruct all shards
-        let dec = ReedSolomon::new(self.data_shards, self.parity_shards).unwrap();
+        let dec = ReedSolomon::new(self.data_shards, self.disposable_shards).unwrap();
         dec.reconstruct(&mut shards).map_err(|e| EncodingError {
             kind: EncodingErrorKind::Reconstruct,
             internal: e,
@@ -128,10 +128,10 @@ impl Encoder {
         self.data_shards
     }
 
-    /// Get the amount of parity shards used by this encoder
+    /// Get the amount of disposable shards used by this encoder
     #[inline]
-    pub fn parity_shards(&self) -> usize {
-        self.parity_shards
+    pub fn disposable_shards(&self) -> usize {
+        self.disposable_shards
     }
 }
 
@@ -245,19 +245,19 @@ mod tests {
         SimpleLogger::new().init().unwrap();
 
         const DATA_SHARDS: usize = 11;
-        const PARITY_SHARDS: usize = 7;
+        const DISPOSABLE_SHARDS: usize = 7;
 
         let mut data: Vec<u8> = vec![3; 3_333_333];
         for d in data.iter_mut() {
             *d = rand::thread_rng().gen();
         }
 
-        let encoder = Encoder::new(DATA_SHARDS, PARITY_SHARDS);
+        let encoder = Encoder::new(DATA_SHARDS, DISPOSABLE_SHARDS);
         let shards = encoder.encode(data.clone()); // clone data so we can compare later
 
-        assert_eq!(shards.len(), DATA_SHARDS + PARITY_SHARDS);
+        assert_eq!(shards.len(), DATA_SHARDS + DISPOSABLE_SHARDS);
 
-        let mut shard_to_erase = Vec::with_capacity(DATA_SHARDS + PARITY_SHARDS);
+        let mut shard_to_erase = Vec::with_capacity(DATA_SHARDS + DISPOSABLE_SHARDS);
         for i in 0..shard_to_erase.capacity() {
             shard_to_erase.push(i);
         }

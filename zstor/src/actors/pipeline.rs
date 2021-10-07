@@ -132,7 +132,7 @@ impl Handler<RecoverFile> for PipelineActor {
     type Result = Result<(), ZstorError>;
 
     fn handle(&mut self, msg: RecoverFile, _: &mut Self::Context) -> Self::Result {
-        let encoder = Encoder::new(msg.meta.data_shards(), msg.meta.parity_shards());
+        let encoder = Encoder::new(msg.meta.data_shards(), msg.meta.disposable_shards());
         let decoded = encoder.decode(msg.shards)?;
 
         info!("rebuild data from shards");
@@ -170,14 +170,14 @@ impl Handler<RebuildData> for PipelineActor {
     type Result = Result<(MetaData, Vec<Shard>), ZstorError>;
 
     fn handle(&mut self, msg: RebuildData, _: &mut Self::Context) -> Self::Result {
-        let encoder = Encoder::new(msg.input_meta.data_shards(), msg.input_meta.parity_shards());
+        let encoder = Encoder::new(msg.input_meta.data_shards(), msg.input_meta.disposable_shards());
         let decoded = encoder.decode(msg.input)?;
 
-        let encoder = Encoder::new(msg.cfg.data_shards(), msg.cfg.parity_shards());
+        let encoder = Encoder::new(msg.cfg.data_shards(), msg.cfg.disposable_shards());
         Ok((
             MetaData::new(
                 msg.input_meta.data_shards(),
-                msg.input_meta.parity_shards(),
+                msg.input_meta.disposable_shards(),
                 *msg.input_meta.checksum(),
                 msg.input_meta.encryption().clone(),
                 msg.input_meta.compression().clone(),
@@ -211,12 +211,12 @@ fn process_file(data_file: &Path, cfg: &Config) -> ZstorResult<(MetaData, Vec<Sh
     let encrypted = encryptor.encrypt(&compressed)?;
     trace!("encrypted size: {} bytes", encrypted.len());
 
-    let encoder = Encoder::new(cfg.data_shards(), cfg.parity_shards());
+    let encoder = Encoder::new(cfg.data_shards(), cfg.disposable_shards());
     let shards = encoder.encode(encrypted);
 
     let metadata = MetaData::new(
         cfg.data_shards(),
-        cfg.parity_shards(),
+        cfg.disposable_shards(),
         file_checksum,
         cfg.encryption().clone().into(),
         cfg.compression().clone().into(),
