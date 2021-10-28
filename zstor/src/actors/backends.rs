@@ -214,6 +214,8 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .map(|(ci, (db, state))| (ci.clone(), (db.clone(), state.clone())))
             .collect::<Vec<_>>();
 
+        let config = self.config_addr.clone();
+
         Box::pin(
             async move {
                 let futs = data_backend_info
@@ -292,7 +294,14 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         }
                     });
                 let meta_info = join_all(futs).await;
-                (data_info, meta_info)
+                let cfg = match config.send(GetConfig).await {
+                    Ok(cfg) => Some(cfg),
+                    Err(e) => {
+                        error!("Could not get config: {}", e);
+                        None
+                    }
+                };
+                (data_info, meta_info, cfg)
             }
             .into_actor(self)
             .map(|res, actor, ctx| {
@@ -314,6 +323,11 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         if !(new_state.is_readable() && new_state.is_writeable()) {
                             should_sweep = true;
                         }
+                        // If the backend is not readable, remove the cached connection to trigger
+                        // a reconnect.
+                        if !new_state.is_readable() {
+                            *possible_con = None;
+                        }
                         *old_state = new_state
                     }
                 }
@@ -334,11 +348,16 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         if !(new_state.is_readable() && new_state.is_writeable()) {
                             should_sweep = true;
                         }
+                        // If the backend is not readable, remove the cached connection to trigger
+                        // a reconnect.
+                        if !new_state.is_readable() {
+                            *possible_con = None;
+                        }
                         *old_state = new_state
                     }
                 }
 
-                if should_sweep {
+                if should_sweep && res.2.is_some() {
                     // Trigger a sweep of all managed backends, removing those at the end of their
                     // (managed) lifetime, and try to reserve new ones in their place.
                     actor.replace_backends(ctx);
