@@ -21,6 +21,8 @@ use std::{
 };
 use tokio::{fs, io, task::JoinHandle};
 
+use super::config::ReloadConfig;
+
 #[derive(Serialize, Deserialize, Debug)]
 /// All possible commands zstor operates on.
 pub enum ZstorCommand {
@@ -362,6 +364,15 @@ impl Handler<Check> for ZstorActor {
                 async move { res }.into_actor(actor)
             }),
         )
+    }
+}
+
+impl Handler<ReloadConfig> for ZstorActor {
+    type Result = ResponseFuture<Result<(), ZstorError>>;
+
+    fn handle(&mut self, _: ReloadConfig, _: &mut Self::Context) -> Self::Result {
+        let cfg = self.cfg.clone();
+        Box::pin(async move { cfg.send(ReloadConfig).await? })
     }
 }
 

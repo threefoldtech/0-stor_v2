@@ -1,4 +1,5 @@
 use actix::Addr;
+use actix_rt::signal::unix::SignalKind;
 use futures::future::join_all;
 use log::LevelFilter;
 use log::{debug, error, info, trace};
@@ -16,6 +17,7 @@ use std::process;
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use zstor_v2::actors::config::ReloadConfig;
 use zstor_v2::actors::zstor::{
     Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand, ZstorResponse,
 };
@@ -314,6 +316,14 @@ async fn real_main() -> ZstorResult<()> {
 
             let zstor = zstor_v2::setup_system(opts.config, cfg).await?;
 
+            // setup signal handlers
+            let mut sigints = actix_rt::signal::unix::signal(SignalKind::interrupt())
+                .expect("Failed to install SIGINT handler");
+            let mut sigterms = actix_rt::signal::unix::signal(SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler");
+            let mut siguserone = actix_rt::signal::unix::signal(SignalKind::user_defined1())
+                .expect("Failed to install SIGUSR1 handler");
+
             loop {
                 tokio::select! {
                     accepted = server.accept() => {
@@ -332,14 +342,22 @@ async fn real_main() -> ZstorResult<()> {
                             }
                         });
                     }
-                    _ = actix_rt::signal::ctrl_c() => break,
+                    _ = sigints.recv() => {
+                        info!("Shutting down zstor daemon after receiving SIGINT");
+                        break
+                    },
+                    _ = sigterms.recv() => {
+                        info!("Shutting down zstor daemon after receiving SIGTERM");
+                        break
+                    },
+                    _ = siguserone.recv() => {
+                        info!("Reloading config after receiving SIGUSR1");
+                        if let Err(e) = zstor.send(ReloadConfig).await {
+                            error!("could not reload config: {}", e)
+                        }
+                    },
                 }
             }
-            actix_rt::signal::ctrl_c()
-                .await
-                .map_err(|e| ZstorError::new_io("Failed to wait for CTRL-C".to_string(), e))?;
-
-            info!("Shutting down zstor daemon after receiving CTRL-C");
         }
     };
 

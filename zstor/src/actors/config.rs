@@ -4,7 +4,7 @@ use crate::{
     ZstorError,
 };
 use actix::prelude::*;
-use log::error;
+use log::{debug, error};
 use std::{convert::TryInto, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::fs;
 
@@ -73,6 +73,7 @@ impl Handler<ReloadConfig> for ConfigActor {
 
     fn handle(&mut self, _: ReloadConfig, _: &mut Self::Context) -> Self::Result {
         let path = self.config_path.clone();
+        debug!("Config actor reloading running config from {:?}", path);
         AtomicResponse::new(Box::pin(
             async move {
                 fs::read(path)
@@ -83,6 +84,7 @@ impl Handler<ReloadConfig> for ConfigActor {
             .map(|res, this, _| {
                 let config = toml::from_slice(&res?)?;
                 this.config = Arc::new(config);
+                debug!("Config actor finished reloading running config");
                 Ok(())
             }),
         ))
