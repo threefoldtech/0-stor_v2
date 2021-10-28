@@ -295,7 +295,8 @@ impl Handler<CheckBackends> for BackendManagerActor {
                     });
                 let meta_info = join_all(futs).await;
                 let cfg = match config.send(GetConfig).await {
-                    Ok(cfg) => Some(cfg),
+                    // We don't care about the config, only that one is set.
+                    Ok(cfg) => cfg.explorer().map(|_| ()),
                     Err(e) => {
                         error!("Could not get config: {}", e);
                         None
@@ -318,6 +319,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                     // anyway.
                     if let Some((possible_con, old_state)) = actor.managed_seq_dbs.get_mut(&ci) {
                         if new_db.is_some() {
+                            debug!("Caching new connection to {}", ci);
                             *possible_con = new_db;
                         }
                         if !(new_state.is_readable() && new_state.is_writeable()) {
@@ -326,6 +328,12 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         // If the backend is not readable, remove the cached connection to trigger
                         // a reconnect.
                         if !new_state.is_readable() {
+                            if possible_con.is_some() {
+                                debug!(
+                                    "State is not readable, clearing existing connection to {}",
+                                    ci
+                                );
+                            }
                             *possible_con = None;
                         }
                         *old_state = new_state
@@ -343,6 +351,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                     // anyway.
                     if let Some((possible_con, old_state)) = actor.managed_meta_dbs.get_mut(&ci) {
                         if new_db.is_some() {
+                            debug!("Caching new connection to {}", ci);
                             *possible_con = new_db;
                         }
                         if !(new_state.is_readable() && new_state.is_writeable()) {
@@ -351,6 +360,12 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         // If the backend is not readable, remove the cached connection to trigger
                         // a reconnect.
                         if !new_state.is_readable() {
+                            if possible_con.is_some() {
+                                debug!(
+                                    "State is not readable, clearing existing connection to {}",
+                                    ci
+                                );
+                            }
                             *possible_con = None;
                         }
                         *old_state = new_state
@@ -371,6 +386,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, _: ReplaceBackends, _: &mut Self::Context) -> Self::Result {
+        debug!("Attempting to replace backends");
         let explorer = self.explorer.clone();
         // Grab all backends which must be replaced.
         let seq_replacements = self
