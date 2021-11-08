@@ -84,11 +84,11 @@ const HEX_KEY_LEN: usize = 2 * KEY_LEN;
 
 /// A symmetric encryption key of exactly 32 bytes
 #[derive(Debug, Clone, PartialEq)]
-pub struct SymmetricKey([u8; 32]);
+pub struct SymmetricKey([u8; KEY_LEN]);
 
 impl SymmetricKey {
     /// Create a new [`SymmetricKey`] from the given array.
-    pub const fn new(value: [u8; 32]) -> Self {
+    pub const fn new(value: [u8; KEY_LEN]) -> Self {
         Self(value)
     }
 }
