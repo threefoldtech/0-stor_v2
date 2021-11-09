@@ -7,7 +7,6 @@ use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
 use redis::{aio::MultiplexedConnection, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::fmt;
 use std::future::Future;
@@ -16,11 +15,43 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Display,
+};
 use tokio::time::timeout;
 // use sha1::{Digest, Sha1};
 
 /// The type of key's used in zdb in sequential mode.
-pub type Key = u32;
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Key {
+    /// The key type returned by V1 0-db in sequential mode.
+    V1(u32),
+    /// The key type returned by V2 0-db in sequential mode.
+    V2(u64),
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Key::V1(ref key) => key as &dyn Display,
+                Key::V2(ref key) => key,
+            }
+        )
+    }
+}
+
+impl Key {
+    fn to_le_bytes(self) -> Vec<u8> {
+        match self {
+            Key::V1(key) => key.to_le_bytes().into(),
+            Key::V2(key) => key.to_le_bytes().into(),
+        }
+    }
+}
 
 /// The result type as used by this module.
 pub type ZdbResult<T> = Result<T, ZdbError>;
@@ -881,12 +912,19 @@ impl fmt::Display for ZdbRunMode {
 /// Interpret a byteslice as a [`Key`] type. This is a helper function to easily interpret the
 /// byteslices returned when setting a new value.
 fn read_le_key(input: &[u8]) -> Key {
-    let (int_bytes, _) = input.split_at(std::mem::size_of::<Key>());
-    Key::from_le_bytes(
-        int_bytes
-            .try_into()
-            .expect("could not convert bytes to key"),
-    )
+    match input.len() {
+        4 => {
+            Key::V1(u32::from_le_bytes(input.try_into().expect(
+                "Conversion of 4 byte key to u32 should always succeed",
+            )))
+        }
+        8 => {
+            Key::V2(u64::from_le_bytes(input.try_into().expect(
+                "Conversion of 8 byte key to u64 should always succeed",
+            )))
+        }
+        size => panic!("Unsupported key length {}", size),
+    }
 }
 
 /// A `ZdbError` holding details about failed zdb operations.
