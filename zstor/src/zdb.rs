@@ -666,11 +666,19 @@ impl InternalZdb {
         T: FromStr,
         T::Err: fmt::Display,
     {
-        data_map[field].parse().map_err(|e| ZdbError {
-            kind: ZdbErrorKind::Format,
-            remote: self.ci.address,
-            internal: ErrorCause::Other(format!("Couldn't parse field {}: {}", field, e)),
-        })
+        Ok(if let Some(value) = data_map.get(field) {
+            value.parse().map_err(|e| ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.address,
+                internal: ErrorCause::Other(format!("Couldn't parse field {}: {}", field, e)),
+            })
+        } else {
+            Err(ZdbError {
+                kind: ZdbErrorKind::Format,
+                remote: self.ci.address,
+                internal: ErrorCause::Other(format!("missing field {}", field)),
+            })
+        }?)
     }
 }
 
