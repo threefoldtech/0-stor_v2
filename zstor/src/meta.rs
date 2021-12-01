@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::{fmt, fs, io};
-
+use std::{fmt, io};
+use path_clean::PathClean;
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
 /// A checksum of a data object
@@ -336,20 +336,5 @@ impl FailureMeta {
 
 /// Canonicalizes a path, even if it does not exist
 pub(crate) fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-    // annoyingly, the path needs to exist for this to work. So here's the plan:
-    // first we verify that it is actualy there
-    // if it is, no problem
-    // else, create a temp file, canonicalize that path, and remove the temp file again
-    match fs::metadata(path) {
-        Ok(_) => Ok(path.canonicalize()?),
-        Err(e) => match e.kind() {
-            io::ErrorKind::NotFound => {
-                fs::File::create(path)?;
-                let cp = path.canonicalize()?;
-                fs::remove_file(path)?;
-                Ok(cp)
-            }
-            _ => Err(e),
-        },
-    }
+    Ok(PathBuf::from(path).clean())
 }

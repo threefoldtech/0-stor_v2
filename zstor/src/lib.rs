@@ -13,10 +13,10 @@ use crate::actors::{
     explorer::{ExplorerActor, NopExplorerActor},
     meta::MetaStoreActor,
     metrics::{GetPrometheusMetrics, MetricsActor},
-    pipeline::PipelineActor,
+    pipeline::{PipelineActor},
     repairer::RepairActor,
-    zdbfs::ZdbFsStatsActor,
-    zstor::ZstorActor,
+    zdbfs::{ZdbFsStatsActor, LoopOverStats},
+    zstor::{ZstorActor, Check, Retrieve},
 };
 use actix::prelude::*;
 use actix::{Addr, MailboxError};
@@ -24,6 +24,7 @@ use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
+use path_clean::PathClean;
 use futures::future::try_join_all;
 use grid_explorer_client::{
     identity::{Identity, IdentityError},
@@ -35,13 +36,12 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::task::JoinError;
 use zdb::ZdbError;
-use zdbfs::ZdbFsStats;
 use {
     config::{Config, Encryption, Meta},
     zdb::UserKeyZdb,
     zdb_meta::ZdbMetaStore,
 };
-
+use log::{debug, info, error};
 /// Implementations of all components as actors.
 pub mod actors;
 /// Contains a general compression interface and implementations.
@@ -62,11 +62,14 @@ pub mod zdb_meta;
 /// Zdbfs related tools.
 pub mod zdbfs;
 
+const ZDBFS_META: &str = "zdbfs-meta";
+const ZDBFS_DATA: &str = "zdbfs-data";
+
 /// Global result type for zstor operations
 pub type ZstorResult<T> = Result<T, ZstorError>;
 
 /// Start the 0-stor monitor daemon
-pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<ZstorActor>> {
+pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<ZstorActor>> {
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
             let backends = try_join_all(
@@ -92,9 +95,8 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
-        let zdbfs_stats = ZdbFsStats::try_new(mountpoint.to_path_buf())
-            .map_err(|e| ZstorError::new_io("Could not get 0-db-fs stats".into(), e))?;
-        let _ = ZdbFsStatsActor::new(zdbfs_stats, metrics_addr.clone()).start();
+        let ad = SyncArbiter::start(1, || ZdbFsStatsActor::new());
+        ad.do_send(LoopOverStats{buf: mountpoint.to_path_buf(), metrics: metrics_addr.clone()});
     }
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
@@ -107,6 +109,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
         metrics_addr.clone(),
     )
     .start();
+    recover_indexes(&cfg, &zstor).await?;
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
 
     let explorer = if let Some(explorer_cfg) = cfg.explorer() {
@@ -149,6 +152,100 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: Config) -> ZstorResult<Addr<Zs
     Ok(zstor)
 }
 
+/// recover index files of the namespaces required by zsbfs
+async fn recover_indexes(cfg: &Config, zstor: &Addr<ZstorActor>) -> ZstorResult<()> {
+
+    // TODO: Should an error here be fatal?
+    if let Err(e) = recover_index(cfg, ZDBFS_META, zstor).await {
+        error!("Could not recover {} index: {}", ZDBFS_META, e);
+        return Err(e);
+    }
+    if let Err(e) = recover_index(cfg, ZDBFS_DATA, zstor).await {
+        error!("Could not recover {} index: {}", ZDBFS_DATA, e);
+        return Err(e);
+    }
+    Ok(())
+}
+/// recover index files of a specific namespace
+pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> ZstorResult<()> {
+    let mut path = PathBuf::from(cfg.zdb_index_dir_path().unwrap());
+    let mut data_path = PathBuf::from(cfg.zdb_data_dir_path().unwrap());
+    path.push(ns);
+    data_path.push(ns);
+
+    debug!("Attempting to recover index data at {:?}", path);
+
+    // try to recover namespace file
+    let mut namespace_path = path.clone();
+    namespace_path.push("zdb-namespace");
+
+    // TODO: collapse this into separate function and call that
+    if check_file(&namespace_path, &zstor).await? {
+        debug!("namespace file {:?} found in storage, checking local filesystem", namespace_path);
+        // exists on Path is blocking, but it essentially just tests if a `metadata` call
+        // returns ok.
+        if fs::metadata(&namespace_path).await.is_err() {
+            info!("index namespace {:?} file is encoded and not present locally, attempt recovery", namespace_path);
+            // At this point we know that the file is uploaded and not present locally, so an
+            // error here is terminal for the whole recovery process.
+            zstor.send(Retrieve { file: namespace_path }).await??;
+            // create the corresponding data directory
+            fs::create_dir_all(data_path)
+                .await
+                .map_err(|e| ZstorError::new_io("Couldn't create data directory".to_string(), e))?;
+        }
+    }
+
+    // Recover regular index files
+    let mut file_idx = 0usize;
+    loop {
+        let mut index_path = path.clone();
+        index_path.push(format!("i{}", file_idx));
+        if check_file(&index_path, &zstor).await? {
+            debug!("index file {:?} found in storage, checking local filesystem", index_path);
+            // exists on Path is blocking, but it essentially just tests if a `metadata` call
+            // returns ok.
+            if fs::metadata(&index_path).await.is_err() {
+                info!(
+                    "index file {:?} is encoded and not present locally, attempt recovery", index_path
+                );
+                // At this point we know that the file is uploaded and not present locally, so an
+                // error here is terminal for the whole recovery process.
+                zstor.send(Retrieve { file: index_path }).await??;
+            }
+        } else {
+            break;
+        }
+
+        file_idx += 1;
+    }
+
+    Ok(())
+}
+
+/// Return true if the file was deleted
+async fn check_file(path: &Path, zstor: &Addr<ZstorActor>) -> ZstorResult<bool> {
+    let path = PathBuf::from(path).clean();
+    // the Check handler returns an error for missing key
+    // so null checksum and errors are considered for now a missing key error
+    if zstor
+        .send(Check {
+            path: path.clone()
+        })
+        .await?
+        .and_then(|x|
+            x.ok_or(
+                ZstorError::with_message(
+                    ZstorErrorKind::Metadata,
+                    String::from("null checksum")
+                )
+            )
+        )
+        .is_err() {
+        return Ok(false);
+    }
+    return Ok(true);
+}
 /// Load a TOML encoded config file from the given path.
 pub async fn load_config(path: &Path) -> ZstorResult<Config> {
     let cfg_data = fs::read(path)

@@ -1,75 +1,90 @@
 use crate::actors::metrics::{MetricsActor, UpdateZdbFsStats};
 use crate::zdbfs::ZdbFsStats;
 use actix::prelude::*;
-use log::{error, warn};
+use std::path::{PathBuf};
+use crate::ZstorError;
+use log::warn;
 use std::time::Duration;
-
+use tokio::time::sleep;
+use tokio::runtime::Runtime;
+use log::debug;
+// use thread::{sleep};
 const DEFAULT_ZDBFS_STATS_INTERVAL_SECS: u64 = 1;
 
 /// An actor implementation of a periodic 0-db-fs statistic getter.
-pub struct ZdbFsStatsActor {
-    stats: ZdbFsStats,
-    metrics: Addr<MetricsActor>,
+pub struct ZdbFsStatsActor{
+    stats: Option<ZdbFsStats>,
 }
 
 impl ZdbFsStatsActor {
     /// Create a new ZdbFsStatsActor, which will get statistics and push them to the metrics actor
     /// at a given interval.
-    pub fn new(stats: ZdbFsStats, metrics: Addr<MetricsActor>) -> Self {
-        Self { stats, metrics }
+    pub fn new() -> Self {
+        ZdbFsStatsActor{
+            stats: None
+        }
     }
-
-    fn get_stats(&mut self, ctx: &mut <Self as Actor>::Context) {
-        ctx.notify(GetStats);
+    fn renew_fd(&mut self, path: PathBuf) {
+        debug!("renewing stats fd");
+        let zdbfs_stats = ZdbFsStats::try_new(path)
+        .map_err(|e| ZstorError::new_io("Could not get 0-db-fs stats".into(), e));
+        match zdbfs_stats {
+            Ok(v) => {
+                self.stats = Some(v);
+            },
+            Err(e) => {
+                warn!("couldn't get a new zdbbfs stats {}", e);
+                self.stats = None;
+            }
+        }
     }
 }
 
-/// Message requesting the actor to get the statistics of the 0-db-fs.
-#[derive(Debug, Message)]
-#[rtype(result = "()")]
-struct GetStats;
+/// Send stats to the metrics endpoint periodically
+pub struct LoopOverStats {
+    /// Path buffer to zdbfs mountpoint
+    pub buf: PathBuf,
+    /// Metrics actor address
+    pub metrics: Addr<MetricsActor>,
+}
 
 impl Actor for ZdbFsStatsActor {
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(
-            Duration::from_secs(DEFAULT_ZDBFS_STATS_INTERVAL_SECS),
-            Self::get_stats,
-        );
-    }
+    type Context = SyncContext<Self>;
+}
+impl Message for LoopOverStats {
+    type Result = Result<u64, ()>;
 }
 
-impl Handler<GetStats> for ZdbFsStatsActor {
-    type Result = ResponseActFuture<Self, ()>;
-
-    fn handle(&mut self, _: GetStats, _: &mut Self::Context) -> Self::Result {
-        let res = self.stats.get_stats();
-        let metrics = self.metrics.clone();
-        Box::pin(
-            async move {
-                match res {
-                    Err(ref e) => {
-                        warn!("Could not get 0-db-fs stats: {}", e);
+impl Handler<LoopOverStats> for ZdbFsStatsActor {
+    type Result = Result<u64, ()>;
+    fn handle(&mut self, msg: LoopOverStats, _: &mut Self::Context) -> Self::Result {
+        let rt = Runtime::new()
+            .unwrap();
+        loop {
+            match &self.stats {
+                None => self.renew_fd(msg.buf.clone()),
+                Some(stats_obj) => {
+                    let res = stats_obj.get_stats();
+                    let metrics = msg.metrics.clone();
+                    match res {
+                        Err(ref e) => {
+                            warn!("Could not get 0-db-fs stats: {}", e);
+                            self.stats = None;
+                        }
+                        Ok(stats) => {
+                            rt.block_on(async move {
+                                if let Err(e) = metrics.send(UpdateZdbFsStats { stats }).await {
+                                    warn!("Could not update 0-db-fs stats: {}", e);
+                                };
+                            });
+                        }
                     }
-                    Ok(stats) => {
-                        if let Err(e) = metrics.send(UpdateZdbFsStats { stats }).await {
-                            error!("Could not update 0-db-fs stats: {}", e);
-                        };
-                    }
-                };
-                res
-            }
-            .into_actor(self)
-            .map(|res, actor, _| {
-                if res.is_err() {
-                    let mountpoint = actor.stats.mountpoint();
-                    match ZdbFsStats::try_new(mountpoint) {
-                        Err(e) => warn!("Can't recreate zdbfs stats fd: {}", e),
-                        Ok(stats) => actor.stats = stats,
-                    };
                 }
-            }),
-        )
+            }
+            // would enter runtime work?
+            rt.block_on(async move {
+                sleep(Duration::from_secs(DEFAULT_ZDBFS_STATS_INTERVAL_SECS)).await;
+            });
+        }
     }
 }
