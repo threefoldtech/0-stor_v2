@@ -13,10 +13,10 @@ use crate::actors::{
     explorer::{ExplorerActor, NopExplorerActor},
     meta::MetaStoreActor,
     metrics::{GetPrometheusMetrics, MetricsActor},
-    pipeline::{PipelineActor},
+    pipeline::PipelineActor,
     repairer::RepairActor,
-    zdbfs::{ZdbFsStatsActor, LoopOverStats},
-    zstor::{ZstorActor, Check, Retrieve},
+    zdbfs::{LoopOverStats, ZdbFsStatsActor},
+    zstor::{Check, Retrieve, ZstorActor},
 };
 use actix::prelude::*;
 use actix::{Addr, MailboxError};
@@ -24,13 +24,14 @@ use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
-use path_clean::PathClean;
 use futures::future::try_join_all;
 use grid_explorer_client::{
     identity::{Identity, IdentityError},
     ExplorerClient, ExplorerError,
 };
+use log::{debug, error, info};
 use meta::MetaStoreError;
+use path_clean::PathClean;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -41,7 +42,6 @@ use {
     zdb::UserKeyZdb,
     zdb_meta::ZdbMetaStore,
 };
-use log::{debug, info, error};
 /// Implementations of all components as actors.
 pub mod actors;
 /// Contains a general compression interface and implementations.
@@ -96,7 +96,10 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     let metrics_addr = MetricsActor::new().start();
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
         let ad = SyncArbiter::start(1, || ZdbFsStatsActor::new());
-        ad.do_send(LoopOverStats{buf: mountpoint.to_path_buf(), metrics: metrics_addr.clone()});
+        ad.do_send(LoopOverStats {
+            buf: mountpoint.to_path_buf(),
+            metrics: metrics_addr.clone(),
+        });
     }
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
@@ -154,7 +157,6 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
 
 /// recover index files of the namespaces required by zsbfs
 async fn recover_indexes(cfg: &Config, zstor: &Addr<ZstorActor>) -> ZstorResult<()> {
-
     // TODO: Should an error here be fatal?
     if let Err(e) = recover_index(cfg, ZDBFS_META, zstor).await {
         error!("Could not recover {} index: {}", ZDBFS_META, e);
@@ -181,14 +183,24 @@ pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> 
 
     // TODO: collapse this into separate function and call that
     if check_file(&namespace_path, &zstor).await? {
-        debug!("namespace file {:?} found in storage, checking local filesystem", namespace_path);
+        debug!(
+            "namespace file {:?} found in storage, checking local filesystem",
+            namespace_path
+        );
         // exists on Path is blocking, but it essentially just tests if a `metadata` call
         // returns ok.
         if fs::metadata(&namespace_path).await.is_err() {
-            info!("index namespace {:?} file is encoded and not present locally, attempt recovery", namespace_path);
+            info!(
+                "index namespace {:?} file is encoded and not present locally, attempt recovery",
+                namespace_path
+            );
             // At this point we know that the file is uploaded and not present locally, so an
             // error here is terminal for the whole recovery process.
-            zstor.send(Retrieve { file: namespace_path }).await??;
+            zstor
+                .send(Retrieve {
+                    file: namespace_path,
+                })
+                .await??;
             // create the corresponding data directory
             fs::create_dir_all(data_path)
                 .await
@@ -202,12 +214,16 @@ pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> 
         let mut index_path = path.clone();
         index_path.push(format!("i{}", file_idx));
         if check_file(&index_path, &zstor).await? {
-            debug!("index file {:?} found in storage, checking local filesystem", index_path);
+            debug!(
+                "index file {:?} found in storage, checking local filesystem",
+                index_path
+            );
             // exists on Path is blocking, but it essentially just tests if a `metadata` call
             // returns ok.
             if fs::metadata(&index_path).await.is_err() {
                 info!(
-                    "index file {:?} is encoded and not present locally, attempt recovery", index_path
+                    "index file {:?} is encoded and not present locally, attempt recovery",
+                    index_path
                 );
                 // At this point we know that the file is uploaded and not present locally, so an
                 // error here is terminal for the whole recovery process.
@@ -229,19 +245,16 @@ async fn check_file(path: &Path, zstor: &Addr<ZstorActor>) -> ZstorResult<bool> 
     // the Check handler returns an error for missing key
     // so null checksum and errors are considered for now a missing key error
     if zstor
-        .send(Check {
-            path: path.clone()
-        })
+        .send(Check { path: path.clone() })
         .await?
-        .and_then(|x|
-            x.ok_or(
-                ZstorError::with_message(
-                    ZstorErrorKind::Metadata,
-                    String::from("null checksum")
-                )
-            )
-        )
-        .is_err() {
+        .and_then(|x| {
+            x.ok_or(ZstorError::with_message(
+                ZstorErrorKind::Metadata,
+                String::from("null checksum"),
+            ))
+        })
+        .is_err()
+    {
         return Ok(false);
     }
     return Ok(true);

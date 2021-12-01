@@ -4,10 +4,10 @@ use crate::zdb::{Key, UserKeyZdb, ZdbConnectionInfo};
 use crate::zdb_meta::ZdbMetaStore;
 use async_trait::async_trait;
 use futures::future::try_join_all;
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
-use path_clean::PathClean;
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
 /// A checksum of a data object
