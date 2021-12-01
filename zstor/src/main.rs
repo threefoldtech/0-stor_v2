@@ -301,6 +301,9 @@ async fn real_main() -> ZstorResult<()> {
             cfg.shard_stores()?;
         }
         Cmd::Monitor => {
+            
+            let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
+
             let server = if let Some(socket) = cfg.socket() {
                 UnixListener::bind(socket)
                     .map_err(|e| ZstorError::new_io("Failed to bind unix socket".into(), e))?
@@ -314,7 +317,6 @@ async fn real_main() -> ZstorResult<()> {
             let socket_path = cfg.socket().unwrap().to_path_buf();
             let _f = DropFile::new(&socket_path);
 
-            let zstor = zstor_v2::setup_system(opts.config, cfg).await?;
 
             // setup signal handlers
             let mut sigints = actix_rt::signal::unix::signal(SignalKind::interrupt())
@@ -450,7 +452,7 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
         }
     } else {
         debug!("No zstor daemon socket found, running command in process");
-        let zstor = zstor_v2::setup_system(cfg_path, cfg).await?;
+        let zstor = zstor_v2::setup_system(cfg_path, &cfg).await?;
         match zc {
             ZstorCommand::Store(store) => zstor.send(store).await??,
             ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,

@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use std::fs;
 
 #[derive(Message)]
 #[rtype(result = "Result<(MetaData, PathBuf, Vec<Shard>), ZstorError>")]
@@ -141,12 +142,16 @@ impl Handler<RecoverFile> for PipelineActor {
         let decrypted = encryptor.decrypt(&decoded)?;
 
         // create the file
-        let mut out = if let Some(ref root) = msg.cfg.virtual_root() {
-            File::create(root.join(&msg.path))
+        let file_path;
+        if let Some(ref root) = msg.cfg.virtual_root() {
+            file_path = root.join(&msg.path);
         } else {
-            File::create(&msg.path)
+            file_path = msg.path;
         }
-        .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
+        let mut root = file_path.clone();
+        root.pop();
+        fs::create_dir_all(root).map_err(|e| ZstorError::new_io("could not create recovered file parent dir".to_string(), e))?; 
+        let mut out = File::create(file_path).map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
 
         let mut cursor = Cursor::new(decrypted);
         Snappy.decompress(&mut cursor, &mut out)?;
