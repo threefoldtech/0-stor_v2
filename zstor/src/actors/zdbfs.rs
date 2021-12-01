@@ -15,7 +15,11 @@ const DEFAULT_ZDBFS_STATS_INTERVAL_SECS: u64 = 1;
 pub struct ZdbFsStatsActor {
     stats: Option<ZdbFsStats>,
 }
-
+impl Default for ZdbFsStatsActor {
+    fn default() -> Self {
+        ZdbFsStatsActor::new()
+    }
+}
 impl ZdbFsStatsActor {
     /// Create a new ZdbFsStatsActor, which will get statistics and push them to the metrics actor
     /// at a given interval.
