@@ -9,6 +9,7 @@ use crate::{
 use actix::prelude::*;
 use blake2::{digest::VariableOutput, VarBlake2b};
 use log::{debug, info, trace};
+use std::fs;
 use std::{
     convert::TryInto,
     fs::File,
@@ -16,7 +17,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use std::fs;
 
 #[derive(Message)]
 #[rtype(result = "Result<(MetaData, PathBuf, Vec<Shard>), ZstorError>")]
@@ -150,8 +150,11 @@ impl Handler<RecoverFile> for PipelineActor {
         }
         let mut root = file_path.clone();
         root.pop();
-        fs::create_dir_all(root).map_err(|e| ZstorError::new_io("could not create recovered file parent dir".to_string(), e))?; 
-        let mut out = File::create(file_path).map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
+        fs::create_dir_all(root).map_err(|e| {
+            ZstorError::new_io("could not create recovered file parent dir".to_string(), e)
+        })?;
+        let mut out = File::create(file_path)
+            .map_err(|e| ZstorError::new_io("could not create output file".to_string(), e))?;
 
         let mut cursor = Cursor::new(decrypted);
         Snappy.decompress(&mut cursor, &mut out)?;

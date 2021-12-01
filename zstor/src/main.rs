@@ -301,7 +301,6 @@ async fn real_main() -> ZstorResult<()> {
             cfg.shard_stores()?;
         }
         Cmd::Monitor => {
-            
             let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
 
             let server = if let Some(socket) = cfg.socket() {
@@ -316,7 +315,6 @@ async fn real_main() -> ZstorResult<()> {
             // avoid having to clone the whole config.
             let socket_path = cfg.socket().unwrap().to_path_buf();
             let _f = DropFile::new(&socket_path);
-
 
             // setup signal handlers
             let mut sigints = actix_rt::signal::unix::signal(SignalKind::interrupt())
