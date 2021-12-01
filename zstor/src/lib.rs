@@ -95,7 +95,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
-        let ad = SyncArbiter::start(1, || ZdbFsStatsActor::new());
+        let ad = SyncArbiter::start(1, ZdbFsStatsActor::new);
         ad.do_send(LoopOverStats {
             buf: mountpoint.to_path_buf(),
             metrics: metrics_addr.clone(),
@@ -112,7 +112,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
         metrics_addr.clone(),
     )
     .start();
-    recover_indexes(&cfg, &zstor).await?;
+    recover_indexes(cfg, &zstor).await?;
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
 
     let explorer = if let Some(explorer_cfg) = cfg.explorer() {
@@ -182,7 +182,7 @@ pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> 
     namespace_path.push("zdb-namespace");
 
     // TODO: collapse this into separate function and call that
-    if check_file(&namespace_path, &zstor).await? {
+    if check_file(&namespace_path, zstor).await? {
         debug!(
             "namespace file {:?} found in storage, checking local filesystem",
             namespace_path
@@ -213,7 +213,7 @@ pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> 
     loop {
         let mut index_path = path.clone();
         index_path.push(format!("i{}", file_idx));
-        if check_file(&index_path, &zstor).await? {
+        if check_file(&index_path, zstor).await? {
             debug!(
                 "index file {:?} found in storage, checking local filesystem",
                 index_path
@@ -244,20 +244,11 @@ async fn check_file(path: &Path, zstor: &Addr<ZstorActor>) -> ZstorResult<bool> 
     let path = PathBuf::from(path).clean();
     // the Check handler returns an error for missing key
     // so null checksum and errors are considered for now a missing key error
-    if zstor
-        .send(Check { path: path.clone() })
-        .await?
-        .and_then(|x| {
-            x.ok_or(ZstorError::with_message(
-                ZstorErrorKind::Metadata,
-                String::from("null checksum"),
-            ))
-        })
-        .is_err()
-    {
+    let checksum = zstor.send(Check { path: path.clone() }).await?;
+    if checksum.is_err() || checksum.unwrap().is_none() {
         return Ok(false);
     }
-    return Ok(true);
+    Ok(true)
 }
 /// Load a TOML encoded config file from the given path.
 pub async fn load_config(path: &Path) -> ZstorResult<Config> {
