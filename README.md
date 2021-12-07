@@ -223,6 +223,12 @@ password = "supersecretpass"
     so the daemon can process it.
 - `zdb_data_dir_path`: Optional path to the local 0-db data file directory.
     If set, it will be monitored and kept within the size limits.
+- `zdb_index_dir_path`: Optional path to the local 0-db index file directory.
+    If set, 0-stor will attempt to rebuild previously uploaded index files for
+    the local 0-db. The indexes of the `zdb-data` and `zdb-meta` namespaces
+    will be rebuild. The path must point to the directory where all the
+    namespace index files are located, rather than an individual namespace
+    index.
 - `max_zdb_data_dir_size`: Maximum size of the data dir in MiB, if this
     is set and the sum of the file sizes in the data dir gets higher than
     this value, the least used, already encoded file will be removed.
