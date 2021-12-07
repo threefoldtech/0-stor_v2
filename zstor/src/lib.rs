@@ -15,7 +15,7 @@ use crate::actors::{
     metrics::{GetPrometheusMetrics, MetricsActor},
     pipeline::PipelineActor,
     repairer::RepairActor,
-    zdbfs::{LoopOverStats, ZdbFsStatsActor},
+    zdbfs::ZdbFsStatsProxyActor,
     zstor::{Check, Retrieve, ZstorActor},
 };
 use actix::prelude::*;
@@ -95,11 +95,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     let prom_port = cfg.prometheus_port();
     let metrics_addr = MetricsActor::new().start();
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
-        let ad = SyncArbiter::start(1, ZdbFsStatsActor::new);
-        ad.do_send(LoopOverStats {
-            buf: mountpoint.to_path_buf(),
-            metrics: metrics_addr.clone(),
-        });
+        let _ = ZdbFsStatsProxyActor::new(mountpoint.to_path_buf(), metrics_addr.clone()).start();
     }
     let meta_addr = MetaStoreActor::new(metastore).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
@@ -169,7 +165,7 @@ async fn recover_indexes(cfg: &Config, zstor: &Addr<ZstorActor>) -> ZstorResult<
     Ok(())
 }
 /// recover index files of a specific namespace
-pub async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> ZstorResult<()> {
+async fn recover_index(cfg: &Config, ns: &str, zstor: &Addr<ZstorActor>) -> ZstorResult<()> {
     let mut path = PathBuf::from(cfg.zdb_index_dir_path().unwrap());
     let mut data_path = PathBuf::from(cfg.zdb_data_dir_path().unwrap());
     path.push(ns);
