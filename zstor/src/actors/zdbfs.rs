@@ -57,13 +57,7 @@ impl Handler<ProbeStatsActor> for ZdbFsStatsProxyActor {
         let metrics = self.metrics.clone();
         let stats_actor = self.stats_actor.clone();
         Box::pin(async move {
-            if let Err(e) = stats_actor
-                .send(ProcessStats {
-                    buf: buf.clone(),
-                    metrics: metrics.clone(),
-                })
-                .await
-            {
+            if let Err(e) = stats_actor.send(ProcessStats { buf, metrics }).await {
                 warn!("couldn't process zdbfs stats: {}", e);
             }
         })
@@ -124,7 +118,7 @@ impl Handler<ProcessStats> for ZdbFsStatsActor {
     type Result = Result<(), ZstorError>;
     fn handle(&mut self, msg: ProcessStats, _: &mut Self::Context) -> Self::Result {
         if self.stats.is_none() {
-            self.renew_fd(msg.buf.clone())?;
+            self.renew_fd(msg.buf)?;
         }
         match self
             .stats
