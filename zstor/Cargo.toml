@@ -2,7 +2,7 @@
 name = "zstor_v2"
 version = "0.3.0-rc.10"
 authors = ["The Threefold Tech developers <info@threefold.tech>"]
-edition = "2018"
+edition = "2021"
 repository = "https://github.com/threefoldtech/0-stor_v2"
 
 [[bin]]
