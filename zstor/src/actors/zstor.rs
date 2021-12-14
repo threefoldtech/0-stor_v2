@@ -454,7 +454,7 @@ async fn save_data(
                 match ns_info.free_space() {
                     insufficient if (insufficient as usize) < shard_len => {
                         Err(ZdbError::new_storage_size(
-                            *db.connection_info().address(),
+                            db.connection_info().clone(),
                             shard_len,
                             ns_info.free_space() as usize,
                         ))
@@ -469,7 +469,7 @@ async fn save_data(
             match db? {
                 Err(zdbe) => {
                     debug!("could not connect to 0-db: {}", zdbe);
-                    cfg.remove_shard(zdbe.address());
+                    cfg.remove_shard(zdbe.remote());
                     failed_shards += 1;
                 }
                 Ok(db) => dbs.push(db), // no error so healthy db backend
