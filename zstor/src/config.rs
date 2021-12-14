@@ -3,7 +3,6 @@ use gray_codes::{InclusionExclusion, SetMutation};
 use grid_explorer_client::GridNetwork;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// The full configuration for the data encoding and decoding. This included the metastore to save the
@@ -253,12 +252,12 @@ impl Config {
     /// Remove a shard from the config. If the shard is present multiple times, all instances will
     /// be removed.
     /// TODO: remove this.
-    pub fn remove_shard(&mut self, address: &SocketAddr) {
+    pub fn remove_shard(&mut self, address: &ZdbConnectionInfo) {
         for mut group in &mut self.groups {
             group.backends = group
                 .backends
                 .drain(..)
-                .filter(|backend| backend.address() != address)
+                .filter(|backend| backend != address)
                 .collect();
         }
     }
@@ -308,7 +307,6 @@ impl Config {
             // care about the individual nodes in the group after all
             self.disposable_shards() / self.redundant_nodes + self.redundant_groups
         };
-
         // Get the index of every group for later lookup, eliminate groups which are statically too
         // small
         let groups: Vec<_> = self
@@ -316,6 +314,11 @@ impl Config {
             .iter()
             .filter(|group| group.backends.len() >= self.redundant_nodes)
             .collect();
+
+        // InclusionExclusion::of_len panics when groups is empty
+        if groups.is_empty() {
+            return Err("no available groups".to_string().into());
+        }
 
         let mut candidates = Vec::new();
         // high enough capacity so we don't reallocate

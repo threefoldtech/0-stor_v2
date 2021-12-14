@@ -366,19 +366,19 @@ impl InternalZdb {
 
         let client = redis::Client::open(ci.clone()).map_err(|e| ZdbError {
             kind: ZdbErrorKind::Connect,
-            remote: info.address,
+            remote: info.clone(),
             internal: ErrorCause::Redis(e),
         })?;
         let mut conn = timeout(ZDB_TIMEOUT, client.get_multiplexed_tokio_connection())
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
-                remote: info.address,
+                remote: info.clone(),
                 internal: ErrorCause::Timeout,
             })?
             .map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Connect,
-                remote: info.address,
+                remote: info.clone(),
                 internal: ErrorCause::Redis(e),
             })?;
         trace!("opened connection to db");
@@ -387,12 +387,12 @@ impl InternalZdb {
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
-                remote: info.address,
+                remote: info.clone(),
                 internal: ErrorCause::Timeout,
             })?
             .map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Connect,
-                remote: info.address,
+                remote: info.clone(),
                 internal: ErrorCause::Redis(e),
             })?;
         trace!("db connection established");
@@ -429,7 +429,7 @@ impl InternalZdb {
                     } else {
                         ZdbErrorKind::Ns
                     },
-                    remote: info.address,
+                    remote: info.clone(),
                     internal: ErrorCause::Timeout,
                 })?
                 .map_err(|e| ZdbError {
@@ -438,7 +438,7 @@ impl InternalZdb {
                     } else {
                         ZdbErrorKind::Ns
                     },
-                    remote: info.address,
+                    remote: info.clone(),
                     internal: ErrorCause::Redis(e),
                 })?;
             trace!("opened namespace");
@@ -478,12 +478,12 @@ impl InternalZdb {
         .await
         .map_err(|_| ZdbError {
             kind: ZdbErrorKind::Write,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Timeout,
         })?
         .map_err(|e| ZdbError {
             kind: ZdbErrorKind::Write,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
         })?;
 
@@ -506,17 +506,17 @@ impl InternalZdb {
         .await
         .map_err(|_| ZdbError {
             kind: ZdbErrorKind::Read,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Timeout,
         })?
         .map_err(|e| ZdbError {
             kind: ZdbErrorKind::Read,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
         })?
         .ok_or(ZdbError {
             kind: ZdbErrorKind::Read,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Other(format!("missing key {}", hex::encode(key))),
         })?;
         Ok(Some(data))
@@ -539,12 +539,12 @@ impl InternalZdb {
         .await
         .map_err(|_| ZdbError {
             kind: ZdbErrorKind::Write,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Timeout,
         })?
         .map_err(|e| ZdbError {
             kind: ZdbErrorKind::Write,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
         })?;
 
@@ -579,12 +579,12 @@ impl InternalZdb {
         .await
         .map_err(|_| ZdbError {
             kind: ZdbErrorKind::Read,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Timeout,
         })?
         .map_err(|e| ZdbError {
             kind: ZdbErrorKind::Read,
-            remote: self.ci.address,
+            remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
         })?;
 
@@ -619,7 +619,7 @@ impl InternalZdb {
                 _ => {
                     return Err(ZdbError {
                         kind: ZdbErrorKind::Format,
-                        remote: self.ci.address,
+                        remote: self.ci.clone(),
                         internal: ErrorCause::Other(
                             "expected mode to be usermode/sequential".to_string(),
                         ),
@@ -654,7 +654,7 @@ impl InternalZdb {
             _ => {
                 return Err(ZdbError {
                     kind: ZdbErrorKind::Format,
-                    remote: self.ci.address,
+                    remote: self.ci.clone(),
                     internal: ErrorCause::Other("expected password to be yes/no".to_string()),
                 })
             }
@@ -669,13 +669,13 @@ impl InternalZdb {
         if let Some(value) = data_map.get(field) {
             Ok(value.parse().map_err(|e| ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
+                remote: self.ci.clone(),
                 internal: ErrorCause::Other(format!("Couldn't parse field {}: {}", field, e)),
             })?)
         } else {
             Err(ZdbError {
                 kind: ZdbErrorKind::Format,
-                remote: self.ci.address,
+                remote: self.ci.clone(),
                 internal: ErrorCause::Other(format!("missing field {}", field)),
             })
         }
@@ -693,7 +693,7 @@ impl SequentialZdb {
             ZdbRunMode::Seq => Ok(Self { internal }),
             mode => Err(ZdbError {
                 kind: ZdbErrorKind::Mode,
-                remote: internal.connection_info().address,
+                remote: internal.connection_info().clone(),
                 internal: ErrorCause::Other(format!(
                     "expected 0-db namespace to be in sequential mode, but is in {}",
                     mode
@@ -729,7 +729,7 @@ impl SequentialZdb {
             data.extend_from_slice(&self.internal.get(&key.to_le_bytes()).await?.ok_or(
                 ZdbError {
                     kind: ZdbErrorKind::Read,
-                    remote: self.internal.ci.address,
+                    remote: self.internal.ci.clone(),
                     internal: ErrorCause::Other(format!("missing key {}", key)),
                 },
             )?);
@@ -761,7 +761,7 @@ impl UserKeyZdb {
             ZdbRunMode::User => Ok(Self { internal }),
             mode => Err(ZdbError {
                 kind: ZdbErrorKind::Mode,
-                remote: internal.connection_info().address,
+                remote: internal.connection_info().clone(),
                 internal: ErrorCause::Other(format!(
                     "expected 0-db namespace to be in userkey mode, but is in {}",
                     mode
@@ -776,7 +776,7 @@ impl UserKeyZdb {
         if data.len() > MAX_ZDB_DATA_SIZE {
             return Err(ZdbError {
                 kind: ZdbErrorKind::Write,
-                remote: self.connection_info().address,
+                remote: self.connection_info().clone(),
                 internal: ErrorCause::Other(format!(
                     "Data size limit is 8MiB, data has length {}",
                     data.len()
@@ -939,7 +939,7 @@ fn read_le_key(input: &[u8]) -> Key {
 #[derive(Debug)]
 pub struct ZdbError {
     kind: ZdbErrorKind,
-    remote: SocketAddr,
+    remote: ZdbConnectionInfo,
     internal: ErrorCause,
 }
 
@@ -965,7 +965,7 @@ impl std::error::Error for ZdbError {
 
 impl ZdbError {
     /// Create a new ZstorError indicating the namespace does not have sufficient storage space
-    pub fn new_storage_size(remote: SocketAddr, required: usize, limit: usize) -> Self {
+    pub fn new_storage_size(remote: ZdbConnectionInfo, required: usize, limit: usize) -> Self {
         ZdbError {
             kind: ZdbErrorKind::NsSize,
             remote,
@@ -976,8 +976,8 @@ impl ZdbError {
         }
     }
 
-    /// The address of the 0-db which caused this error.
-    pub fn address(&self) -> &SocketAddr {
+    /// The remote 0-db connection which caused this error.
+    pub fn remote(&self) -> &ZdbConnectionInfo {
         &self.remote
     }
 }

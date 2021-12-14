@@ -1,6 +1,6 @@
 use config::Config;
 use futures::future::join_all;
-use log::{debug, error, info};
+use log::debug;
 use monitors::{monitor_backends, monitor_failed_writes, monitor_ns_datasize};
 use std::error;
 use std::fmt;
@@ -21,7 +21,6 @@ pub mod zstor;
 
 pub type MonitorResult<T> = Result<T, MonitorError>;
 
-const ZDBFS_META: &str = "zdbfs-meta";
 const ZDBFS_DATA: &str = "zdbfs-data";
 
 pub struct Monitor {
@@ -45,14 +44,6 @@ impl Monitor {
             self.cfg.zstor_bin_path().to_path_buf(),
             self.cfg.zstor_config_path().to_path_buf(),
         ));
-
-        // TODO: Should an error here be fatal?
-        if let Err(e) = self.recover_index(ZDBFS_META, zstor.clone()).await {
-            error!("Could not recover {} index: {}", ZDBFS_META, e);
-        }
-        if let Err(e) = self.recover_index(ZDBFS_DATA, zstor.clone()).await {
-            error!("Could not recover {} index: {}", ZDBFS_DATA, e);
-        }
 
         let config = self.cfg;
 
@@ -90,58 +81,6 @@ impl Monitor {
         });
 
         Ok((tx, handle))
-    }
-
-    pub async fn recover_index(&self, ns: &str, zstor: SingleZstor) -> MonitorResult<()> {
-        let mut path = self.cfg.zdb_index_dir_path().clone();
-        path.push(ns);
-
-        debug!("Attempting to recover index data at {:?}", path);
-
-        // try to recover namespace file
-        // TODO: is this always present?
-        let mut namespace_path = path.clone();
-        namespace_path.push("zdb-namespace");
-
-        // TODO: collapse this into separate function and call that
-        if zstor.file_is_uploaded(&namespace_path).await? {
-            debug!("namespace file found in storage, checking local filesystem");
-            // exists on Path is blocking, but it essentially just tests if a `metadata` call
-            // returns ok.
-            if fs::metadata(&namespace_path).await.is_err() {
-                info!("index namespace file is encoded and not present locally, attempt recovery");
-                // At this point we know that the file is uploaded and not present locally, so an
-                // error here is terminal for the whole recovery process.
-                zstor.download_file(&namespace_path).await?;
-            }
-        }
-
-        // Recover regular index files
-        let mut file_idx = 0usize;
-        loop {
-            let mut index_path = path.clone();
-            index_path.push(format!("zdb-index-{:05}", file_idx));
-
-            if zstor.file_is_uploaded(&namespace_path).await? {
-                debug!("namespace file found in storage, checking local filesystem");
-                // exists on Path is blocking, but it essentially just tests if a `metadata` call
-                // returns ok.
-                if fs::metadata(&namespace_path).await.is_err() {
-                    info!(
-                        "index namespace file is encoded and not present locally, attempt recovery"
-                    );
-                    // At this point we know that the file is uploaded and not present locally, so an
-                    // error here is terminal for the whole recovery process.
-                    zstor.download_file(&namespace_path).await?;
-                }
-            } else {
-                break;
-            }
-
-            file_idx += 1;
-        }
-
-        Ok(())
     }
 }
 
