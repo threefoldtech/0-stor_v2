@@ -33,9 +33,6 @@ pub struct Config {
     /// socket. If it is not found, the command is run in-process, else it is encoded and send to
     /// the socket so the daemon can process it.
     socket: Option<PathBuf>,
-    /// Optional path to the local 0-db index file directory, which will be rebuild if this is set
-    /// when the monitor is launched.
-    zdb_index_dir_path: Option<PathBuf>,
     /// Optional path to the local 0-db data file directory. If set, it will be monitored and kept
     /// within the size limits.
     zdb_data_dir_path: Option<PathBuf>,
@@ -227,11 +224,6 @@ impl Config {
     /// Returns all backend groups in the config.
     pub fn groups(&self) -> &[Group] {
         &self.groups
-    }
-
-    /// Returns the local 0-db index file directory path.
-    pub fn zdb_index_dir_path(&self) -> Option<&Path> {
-        self.zdb_index_dir_path.as_ref().map(|x| x as _)
     }
 
     /// Returns the local 0-db data file directory path.
@@ -520,7 +512,6 @@ mod tests {
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
-            zdb_index_dir_path: None,
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
             explorer: Some(super::Explorer {
@@ -694,7 +685,6 @@ password = "supersecretpass"
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
-            zdb_index_dir_path: None,
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
             explorer: Some(super::Explorer {

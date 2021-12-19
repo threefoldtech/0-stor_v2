@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    zdb_index_dir_path: PathBuf,
     zdb_data_dir_path: PathBuf,
     zstor_config_path: PathBuf,
     zstor_bin_path: PathBuf,
@@ -26,10 +25,6 @@ pub struct VdcConfig {
 }
 
 impl Config {
-    pub fn zdb_index_dir_path(&self) -> &PathBuf {
-        &self.zdb_index_dir_path
-    }
-
     pub fn zdb_data_dir_path(&self) -> &PathBuf {
         &self.zdb_data_dir_path
     }
@@ -80,7 +75,6 @@ mod tests {
     #[test]
     fn test_serialize_config() {
         let config = Config {
-            zdb_index_dir_path: "/tmp/zdb/zdb-index".parse().unwrap(),
             zdb_data_dir_path: "/tmp/zdb/zdb-index".parse().unwrap(),
             zstor_config_path: "/tmp/zstor_config.toml".parse().unwrap(),
             zstor_bin_path: "/tmp/zstor_v2".parse().unwrap(),
@@ -95,8 +89,8 @@ mod tests {
 
         let output = toml::to_string(&config).unwrap();
 
-        // let expected = r#""zdb_index_dir_path = \"/tmp/zdb/zdb-index\"\nzdb_data_dir_path = \"/tmp/zdb/zdb-index\"\nzstor_config_path = \"/tmp/zstor_config.toml\"\nzstor_bin_path = \"/tmp/zstor_v2\"\nmax_zdb_data_dir_size = 51200\nzdb_namespace_fill_treshold = 90\n\n[vdc_config]\nurl = \"https://some.evdc.tech\"\npassword = \"supersecurepassword\"\nnew_size = 20\n"#;
-        let expected = r#"zdb_index_dir_path = "/tmp/zdb/zdb-index"
+        // let expected = r#""zdb_data_dir_path = \"/tmp/zdb/zdb-index\"\nzstor_config_path = \"/tmp/zstor_config.toml\"\nzstor_bin_path = \"/tmp/zstor_v2\"\nmax_zdb_data_dir_size = 51200\nzdb_namespace_fill_treshold = 90\n\n[vdc_config]\nurl = \"https://some.evdc.tech\"\npassword = \"supersecurepassword\"\nnew_size = 20\n"#;
+        let expected = r#"
 zdb_data_dir_path = "/tmp/zdb/zdb-index"
 zstor_config_path = "/tmp/zstor_config.toml"
 zstor_bin_path = "/tmp/zstor_v2"
@@ -117,7 +111,6 @@ new_size = 20
     #[test]
     fn test_deserialize_config() {
         let input = r#"
-zdb_index_dir_path = "/tmp/zdb/zdb-index"
 zdb_data_dir_path = "/tmp/zdb/zdb-index"
 zstor_config_path = "/tmp/zstor_config.toml"
 zstor_bin_path = "/tmp/zstor_v2"
@@ -133,7 +126,6 @@ new_size = 20
         let config = toml::from_str(input).unwrap();
 
         let output = Config {
-            zdb_index_dir_path: "/tmp/zdb/zdb-index".parse().unwrap(),
             zdb_data_dir_path: "/tmp/zdb/zdb-index".parse().unwrap(),
             zstor_config_path: "/tmp/zstor_config.toml".parse().unwrap(),
             zstor_bin_path: "/tmp/zstor_v2".parse().unwrap(),
