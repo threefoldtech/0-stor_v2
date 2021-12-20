@@ -99,7 +99,7 @@ impl Handler<SweepObjects> for RepairActor {
                     }
                     Ok(backends) => backends,
                 };
-                let must_rebuild = backends.into_iter().all(|b| matches!(b, Ok(Some(_))));
+                let must_rebuild = backends.into_iter().any(|b| !matches!(b, Ok(Some(_))));
                 if must_rebuild {
                     if let Err(e) = zstor
                         .send(Rebuild {
