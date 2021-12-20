@@ -90,8 +90,7 @@ mod tests {
         let output = toml::to_string(&config).unwrap();
 
         // let expected = r#""zdb_data_dir_path = \"/tmp/zdb/zdb-index\"\nzstor_config_path = \"/tmp/zstor_config.toml\"\nzstor_bin_path = \"/tmp/zstor_v2\"\nmax_zdb_data_dir_size = 51200\nzdb_namespace_fill_treshold = 90\n\n[vdc_config]\nurl = \"https://some.evdc.tech\"\npassword = \"supersecurepassword\"\nnew_size = 20\n"#;
-        let expected = r#"
-zdb_data_dir_path = "/tmp/zdb/zdb-index"
+        let expected = r#"zdb_data_dir_path = "/tmp/zdb/zdb-index"
 zstor_config_path = "/tmp/zstor_config.toml"
 zstor_bin_path = "/tmp/zstor_v2"
 max_zdb_data_dir_size = 51200
