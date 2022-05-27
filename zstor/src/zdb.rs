@@ -5,7 +5,7 @@ use blake2::{
 };
 use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
-use redis::{aio::MultiplexedConnection, ConnectionAddr, ConnectionInfo};
+use redis::{aio::ConnectionManager, ConnectionAddr, ConnectionInfo};
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::fmt;
@@ -80,7 +80,7 @@ pub struct UserKeyZdb {
 /// the remote closed). No reconnection is attempted.
 #[derive(Clone)]
 struct InternalZdb {
-    conn: MultiplexedConnection,
+    conn: ConnectionManager,
     // connection info tracked to conveniently inspect the remote address and namespace.
     ci: ZdbConnectionInfo,
 }
@@ -99,7 +99,7 @@ type ScanResult = redis::RedisResult<(Vec<u8>, Vec<ScanEntry>)>;
 
 /// A stream over all the keys in a namespace.
 struct CollectionKeys {
-    conn: MultiplexedConnection,
+    conn: ConnectionManager,
     /// Cursor to advance the scan, only set after the first call.
     cursor: Option<Vec<u8>>,
     /// The SCAN commands returns multiple entries per call, yet does not specify how many, so we
@@ -110,7 +110,7 @@ struct CollectionKeys {
     // active scan command, this is the actual command.
     active_scan: Option<&'static redis::Cmd>,
     // address of the active connection used by the running_scan. This is a pointer to a
-    // ['MultiplexedConnection'].
+    // ['ConnectionManager'].
     active_con: Option<*const usize>,
     // An in flight scan request issued by the stream.
     running_scan: Option<Pin<Box<dyn Future<Output = ScanResult> + Send>>>,
@@ -130,13 +130,13 @@ impl CollectionKeys {
             unsafe { Box::from_raw(cmd as *const redis::Cmd as *mut redis::Cmd) };
         }
         if let Some(ca) = self.active_con.take() {
-            // SAFETY: convert a raw pointer to the MultiplexedConnection. The conversion to a box,
-            // which is then dropped to deallocate the MultiplexedConnection is safe since the field
+            // SAFETY: convert a raw pointer to the ConnectionManager. The conversion to a box,
+            // which is then dropped to deallocate the ConnectionManager is safe since the field
             // can only contain a value to such a type through the leak of the boxed value,
             // similarly to the above. The validity of the raw pointer is reliant on the fact that
-            // the MultiplexedConnection is not moved. This should ideally be a Pin<_>, but the redis
+            // the ConnectionManager is not moved. This should ideally be a Pin<_>, but the redis
             // lib does not seem to like that.
-            unsafe { Box::from_raw(ca as *mut MultiplexedConnection) };
+            unsafe { Box::from_raw(ca as *mut ConnectionManager) };
         }
         // Clear the running future, this is needed in case this method gets called while the
         // object is still alive, i.e. as part of the [`Stream`] impl. It is however not strictly
@@ -146,7 +146,7 @@ impl CollectionKeys {
 }
 
 // SAFETY: This is allowed since nothing should be able to change the address of the raw pointer to
-// the `MultiplexedConnection`.
+// the `ConnectionManager`.
 unsafe impl Send for CollectionKeys {}
 
 impl Stream for CollectionKeys {
@@ -200,16 +200,16 @@ impl Stream for CollectionKeys {
             //      on the struct won't help as the struct itself is not 'static.
             //  Leaking these 2 things means all items in the future have the 'static lifetime,
             //  satisfying it's requirement.
-            //  Because we can't save the leaked `MultiplexedConnection` on the struct, as that would
+            //  Because we can't save the leaked `ConnectionManager` on the struct, as that would
             //  require a 'static lifetime on the struct, we actually take a raw pointer to it, and
-            //  save this. We can use this raw pointer to later drop the leaked `MultiplexedConnection`.
-            //  NOTE: This relies on the address of the MultiplexedConnection not changing, i.e. it
+            //  save this. We can use this raw pointer to later drop the leaked `ConnectionManager`.
+            //  NOTE: This relies on the address of the ConnectionManager not changing, i.e. it
             //  is not moved.
             //  NOTE: all of this would not be needed if `Cmd::query_async` would not require
             //  'static lifetimes.
             self.active_scan = Some(Box::leak(Box::new(scan_cmd)));
             let c = Box::leak(Box::new(self.conn.clone()));
-            self.active_con = Some(c as *mut MultiplexedConnection as *const usize);
+            self.active_con = Some(c as *mut ConnectionManager as *const usize);
             if let Some(scan) = self.active_scan {
                 // The future needs to be pin in order to call `poll`, since I don't want to deal with
                 // figuring out if it's safe to pin it on the stack, pin it to the heap for now. The
@@ -369,7 +369,7 @@ impl InternalZdb {
             remote: info.clone(),
             internal: ErrorCause::Redis(e),
         })?;
-        let mut conn = timeout(ZDB_TIMEOUT, client.get_multiplexed_tokio_connection())
+        let mut conn = timeout(ZDB_TIMEOUT, ConnectionManager::new(client))
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
@@ -381,6 +381,7 @@ impl InternalZdb {
                 remote: info.clone(),
                 internal: ErrorCause::Redis(e),
             })?;
+
         trace!("opened connection to db");
         trace!("pinging db");
         timeout(ZDB_TIMEOUT, redis::cmd("PING").query_async(&mut conn))
@@ -396,40 +397,30 @@ impl InternalZdb {
                 internal: ErrorCause::Redis(e),
             })?;
         trace!("db connection established");
+
+        Ok(Self { conn, ci: info })
+    }
+    async fn select_ns(&self) -> ZdbResult<()> {
         // open the correct namespace, with or without password
-        if let Some(ns) = &info.namespace {
+        if let Some(ns) = &self.ci.namespace {
             let mut ns_select = redis::cmd("SELECT");
             ns_select.arg(ns);
-            if let Some(pass) = &info.password {
+            if let Some(pass) = &self.ci.password {
                 trace!("password authenticating to namespace");
                 ns_select.arg(pass);
-                // trace!("requesting AUTH challange");
-                // // request AUTH challenge
-                // let challenge: String = redis::cmd("AUTH")
-                //     .arg("SECURE")
-                //     .arg("CHALLENGE")
-                //     .query_async(&mut conn)
-                //     .await
-                //     .map_err(|e| e.to_string())?;
-                // trace!("got challange {}", challenge);
-                // let mut hasher = Sha1::new();
-                // hasher.update(format!("{}:{}", challenge, pass).as_bytes());
-                // let result = hex::encode(hasher.finalize());
-                // trace!("auth result {}", result);
-                // ns_select.arg("SECURE").arg(result);
             }
             trace!("opening namespace {}", ns);
-            timeout(ZDB_TIMEOUT, ns_select.query_async(&mut conn))
+            timeout(ZDB_TIMEOUT, ns_select.query_async(&mut self.conn.clone()))
                 .await
                 .map_err(|_| ZdbError {
                     // try to guess the right kind of failure based on wether we are authenticating
                     // or not
-                    kind: if info.password.is_some() {
+                    kind: if self.ci.password.is_some() {
                         ZdbErrorKind::Auth
                     } else {
                         ZdbErrorKind::Ns
                     },
-                    remote: info.clone(),
+                    remote: self.ci.clone(),
                     internal: ErrorCause::Timeout,
                 })?
                 .map_err(|e| ZdbError {
@@ -438,15 +429,13 @@ impl InternalZdb {
                     } else {
                         ZdbErrorKind::Ns
                     },
-                    remote: info.clone(),
+                    remote: self.ci.clone(),
                     internal: ErrorCause::Redis(e),
                 })?;
             trace!("opened namespace");
         }
-
-        Ok(Self { conn, ci: info })
+        Ok(())
     }
-
     /// Store some data in the zdb. The generated keys are returned for later retrieval.
     /// Multiple keys might be returned since zdb only allows for up to 8MB of data per request,
     /// so we internally chunk the data.
@@ -467,7 +456,7 @@ impl InternalZdb {
         );
 
         assert!(data.len() < MAX_ZDB_DATA_SIZE);
-
+        self.select_ns().await?;
         let returned_key: Vec<u8> = timeout(
             ZDB_TIMEOUT,
             redis::cmd("SET")
@@ -497,6 +486,7 @@ impl InternalZdb {
             hex::encode(key),
             self.connection_info().address()
         );
+        self.select_ns().await?;
         let data = timeout(
             ZDB_TIMEOUT,
             redis::cmd("GET")
@@ -530,6 +520,7 @@ impl InternalZdb {
             self.connection_info().address()
         );
 
+        self.select_ns().await?;
         timeout(
             ZDB_TIMEOUT,
             redis::cmd("DEL")

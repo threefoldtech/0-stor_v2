@@ -259,6 +259,8 @@ pub enum ZstorErrorKind {
     Serialization,
     /// An error related to the explorer.
     Explorer,
+    /// An error related to channels.
+    Channel,
 }
 
 impl fmt::Display for ZstorErrorKind {
@@ -277,6 +279,7 @@ impl fmt::Display for ZstorErrorKind {
                 ZstorErrorKind::Async => "waiting for async task completion".to_string(),
                 ZstorErrorKind::Serialization => "error in the binary wire format".to_string(),
                 ZstorErrorKind::Explorer => "error in the grid explorer".to_string(),
+                ZstorErrorKind::Channel => "error in internal channel communication".to_string(),
             }
         )
     }
@@ -394,6 +397,15 @@ impl From<IdentityError> for ZstorError {
     fn from(e: IdentityError) -> Self {
         ZstorError {
             kind: ZstorErrorKind::Explorer,
+            internal: InternalError::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<std::io::Error> for ZstorError {
+    fn from(e: std::io::Error) -> Self {
+        ZstorError {
+            kind: ZstorErrorKind::LocalIo(e.to_string()),
             internal: InternalError::Other(Box::new(e)),
         }
     }

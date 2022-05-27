@@ -1,3 +1,4 @@
+use actix::Actor;
 use actix::Addr;
 use actix_rt::signal::unix::SignalKind;
 use futures::future::join_all;
@@ -18,9 +19,9 @@ use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use zstor_v2::actors::config::ReloadConfig;
-use zstor_v2::actors::zstor::{
-    Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand, ZstorResponse,
-};
+use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
+use zstor_v2::actors::zstor_scheduler::Signaled;
+use zstor_v2::actors::zstor_scheduler::ZstorActorScheduler;
 use zstor_v2::config::Config;
 use zstor_v2::zdb::SequentialZdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
@@ -107,6 +108,8 @@ enum Cmd {
         /// program will still return exitcode 0 (success).
         #[structopt(name = "delete", long, short)]
         delete: bool,
+        #[structopt(name = "notblocking", long, short)]
+        notblocking: bool,
     },
     /// Rebuild already stored data
     ///
@@ -197,9 +200,32 @@ async fn main() -> ZstorResult<()> {
     Ok(())
 }
 
+async fn is_daemon_running(name: &str) -> ZstorResult<bool> {
+    if !Path::new(name).exists() {
+        return Ok(false);
+    }
+    let pid = tokio::fs::read_to_string(name).await?;
+    let process_name = tokio::fs::read_to_string(format!("/proc/{}/comm", pid)).await?;
+    let my_process_name = tokio::fs::read_to_string("/proc/self/comm").await?;
+    Ok(process_name == my_process_name)
+}
+async fn write_pid_file(name: &str) -> ZstorResult<bool> {
+    let already_running = is_daemon_running(name).await;
+    if let Ok(true) = already_running {
+        return Err(ZstorError::with_message(
+            ZstorErrorKind::LocalIo("socket".to_string()),
+            "another daemon instance is running".to_string(),
+        ));
+    } else if let Err(e) = already_running {
+        debug!("checking old pid error {}", e);
+    }
+    let mut file = tokio::fs::File::create(name).await?;
+    file.write_all(process::id().to_string().as_bytes()).await?;
+    Ok(true)
+}
+
 async fn real_main() -> ZstorResult<()> {
     let opts = Opts::from_args();
-
     // TODO: add check for file name
     let mut rolled_log_file = opts.log_file.clone();
     let name = if let Some(ext) = rolled_log_file.extension() {
@@ -215,7 +241,6 @@ async fn real_main() -> ZstorResult<()> {
         )
     };
     rolled_log_file.set_file_name(name);
-
     // init logger
     let policy = CompoundPolicy::new(
         Box::new(SizeTrigger::new(10 * MIB)),
@@ -258,6 +283,7 @@ async fn real_main() -> ZstorResult<()> {
             save_failure,
             error_on_failure: _error_on_failure,
             delete,
+            notblocking,
         } => {
             handle_command(
                 ZstorCommand::Store(Store {
@@ -265,6 +291,7 @@ async fn real_main() -> ZstorResult<()> {
                     key_path,
                     save_failure,
                     delete,
+                    blocking: !notblocking,
                 }),
                 opts.config,
             )
@@ -302,20 +329,26 @@ async fn real_main() -> ZstorResult<()> {
         }
         Cmd::Monitor => {
             let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
-
+            let mut pid_file = "/var/run/zstor.pid";
+            if let Some(cfg_pid_file) = cfg.pid_file() {
+                if let Some(v) = cfg_pid_file.to_str() {
+                    pid_file = v;
+                }
+            }
+            write_pid_file(pid_file).await?;
+            let zstor_scheduler = ZstorActorScheduler::new(zstor.clone()).start();
             let server = if let Some(socket) = cfg.socket() {
+                let _ = fs::remove_file(socket);
                 UnixListener::bind(socket)
                     .map_err(|e| ZstorError::new_io("Failed to bind unix socket".into(), e))?
             } else {
                 eprintln!("Missing \"socket\" argument in config");
                 process::exit(1);
             };
-
             // unwrapping this is safe as we just checked it is Some. We clone the value here to
             // avoid having to clone the whole config.
             let socket_path = cfg.socket().unwrap().to_path_buf();
             let _f = DropFile::new(&socket_path);
-
             // setup signal handlers
             let mut sigints = actix_rt::signal::unix::signal(SignalKind::interrupt())
                 .expect("Failed to install SIGINT handler");
@@ -334,7 +367,7 @@ async fn real_main() -> ZstorResult<()> {
                             },
                             Ok((con, remote)) => (con, remote),
                         };
-                        let zs = zstor.clone();
+                        let zs = zstor_scheduler.clone();
                         tokio::spawn(async move {
                             debug!("Handling new client connection from {:?}", remote);
                             if let Err(e) = handle_client(con, zs).await {
@@ -344,10 +377,32 @@ async fn real_main() -> ZstorResult<()> {
                     }
                     _ = sigints.recv() => {
                         info!("Shutting down zstor daemon after receiving SIGINT");
+                        match zstor_scheduler.send(Signaled{}).await {
+                            Ok(Ok(())) => {
+                                info!("all commands should be fullfilled by now")
+                            },
+                            Ok(Err(e)) => {
+                                error!("error while waiting for commands to finish {}", e)
+                            },
+                            Err(e) => {
+                                error!("error sending the signal to the scheduler {}", e)
+                            }
+                        }
                         break
                     },
                     _ = sigterms.recv() => {
                         info!("Shutting down zstor daemon after receiving SIGTERM");
+                        match zstor_scheduler.send(Signaled{}).await {
+                            Ok(Ok(())) => {
+                                info!("all commands should be fullfilled by now")
+                            },
+                            Ok(Err(e)) => {
+                                error!("error while waiting for commands to finish {}", e)
+                            },
+                            Err(e) => {
+                                error!("error sending the signal to the scheduler {}", e)
+                            }
+                        }
                         break
                     },
                     _ = siguserone.recv() => {
@@ -364,7 +419,7 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActor>) -> ZstorResult<()>
+async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActorScheduler>) -> ZstorResult<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
 {
