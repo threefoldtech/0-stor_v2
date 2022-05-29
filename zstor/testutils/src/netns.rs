@@ -28,8 +28,7 @@ impl Netns {
 
     pub fn delete(&self) -> Result<()> {
         println!("deleting {}", self.name);
-        Command::new("sudo")
-            .arg("ip")
+        Command::new("ip")
             .arg("netns")
             .arg("del")
             .arg(&self.name)
@@ -38,8 +37,7 @@ impl Netns {
     }
 
     pub fn own(&self, name: String) -> Result<()> {
-        Command::new("sudo")
-            .arg("ip")
+        Command::new("ip")
             .arg("link")
             .arg("set")
             .arg(&name)

@@ -2,8 +2,10 @@ use crate::utils::exec;
 use crate::utils::remove_dir_contents;
 use crate::utils::tempdir;
 use crate::utils::tempfile;
+use crate::utils::write_random_file;
 use anyhow::Result;
 use std::fs::create_dir_all;
+use std::fs::remove_file;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -58,6 +60,16 @@ impl Disk {
     pub fn cleanup(&self) -> Result<()> {
         remove_dir_contents(&self.path)?;
 
+        Ok(())
+    }
+    pub fn write_file(&self, name: &str, size_in_mb: u32) -> Result<()> {
+        let file_path = self.path.join(name);
+        write_random_file(&file_path, size_in_mb)?;
+        Ok(())
+    }
+    pub fn remove_file(&self, name: &str) -> Result<()> {
+        let file_path = self.path.join(name);
+        remove_file(&file_path)?;
         Ok(())
     }
 }

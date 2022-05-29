@@ -29,6 +29,7 @@ pub struct Zstor {
     fs_path: PathBuf,
     zdb_data_dir_path: PathBuf,
     zdb_index_dir_path: PathBuf,
+    max_zdb_data_dir_size: Option<u64>,
 }
 
 impl Zstor {
@@ -38,6 +39,7 @@ impl Zstor {
         fs_path: &Path,
         zdb_data_dir_path: &Path,
         zdb_index_dir_path: &Path,
+        max_zdb_data_dir_size: Option<u64>,
     ) -> Self {
         Self {
             zdb_addr: zdb_addr.to_string(),
@@ -45,6 +47,7 @@ impl Zstor {
             fs_path: fs_path.into(),
             zdb_data_dir_path: zdb_data_dir_path.into(),
             zdb_index_dir_path: zdb_index_dir_path.into(),
+            max_zdb_data_dir_size: max_zdb_data_dir_size,
         }
     }
 
@@ -157,7 +160,7 @@ impl Zstor {
             zdbfs_mountpoint: Some(self.fs_path.clone()),
             explorer: None,
             prometheus_port: None,
-            max_zdb_data_dir_size: None,
+            max_zdb_data_dir_size: self.max_zdb_data_dir_size,
             groups: vec![Group {
                 backends: data_backends,
             }],

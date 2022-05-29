@@ -200,17 +200,17 @@ async fn main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn is_daemon_running(name: &str) -> ZstorResult<bool> {
-    if !Path::new(name).exists() {
+async fn is_daemon_running(pid_path: &Path) -> ZstorResult<bool> {
+    if !Path::new(pid_path).exists() {
         return Ok(false);
     }
-    let pid = tokio::fs::read_to_string(name).await?;
+    let pid = tokio::fs::read_to_string(pid_path).await?;
     let process_name = tokio::fs::read_to_string(format!("/proc/{}/comm", pid)).await?;
     let my_process_name = tokio::fs::read_to_string("/proc/self/comm").await?;
     Ok(process_name == my_process_name)
 }
-async fn write_pid_file(name: &str) -> ZstorResult<bool> {
-    let already_running = is_daemon_running(name).await;
+async fn write_pid_file(path: &Path) -> ZstorResult<bool> {
+    let already_running = is_daemon_running(path).await;
     if let Ok(true) = already_running {
         return Err(ZstorError::with_message(
             ZstorErrorKind::LocalIo("socket".to_string()),
@@ -219,7 +219,7 @@ async fn write_pid_file(name: &str) -> ZstorResult<bool> {
     } else if let Err(e) = already_running {
         debug!("checking old pid error {}", e);
     }
-    let mut file = tokio::fs::File::create(name).await?;
+    let mut file = tokio::fs::File::create(path).await?;
     file.write_all(process::id().to_string().as_bytes()).await?;
     Ok(true)
 }
@@ -329,13 +329,13 @@ async fn real_main() -> ZstorResult<()> {
         }
         Cmd::Monitor => {
             let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
-            let mut pid_file = "/var/run/zstor.pid";
+            let mut pid_path = PathBuf::from("/var/run/zstor.pid");
             if let Some(cfg_pid_file) = cfg.pid_file() {
                 if let Some(v) = cfg_pid_file.to_str() {
-                    pid_file = v;
+                    pid_path = PathBuf::from(v);
                 }
             }
-            write_pid_file(pid_file).await?;
+            write_pid_file(&pid_path).await?;
             let zstor_scheduler = ZstorActorScheduler::new(zstor.clone()).start();
             let server = if let Some(socket) = cfg.socket() {
                 let _ = fs::remove_file(socket);
@@ -348,7 +348,8 @@ async fn real_main() -> ZstorResult<()> {
             // unwrapping this is safe as we just checked it is Some. We clone the value here to
             // avoid having to clone the whole config.
             let socket_path = cfg.socket().unwrap().to_path_buf();
-            let _f = DropFile::new(&socket_path);
+            let _socket_f = DropFile::new(&socket_path);
+            let _pid_f = DropFile::new(&pid_path);
             // setup signal handlers
             let mut sigints = actix_rt::signal::unix::signal(SignalKind::interrupt())
                 .expect("Failed to install SIGINT handler");

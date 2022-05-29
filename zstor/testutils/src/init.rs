@@ -23,6 +23,7 @@ pub const HOOK_PATH: &str = "/usr/local/bin/hook.sh";
 pub struct TestParams {
     pub id: String,
     pub network_speed: Option<u32>,
+    pub max_zdb_data_dir_size: Option<u64>,
     pub data_disk_size: String,
     pub fs_disk_size: String,
     pub zdb_fs_port: u16,
@@ -45,6 +46,7 @@ impl Default for TestParams {
         Self {
             id: "id".into(),
             network_speed: None,
+            max_zdb_data_dir_size: None,
             data_disk_size: "500M".into(),
             fs_disk_size: "500M".into(),
             zdb_fs_port: 9900,
@@ -174,6 +176,7 @@ impl TestManager {
             &mountpoint,
             Path::new(&fs_zdb_args.data.unwrap()),
             Path::new(&fs_zdb_args.index.unwrap()),
+            self.params.max_zdb_data_dir_size,
         );
         let zstor_proc = zstor.start()?;
         self.zstor_proc = Some(zstor_proc);
@@ -193,6 +196,7 @@ impl TestManager {
             &mountpoint,
             Path::new(&fs_zdb_args.data.unwrap()),
             Path::new(&fs_zdb_args.index.unwrap()),
+            self.params.max_zdb_data_dir_size,
         );
         zstor.start_blocking()?;
 
