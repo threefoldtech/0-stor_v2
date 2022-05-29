@@ -140,7 +140,6 @@ impl Looper {
                         // - retry indefinitely
                         error!("failed to process store command {}, queueing a retry", e);
                         self.cmds.repush(msg.priority, msg);
-                        return;
                     }
                 } else {
                     // error means the receiver hung up, should log probably, but shouldn't happen anyway

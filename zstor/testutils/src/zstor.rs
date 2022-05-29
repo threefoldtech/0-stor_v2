@@ -47,7 +47,7 @@ impl Zstor {
             fs_path: fs_path.into(),
             zdb_data_dir_path: zdb_data_dir_path.into(),
             zdb_index_dir_path: zdb_index_dir_path.into(),
-            max_zdb_data_dir_size: max_zdb_data_dir_size,
+            max_zdb_data_dir_size,
         }
     }
 

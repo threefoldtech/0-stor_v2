@@ -388,13 +388,12 @@ impl Handler<ExpandStorage> for ExplorerActor {
                 // First create a list of (pool_id, node_id)
                 let mut nodes = own_pools
                     .into_iter()
-                    .map(|(id, pool)| {
+                    .flat_map(|(id, pool)| {
                         pool.node_ids
                             .into_iter()
                             .map(|nid| (id, nid))
                             .collect::<Vec<_>>()
                     })
-                    .flatten()
                     .collect::<Vec<_>>();
 
                 // Shuffle nodes list, so they are in random order

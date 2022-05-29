@@ -224,8 +224,7 @@ impl Config {
     pub fn backends(&self) -> Vec<&ZdbConnectionInfo> {
         self.groups
             .iter()
-            .map(|group| &group.backends)
-            .flatten()
+            .flat_map(|group| &group.backends)
             .collect()
     }
 

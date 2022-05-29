@@ -586,10 +586,7 @@ impl InternalZdb {
             .map(|line| {
                 let mut split = line.split(": ");
                 // unwraps are safe because fixed
-                (
-                    split.next().or(Some("")).unwrap(),
-                    split.next().or(Some("")).unwrap(),
-                )
+                (split.next().unwrap_or(""), split.next().unwrap_or(""))
             })
             .collect();
 
@@ -781,12 +778,12 @@ impl UserKeyZdb {
 
     /// Retrieve some previously stored data from it's key.
     pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> ZdbResult<Option<Vec<u8>>> {
-        Ok(self.internal.get(key.as_ref()).await?)
+        self.internal.get(key.as_ref()).await
     }
 
     /// Delete some previously stored data from it's key.
     pub async fn delete<K: AsRef<[u8]>>(&self, key: K) -> ZdbResult<()> {
-        Ok(self.internal.delete(key.as_ref()).await?)
+        self.internal.delete(key.as_ref()).await
     }
 
     /// Get a stream which yields all the keys in the namespace.

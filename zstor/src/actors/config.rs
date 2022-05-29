@@ -140,7 +140,7 @@ impl Handler<ReplaceMetaBackend> for ConfigActor {
 /// Save a config to the config file.
 async fn save_config(config_path: PathBuf, config: Arc<Config>) -> Result<(), ZstorError> {
     let data = toml::to_vec(config.deref()).map_err(ZstorError::from)?;
-    Ok(fs::write(&config_path, data)
+    fs::write(&config_path, data)
         .await
-        .map_err(|e| ZstorError::new_io("Could not save config file".into(), e))?)
+        .map_err(|e| ZstorError::new_io("Could not save config file".into(), e))
 }

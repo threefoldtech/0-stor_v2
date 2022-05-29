@@ -249,7 +249,7 @@ impl ExplorerClient {
             .hash_and_sign(reservation.json.as_bytes());
 
         // hex encode the customer signature
-        reservation.customer_signature = hex::encode(customer_signature_bytes.to_vec());
+        reservation.customer_signature = hex::encode(customer_signature_bytes);
 
         let url = format!("{url}/api/v1/reservations/pools", url = self.get_url());
         let resp = self
@@ -363,7 +363,7 @@ impl ExplorerClient {
             .data(workload::WorkloadData::Zdb(zdb))
             .build(&self.user_identity)?;
 
-        Ok(self.workload_deploy(&w).await?)
+        self.workload_deploy(&w).await
     }
 
     fn construct_headers(&self, date: chrono::DateTime<chrono::Utc>) -> HeaderMap {

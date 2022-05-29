@@ -142,12 +142,11 @@ impl Handler<RecoverFile> for PipelineActor {
         let decrypted = encryptor.decrypt(&decoded)?;
 
         // create the file
-        let file_path;
-        if let Some(ref root) = msg.cfg.virtual_root() {
-            file_path = root.join(&msg.path);
+        let file_path = if let Some(ref root) = msg.cfg.virtual_root() {
+            root.join(&msg.path)
         } else {
-            file_path = msg.path;
-        }
+            msg.path
+        };
         let mut root = file_path.clone();
         root.pop();
         fs::create_dir_all(root).map_err(|e| {

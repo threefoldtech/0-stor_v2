@@ -29,10 +29,10 @@ impl<T> PriorityQueue<T> {
     /// pop the entry with least priority
     pub fn pop(&mut self) -> Option<T> {
         for q in self.queues.iter_mut() {
-            if q.len() != 0 {
+            if !q.is_empty() {
                 return q.pop_front();
             }
         }
-        return None;
+        None
     }
 }
