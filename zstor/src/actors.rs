@@ -16,6 +16,8 @@ pub mod meta;
 pub mod metrics;
 /// Actor implementation of the pipeline
 pub mod pipeline;
+/// Priority queue implementation
+pub mod priority_queue;
 /// Actor implementation of a repair queue.
 pub mod repairer;
 /// Actor which periodically gets stats from a 0-db-fs.
@@ -23,3 +25,5 @@ pub mod zdbfs;
 /// Actor implementation of the main zstor functionality. This actor takes care of the actual
 /// object manipulation.
 pub mod zstor;
+/// Forwards the commands to the store actors after ordering them.
+pub mod zstor_scheduler;

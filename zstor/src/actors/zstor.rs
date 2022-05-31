@@ -23,7 +23,7 @@ use tokio::{fs, io, task::JoinHandle};
 
 use super::config::ReloadConfig;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 /// All possible commands zstor operates on.
 pub enum ZstorCommand {
     /// Command to store a file.
@@ -47,7 +47,7 @@ pub enum ZstorResponse {
     Checksum(Checksum),
 }
 
-#[derive(Serialize, Deserialize, Debug, Message)]
+#[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the store command of zstor.
 pub struct Store {
@@ -60,9 +60,11 @@ pub struct Store {
     pub save_failure: bool,
     /// Attempt to delete the file after a successful upload.
     pub delete: bool,
+    /// Wait for upload to finish before returning (used only by the scheduler, zstor always blocks)
+    pub blocking: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Message)]
+#[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the retrieve command of zstor.
 pub struct Retrieve {
@@ -70,7 +72,7 @@ pub struct Retrieve {
     pub file: PathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Message)]
+#[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the rebuild command of zstor.
 pub struct Rebuild {
@@ -89,7 +91,7 @@ pub struct Rebuild {
     pub key: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Message)]
+#[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<Option<Checksum>, ZstorError>")]
 /// Message for the check command of zstor.
 pub struct Check {

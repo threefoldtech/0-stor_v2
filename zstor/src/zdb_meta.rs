@@ -837,7 +837,7 @@ pub struct CorruptedKey {
 
 impl fmt::Display for CorruptedKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "key reconstruction failed, data is corrupted. Need at least {} shards, only {} available", self.available_shards, self.required_shards)
+        write!(f, "key reconstruction failed, data is corrupted. Need at least {} shards, only {} available", self.required_shards, self.available_shards)
     }
 }
 

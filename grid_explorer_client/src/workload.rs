@@ -74,7 +74,7 @@ impl Workload {
         workload_signature_challenge.push_str(self.data.challenge().as_str());
         let customer_signature_bytes =
             user_identity.hash_and_sign(workload_signature_challenge.as_bytes());
-        let encoded_signature = hex::encode(customer_signature_bytes.to_vec());
+        let encoded_signature = hex::encode(customer_signature_bytes);
         self.customer_signature = encoded_signature;
     }
 }

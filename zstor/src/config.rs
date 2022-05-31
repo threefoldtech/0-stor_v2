@@ -15,46 +15,49 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// The minimum amount of shards which are needed to recover the original data.
-    minimal_shards: usize,
+    pub minimal_shards: usize,
     /// The amount of redundant data shards which are generated when the data is encoded. Essentially,
     /// this many shards can be lost while still being able to recover the original data.
-    expected_shards: usize,
+    pub expected_shards: usize,
     /// The amount of groups which one should be able to loose while still being able to recover
     /// the original data.
-    redundant_groups: usize,
+    pub redundant_groups: usize,
     /// The amount of nodes that can be lost in every group while still being able to recover the
     /// original data.
-    redundant_nodes: usize,
+    pub redundant_nodes: usize,
     /// virtual root on the filesystem to use, this path will be removed from all files saved. If
     /// a file path is loaded, the path will be interpreted as relative to this directory
-    root: Option<PathBuf>,
+    pub root: Option<PathBuf>,
     /// Optional path to a unix socket. This socket is required in case zstor needs to run in
     /// daemon mode. If this is present, zstor invocations will first try to connect to the
     /// socket. If it is not found, the command is run in-process, else it is encoded and send to
     /// the socket so the daemon can process it.
-    socket: Option<PathBuf>,
+    pub socket: Option<PathBuf>,
+    /// Optional path to file to store the daemon pid. If another daemon already running
+    /// the process won't start another.
+    pub pid_file: Option<PathBuf>,
     /// Optional path to the local 0-db data file directory. If set, it will be monitored and kept
     /// within the size limits.
-    zdb_data_dir_path: Option<PathBuf>,
+    pub zdb_data_dir_path: Option<PathBuf>,
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
-    max_zdb_data_dir_size: Option<u64>,
+    pub max_zdb_data_dir_size: Option<u64>,
     /// The mount point of an optional 0-db-fs. If present, stats will be collected from the
     /// 0-db-fs process.
-    zdbfs_mountpoint: Option<PathBuf>,
+    pub zdbfs_mountpoint: Option<PathBuf>,
     /// An optional port on which prometheus metrics will be exposed. If this is not set, the
     /// metrics will not get exposed.
-    prometheus_port: Option<u16>,
+    pub prometheus_port: Option<u16>,
     /// configuration to use for the encryption stage.
-    encryption: Encryption,
+    pub encryption: Encryption,
     /// configuration to use for the compression stage.
-    compression: Compression,
+    pub compression: Compression,
     /// configuration for the metadata store to use.
-    meta: Meta,
+    pub meta: Meta,
     /// Explorer configuration, if this is not set automatic provisioning won't be enabled
-    explorer: Option<Explorer>,
+    pub explorer: Option<Explorer>,
     /// The backend groups to write the data to.
-    groups: Vec<Group>,
+    pub groups: Vec<Group>,
 }
 
 /// A collection of backends to write to, which _should_ be geographically close to each other.
@@ -62,7 +65,7 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Group {
     /// The individual backends in the group.
-    backends: Vec<ZdbConnectionInfo>,
+    pub backends: Vec<ZdbConnectionInfo>,
 }
 
 impl Group {
@@ -212,12 +215,16 @@ impl Config {
         self.socket.as_ref().map(|x| x as _)
     }
 
+    /// Return the pid file path if it is set.
+    pub fn pid_file(&self) -> Option<&Path> {
+        self.pid_file.as_ref().map(|x| x as _)
+    }
+
     /// Return a list of all available backends in the config.
     pub fn backends(&self) -> Vec<&ZdbConnectionInfo> {
         self.groups
             .iter()
-            .map(|group| &group.backends)
-            .flatten()
+            .flat_map(|group| &group.backends)
             .collect()
     }
 
@@ -512,6 +519,7 @@ mod tests {
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
+            pid_file: Some("/tmp/zstor.pid".into()),
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
             explorer: Some(super::Explorer {
@@ -584,6 +592,7 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+pid_file = "/tmp/zstor.pid"
 zdbfs_mountpoint = "/tmp/test"
 
 [encryption]
@@ -685,6 +694,7 @@ password = "supersecretpass"
             redundant_groups: 1,
             redundant_nodes: 1,
             socket: Some("/tmp/zstor.sock".into()),
+            pid_file: Some("/tmp/zstor.pid".into()),
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
             explorer: Some(super::Explorer {
@@ -757,6 +767,7 @@ redundant_groups = 1
 redundant_nodes = 1
 root = "/virtualroot"
 socket = "/tmp/zstor.sock"
+pid_file = "/tmp/zstor.pid"
 zdbfs_mountpoint = "/tmp/test"
 
 [explorer]
