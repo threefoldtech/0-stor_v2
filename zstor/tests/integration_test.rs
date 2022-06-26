@@ -146,7 +146,7 @@ fn retrieves_more_prior_than_stores() {
     // it issues a retrieve command. this command should be handled before
     // the rest of the stores. this is because the zdb file system blocks on it
     let mut manager = TestManager::new(TestParams {
-        id: "rmpts".to_string(),
+        id: "zse".to_string(),
         network_speed: None,
         max_zdb_data_dir_size: None,
         data_disk_size: "20G".into(),
