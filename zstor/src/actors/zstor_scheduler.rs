@@ -417,7 +417,7 @@ where
             }
         });
 
-        if let Err(_) = self.stores.save() {
+        if self.stores.save().is_err() {
             error!("Error while saving non-handled stores");
         }
 
