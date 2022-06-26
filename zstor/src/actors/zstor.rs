@@ -74,7 +74,7 @@ pub trait StorePersist {
     /// Delete Store By the returned Id
     fn delete(&self, id: u128);
     /// Return the content into Vector without consuming the handle
-    fn vectored_content(&self,) -> Vec<Store>;
+    fn vectored_content(&self) -> Vec<Store>;
     /// Persist the content
     fn save(&self) -> Result<(), Self::Error>;
 }
