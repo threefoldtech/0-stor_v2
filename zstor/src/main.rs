@@ -19,14 +19,18 @@ use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use zstor_v2::actors::config::ReloadConfig;
+use zstor_v2::actors::zstor::StorePersist;
 use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
 use zstor_v2::actors::zstor_scheduler::Signaled;
+use zstor_v2::actors::zstor_scheduler::StoreDb;
 use zstor_v2::actors::zstor_scheduler::ZstorActorScheduler;
 use zstor_v2::config::Config;
 use zstor_v2::zdb::SequentialZdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 const MIB: u64 = 1 << 20;
+
+const STORES_DB_PATH: &str = "storesdb.ron";
 
 #[derive(StructOpt, Debug)]
 #[structopt(about = "zstor data encoder")]
@@ -336,7 +340,10 @@ async fn real_main() -> ZstorResult<()> {
                 }
             }
             write_pid_file(&pid_path).await?;
-            let zstor_scheduler = ZstorActorScheduler::new(zstor.clone()).start();
+
+            let zstordb = StoreDb::new_or_load_from(STORES_DB_PATH);
+            let old_stores = zstordb.vectored_content();
+            let zstor_scheduler = ZstorActorScheduler::new(zstor.clone(), zstordb).start();
             let server = if let Some(socket) = cfg.socket() {
                 let _ = fs::remove_file(socket);
                 UnixListener::bind(socket)
@@ -358,6 +365,23 @@ async fn real_main() -> ZstorResult<()> {
             let mut siguserone = actix_rt::signal::unix::signal(SignalKind::user_defined1())
                 .expect("Failed to install SIGUSR1 handler");
 
+            let mut sigkill =
+                actix_rt::signal::unix::signal(SignalKind::from_raw(signal_hook::consts::SIGKILL))
+                    .expect("Failed to install SIGKILL handler");
+
+            // handle old stores
+
+            let zs = zstor_scheduler.clone();
+
+            tokio::spawn(async move {
+                debug!("Handling old(persisted) stores");
+                for store in old_stores {
+                    if let Err(e) = zs.send(store).await {
+                        error!("Error while handeling old store: {}", e);
+                    }
+                }
+            });
+
             loop {
                 tokio::select! {
                     accepted = server.accept() => {
@@ -375,6 +399,22 @@ async fn real_main() -> ZstorResult<()> {
                                 error!("Error while handeling client: {}", e);
                             }
                         });
+                    }
+
+                    _ = sigkill.recv() => {
+                        info!("Save non-handled stores info into persistent db after receiving SIGKILL");
+                        match zstor_scheduler.send(Signaled{}).await {
+                            Ok(Ok(())) => {
+                                info!("all commands should be fullfilled by now")
+                            },
+                            Ok(Err(e)) => {
+                                error!("error while waiting for commands to finish {}", e)
+                            },
+                            Err(e) => {
+                                error!("error sending the signal to the scheduler {}", e)
+                            }
+                        }
+                        break
                     }
                     _ = sigints.recv() => {
                         info!("Shutting down zstor daemon after receiving SIGINT");
@@ -420,9 +460,10 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActorScheduler>) -> ZstorResult<()>
+async fn handle_client<C, D>(mut con: C, zstor: Addr<ZstorActorScheduler<D>>) -> ZstorResult<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
+    D: 'static + StorePersist + std::marker::Unpin,
 {
     // Read the command from the connection
     let size = con

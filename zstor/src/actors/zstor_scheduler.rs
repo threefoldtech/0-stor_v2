@@ -1,11 +1,18 @@
+use std::collections::HashMap;
+use std::path::Path;
+
 use super::priority_queue::PriorityQueue;
-use super::zstor::{Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand};
+use super::zstor::{Check, Rebuild, Retrieve, Store, StorePersist, ZstorActor, ZstorCommand};
 use crate::{meta::Checksum, ZstorError, ZstorErrorKind};
 use actix::prelude::*;
 use log::{debug, error};
+use rustbreak::backend::FileBackend;
+use rustbreak::deser::Ron;
+use rustbreak::{Database, FileDatabase, RustbreakError};
 use tokio::sync::{mpsc, oneshot};
 const LEVELS: u16 = 3;
 use tokio::time;
+use uuid::Uuid;
 
 #[derive(Debug, Message)]
 #[rtype(result = "Result<(), ZstorError>")]
@@ -52,7 +59,7 @@ pub enum ZstorSchedulerResponse {
     Done,
 }
 /// Worker for procesing the scheduler messages
-pub struct Looper {
+struct Looper {
     zstor: Addr<ZstorActor>,
     cmds: PriorityQueue<ZstorSchedulerMessage>,
     ch: mpsc::UnboundedReceiver<ZstorSchedulerMessage>,
@@ -150,16 +157,85 @@ impl Looper {
     }
 }
 
-/// Actor for the main zstor object encoding and decoding.
-pub struct ZstorActorScheduler {
-    zstor: Addr<ZstorActor>,
-    ch: Option<mpsc::UnboundedSender<ZstorSchedulerMessage>>,
+/// This DB is works in-memory until calling save() function
+pub struct StoreDb {
+    db: Database<HashMap<u128, Store>, FileBackend, Ron>,
 }
 
-impl ZstorActorScheduler {
+impl StoreDb {
+    /// Create a new StoreDb
+    /// if the path exists load it
+    pub fn new_or_load_from<P: AsRef<Path>>(path: P) -> Self {
+        let db = FileDatabase::<HashMap<u128, Store>, Ron>::load_from_path_or_default(path)
+            .expect("can't open database file for saving stores");
+
+        Self { db }
+    }
+}
+
+impl StorePersist for StoreDb {
+    type Error = RustbreakError;
+
+    fn insert(&self, store: Store) -> u128 {
+        let id = Uuid::new_v4().as_u128();
+        let result = self.db.write(|db| {
+            db.insert(id, store);
+        });
+        if let Err(err) = result {
+            log::debug!("failed to insert store into store db: '{}'", err);
+        }
+        id
+    }
+
+    fn delete(&self, id: u128) {
+        let result = self.db.write(|db| db.remove(&id));
+
+        if let Err(err) = result {
+            log::debug!("failed to remove store from store db: '{}'", err);
+        }
+    }
+
+    fn save(&self) -> Result<(), Self::Error> {
+        self.db.save()
+    }
+
+    fn vectored_content(&self) -> Vec<Store> {
+        let data = self
+            .db
+            .read(|db| {
+                let stores = { db.values().into_iter().map(|v| v.to_owned()).collect() };
+                stores
+            })
+            .unwrap();
+
+        self.db
+            .write(|db| {
+                db.clear();
+            })
+            .unwrap();
+
+        data
+    }
+}
+
+/// Actor for the main zstor object encoding and decoding.
+pub struct ZstorActorScheduler<D> {
+    zstor: Addr<ZstorActor>,
+    ch: Option<mpsc::UnboundedSender<ZstorSchedulerMessage>>,
+    stores: D,
+}
+
+impl<D> ZstorActorScheduler<D>
+where
+    D: StorePersist,
+{
     /// new
-    pub fn new(zstor: Addr<ZstorActor>) -> ZstorActorScheduler {
-        Self { zstor, ch: None }
+    pub fn new(zstor: Addr<ZstorActor>, store_db: D) -> ZstorActorScheduler<D> {
+        Self {
+            zstor,
+            ch: None,
+            stores: store_db,
+        }
     }
 
     fn push_zstor(
@@ -194,7 +270,10 @@ impl ZstorActorScheduler {
     }
 }
 
-impl Actor for ZstorActorScheduler {
+impl<D> Actor for ZstorActorScheduler<D>
+where
+    D: std::marker::Unpin + 'static,
+{
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -205,12 +284,18 @@ impl Actor for ZstorActorScheduler {
     }
 }
 
-impl Handler<Store> for ZstorActorScheduler {
+impl<D> Handler<Store> for ZstorActorScheduler<D>
+where
+    D: 'static + StorePersist + std::marker::Unpin,
+{
     type Result = ResponseFuture<Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Store, _: &mut Self::Context) -> Self::Result {
         let ch = self.ch.as_ref().unwrap().clone();
-        Box::pin(async move {
+
+        let id = self.stores.insert(msg.clone());
+
+        let ret = Box::pin(async move {
             let blocking = msg.blocking;
             let resp_fut = Self::push_zstor(ch, ZstorCommand::Store(msg), blocking)?;
             if !blocking {
@@ -226,11 +311,18 @@ impl Handler<Store> for ZstorActorScheduler {
                     format!("received {:?} while expecting a store response", resp),
                 )),
             }
-        })
+        });
+
+        self.stores.delete(id);
+
+        ret
     }
 }
 
-impl Handler<Retrieve> for ZstorActorScheduler {
+impl<D> Handler<Retrieve> for ZstorActorScheduler<D>
+where
+    D: 'static + StorePersist + std::marker::Unpin,
+{
     type Result = ResponseFuture<Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Retrieve, _: &mut Self::Context) -> Self::Result {
@@ -252,7 +344,10 @@ impl Handler<Retrieve> for ZstorActorScheduler {
     }
 }
 
-impl Handler<Rebuild> for ZstorActorScheduler {
+impl<D> Handler<Rebuild> for ZstorActorScheduler<D>
+where
+    D: 'static + StorePersist + std::marker::Unpin,
+{
     type Result = ResponseFuture<Result<(), ZstorError>>;
 
     fn handle(&mut self, msg: Rebuild, _: &mut Self::Context) -> Self::Result {
@@ -274,7 +369,10 @@ impl Handler<Rebuild> for ZstorActorScheduler {
     }
 }
 
-impl Handler<Check> for ZstorActorScheduler {
+impl<D> Handler<Check> for ZstorActorScheduler<D>
+where
+    D: 'static + StorePersist + std::marker::Unpin,
+{
     type Result = ResponseFuture<Result<Option<Checksum>, ZstorError>>;
 
     fn handle(&mut self, msg: Check, _: &mut Self::Context) -> Self::Result {
@@ -296,12 +394,15 @@ impl Handler<Check> for ZstorActorScheduler {
     }
 }
 
-impl Handler<Signaled> for ZstorActorScheduler {
+impl<D> Handler<Signaled> for ZstorActorScheduler<D>
+where
+    D: 'static + StorePersist + std::marker::Unpin,
+{
     type Result = ResponseFuture<Result<(), ZstorError>>;
 
     fn handle(&mut self, _: Signaled, _: &mut Self::Context) -> Self::Result {
         let ch = self.ch.as_ref().unwrap().clone();
-        Box::pin(async move {
+        let ret = Box::pin(async move {
             let resp = Self::push(ch, ZstorSchedulerCommand::Finalize, true, LEVELS - 1)?
                 .await
                 .map_err(|err| {
@@ -314,6 +415,13 @@ impl Handler<Signaled> for ZstorActorScheduler {
                     format!("received {:?} while expecting a check response", resp),
                 )),
             }
-        })
+        });
+
+
+        if let Err(_) = self.stores.save() {
+            error!("Error while saving non-handled stores");
+        }
+
+        ret
     }
 }

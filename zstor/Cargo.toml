@@ -1,9 +1,9 @@
 [package]
-name = "zstor_v2"
-version = "0.3.0-rc.12"
 authors = ["The Threefold Tech developers <info@threefold.tech>"]
 edition = "2021"
+name = "zstor_v2"
 repository = "https://github.com/threefoldtech/0-stor_v2"
+version = "0.3.0-rc.12"
 
 [[bin]]
 name = "zstor_v2"
@@ -14,50 +14,53 @@ name = "test-zdb"
 path = "src/test_zdb.rs"
 
 [[bench]]
-name = "aes_encryptor"
 harness = false
+name = "aes_encryptor"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 vendored = ["openssl"]
 
 [dependencies]
-reed-solomon-erasure = "4"
-rand = "0.7"
-serde = { version = "1.0", features = ["derive"] }
-toml = "0.5"
-hex = "0.4"
-aes-gcm = { version = "0.9", features = ["std"] }
-snap = "1"
-log = { version = "0.4", features = ["release_max_level_debug"] }
-redis = { version = "0.20", default-features = false, features = ["aio", "tokio-comp", "connection-manager"] }
-sha-1 = "0.9"
+actix = "0.12" 
+actix-rt = "2.2" 
+aes-gcm = {version = "0.9", features = ["std"]} 
+async-trait = "0.1" 
+bincode = "1" 
+blake2 = "0.9" 
+chrono = "0.4" 
+futures = "0.3" 
+gray-codes = "0.1" 
+grid_explorer_client = {path = "../grid_explorer_client"} 
+hex = "0.4" 
+log = {version = "0.4", features = ["release_max_level_debug"]} 
+log4rs = {version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"]} 
+nix = "0.22" 
+openssl = {version = "0.10", features = ["vendored"], optional = true} 
+path-clean = "0.1.0" 
+pretty_env_logger = "0.4" 
+prometheus = "0.12" 
+rand = "0.7" 
+redis = {version = "0.20", default-features = false, features = ["aio", "tokio-comp", "connection-manager"]} 
+reed-solomon-erasure = "4" 
+rustbreak = {version = "2.0.0", features = ["ron_enc"]} 
+serde = {version = "1.0", features = ["derive"]} 
+serde_json = "1" 
+sha-1 = "0.9" 
+signal-hook = "0.3.14" 
 simple_logger = "1.11" # TODO: remove this
-pretty_env_logger = "0.4"
-structopt = "0.3"
-tokio = { version = "1", features = ["rt", "macros", "fs"] }
-futures = "0.3"
-blake2 = "0.9"
-gray-codes = "0.1"
-log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
-async-trait = "0.1"
-bincode = "1"
-openssl = { version = "0.10", features = ["vendored"], optional = true } 
-actix = "0.12"
-actix-rt = "2.2"
-tokio-util = "0.6"
-grid_explorer_client = { path = "../grid_explorer_client" }
-chrono = "0.4"
-serde_json = "1"
-prometheus = "0.12"
-tide = "0.16"
-nix = "0.22"
-path-clean = "0.1.0"
+snap = "1" 
+structopt = "0.3" 
+tide = "0.16" 
+tokio = {version = "1", features = ["rt", "macros", "fs"]} 
+tokio-util = "0.6" 
+toml = "0.5" 
+uuid = {version = "1.1.2", features = ["v4"]} 
 
 [build-dependencies]
 bindgen = "0.59"
 
 [dev-dependencies]
-rand = "0.7"
 criterion = "0.3"
-testutils = { path = "testutils" }
+rand = "0.7"
+testutils = {path = "testutils"}

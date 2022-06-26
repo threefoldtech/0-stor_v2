@@ -64,6 +64,21 @@ pub struct Store {
     pub blocking: bool,
 }
 
+/// Store objects can be Saved to the Disk with a DB implements this trait
+pub trait StorePersist {
+    /// Returned Err
+    type Error;
+    /// Insert Store
+    /// Returns store's Id
+    fn insert(&self, store: Store) -> u128;
+    /// Delete Store By the returned Id
+    fn delete(&self, id: u128);
+    /// Return the content into Vector without consuming the handle
+    fn vectored_content(&self,) -> Vec<Store>;
+    /// Persist the content
+    fn save(&self) -> Result<(), Self::Error>;
+}
+
 #[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<(), ZstorError>")]
 /// Message for the retrieve command of zstor.
