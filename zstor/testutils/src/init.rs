@@ -28,6 +28,8 @@ pub struct TestParams {
     pub fs_disk_size: String,
     pub zdb_fs_port: u16,
     // add more when we need to
+    pub expected_shards: Option<usize>,
+    pub minimal_shards: Option<usize>,
 }
 
 impl TestParams {
@@ -37,6 +39,14 @@ impl TestParams {
     }
     pub fn with_port(mut self, zdb_fs_port: u16) -> Self {
         self.zdb_fs_port = zdb_fs_port;
+        self
+    }
+    pub fn with_expected_shards(mut self, expected_shards: usize) -> Self {
+        self.expected_shards = Some(expected_shards);
+        self
+    }
+    pub fn with_minimal_shards(mut self, minimal_shards: usize) -> Self {
+        self.minimal_shards = Some(minimal_shards);
         self
     }
 }
@@ -50,6 +60,8 @@ impl Default for TestParams {
             data_disk_size: "500M".into(),
             fs_disk_size: "500M".into(),
             zdb_fs_port: 9900,
+            expected_shards: None,
+            minimal_shards: None,
         }
     }
 }
@@ -178,7 +190,13 @@ impl TestManager {
             Path::new(&fs_zdb_args.index.unwrap()),
             self.params.max_zdb_data_dir_size,
         );
-        let zstor_proc = zstor.start()?;
+        let zstor_proc = if self.params.expected_shards.is_some()
+            || self.params.minimal_shards.is_some()
+        {
+            zstor.start_custom_shards(self.params.minimal_shards, self.params.expected_shards)?
+        } else {
+            zstor.start()?
+        };
         self.zstor_proc = Some(zstor_proc);
         zstor.fix_hook(&hook_path)?;
         self.zstor = Some(zstor);

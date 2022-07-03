@@ -71,6 +71,26 @@ impl Zstor {
         )?;
         Ok(child)
     }
+    pub fn start_custom_shards(&self, minimal_shards: Option<usize>, expected_shards: Option<usize>) -> Result<Child> {
+        let cfg_path = self.config_path();
+        let cfg_str = toml::to_string(&self.cfg_custom_shards(minimal_shards, expected_shards))?;
+        File::create(cfg_path.to_str().unwrap())?;
+        fs::write(cfg_path.clone(), cfg_str)?;
+        let mut zstor = Command::new("zstor");
+        zstor
+            .arg("--log_file")
+            .arg(self.log_path().to_str().unwrap())
+            .arg("-c")
+            .arg(cfg_path.to_str().unwrap())
+            .arg("monitor");
+        let child = zstor.spawn()?;
+        wait_zstor(
+            self.socket_path().to_str().unwrap().into(),
+            None,
+            time::Duration::from_secs(60),
+        )?;
+        Ok(child)
+    }
 
     pub fn start_blocking(&self) -> Result<()> {
         let cfg_path = self.config_path();
@@ -152,6 +172,48 @@ impl Zstor {
         Config {
             minimal_shards: 1,
             expected_shards: 2,
+            redundant_groups: 0,
+            redundant_nodes: 0,
+            socket: Some(socket_path),
+            pid_file: Some(pid_path),
+            zdb_data_dir_path: Some(self.zdb_data_dir_path.clone()),
+            zdbfs_mountpoint: Some(self.fs_path.clone()),
+            explorer: None,
+            prometheus_port: None,
+            max_zdb_data_dir_size: self.max_zdb_data_dir_size,
+            groups: vec![Group {
+                backends: data_backends,
+            }],
+            encryption: Encryption::Aes(SymmetricKey::new([0u8; 32])),
+            compression: Compression::Snappy,
+            root: None,
+            meta: Meta::Zdb(ZdbMetaStoreConfig::new(
+                "someprefix".to_string(),
+                Encryption::Aes(SymmetricKey::new([1u8; 32])),
+                meta_backends.try_into().unwrap(),
+            )),
+        }
+    }
+    fn cfg_custom_shards(&self, minimal_shards: Option<usize>, expected_shards: Option<usize>) -> Config {
+        let socket_path = self.socket_path();
+        let pid_path = self.pid_path();
+        let mut meta_backends = vec![];
+        let mut data_backends = vec![];
+        for i in 0..4 {
+            meta_backends.push(ZdbConnectionInfo::new(
+                self.zdb_addr.to_socket_addrs().unwrap().next().unwrap(),
+                Some(format!("meta-{}", i).to_string()),
+                None,
+            ));
+            data_backends.push(ZdbConnectionInfo::new(
+                self.zdb_addr.to_socket_addrs().unwrap().next().unwrap(),
+                Some(format!("data-{}", i).to_string()),
+                None,
+            ));
+        }
+        Config {
+            minimal_shards: if let Some(min) = minimal_shards {min} else {1},
+            expected_shards: if let Some(exp) = expected_shards {exp} else {2},
             redundant_groups: 0,
             redundant_nodes: 0,
             socket: Some(socket_path),

@@ -1,4 +1,5 @@
 extern crate testutils;
+use std::fs;
 use std::thread::sleep;
 use std::time::Duration;
 use testutils::init::TestManager;
@@ -117,6 +118,8 @@ fn slow_connection_no_proc_bomb() {
         data_disk_size: "20G".into(),
         fs_disk_size: "10G".into(),
         zdb_fs_port: 9905,
+        expected_shards: None,
+        minimal_shards: None,
     });
     manager.init().expect("starting services");
     manager
@@ -146,12 +149,14 @@ fn retrieves_more_prior_than_stores() {
     // it issues a retrieve command. this command should be handled before
     // the rest of the stores. this is because the zdb file system blocks on it
     let mut manager = TestManager::new(TestParams {
-        id: "rmpts".to_string(),
+        id: "zse".to_string(),
         network_speed: None,
         max_zdb_data_dir_size: None,
         data_disk_size: "20G".into(),
         fs_disk_size: "10G".into(),
-        zdb_fs_port: 9906,
+        zdb_fs_port: 9907,
+        expected_shards: None,
+        minimal_shards: None,
     });
     manager.init().expect("starting services");
     // should be stored remotely as 4 shards and a couple of small metadata shards(?)
@@ -195,6 +200,8 @@ fn zdbfs_storage_exceeded() {
         data_disk_size: "3G".into(),
         fs_disk_size: "600M".into(),
         zdb_fs_port: 9906,
+        expected_shards: None,
+        minimal_shards: None,
     });
     manager.init().expect("starting services");
     (&manager.fs_disk)
@@ -232,4 +239,144 @@ fn zdbfs_storage_exceeded() {
     let _ = manager
         .checksum_file_with_timwout("test3".into(), Duration::from_secs(10))
         .expect("checksum file");
+}
+
+#[test]
+fn recovery_test() {
+    let mut manager = TestManager::new(
+        TestParams::default()
+            .with_id("rt")
+            .with_port(9907)
+            .with_minimal_shards(4)
+            .with_expected_shards(8),
+    );
+    manager.init().expect("starting services");
+    manager
+        .write_file("testrt".into(), 100)
+        .expect("write file to zdbfs");
+
+    let checksum1 = manager
+        .checksum_file("testrt".into())
+        .expect("checksum file");
+    manager.stop_zstor().unwrap();
+    // TODO: delete 4 remote zdb data namespaces
+    manager.start_zstor().unwrap();
+
+    let checksum2 = manager
+        .checksum_file_with_timwout("testrt".into(), Duration::from_secs(10))
+        .expect("checksum file");
+
+    assert_eq!(checksum1, checksum2);
+}
+
+#[test]
+fn recovery_failure_test() {
+    let mut manager = TestManager::new(
+        TestParams::default()
+            .with_id("rft")
+            .with_port(9908)
+            .with_minimal_shards(4)
+            .with_expected_shards(8),
+    );
+    manager.init().expect("starting services");
+    manager
+        .write_file("testrft".into(), 100)
+        .expect("write file to zdbfs");
+
+    manager.stop_zstor().unwrap();
+    // TODO: delete 5 remote zdb data namespaces
+    manager.start_zstor().unwrap();
+
+    assert!(fs::read_to_string("testrft").is_err())
+}
+
+#[test]
+fn metadata_recovery() {
+    let mut manager = TestManager::new(
+        TestParams::default()
+            .with_id("mr")
+            .with_port(9909)
+            .with_minimal_shards(4)
+            .with_expected_shards(8),
+    );
+    manager.init().expect("starting services");
+    manager
+        .write_file("testmr".into(), 100)
+        .expect("write file to zdbfs");
+
+    let checksum1 = manager
+        .checksum_file("testmr".into())
+        .expect("checksum file");
+    manager.stop_zstor().unwrap();
+    // TODO: delete 2 remote zdb meta namespaces
+    manager.start_zstor().unwrap();
+
+    let checksum2 = manager
+        .checksum_file_with_timwout("testmr".into(), Duration::from_secs(10))
+        .expect("checksum file");
+
+    assert_eq!(checksum1, checksum2);
+}
+
+#[test]
+fn test_data_repair() {
+    let mut manager = TestManager::new(
+        TestParams::default()
+            .with_id("mr")
+            .with_port(9910)
+            .with_minimal_shards(4)
+            .with_expected_shards(8),
+    );
+
+    manager.init().expect("starting services");
+    manager
+        .write_file("testtdr".into(), 100)
+        .expect("write file to zdbfs");
+
+    let checksum1 = manager
+        .checksum_file("testrt".into())
+        .expect("checksum file");
+    manager.stop_zstor().unwrap();
+    // TODO: delete 4 remote zdb data namespaces
+    manager.start_zstor().unwrap();
+
+    let checksum2 = manager
+        .checksum_file_with_timwout("testrt".into(), Duration::from_secs(10))
+        .expect("checksum file");
+
+    assert_eq!(checksum1, checksum2);
+
+    //TODO: (make the 10 minutes configurable?)
+    std::thread::sleep(std::time::Duration::from_secs(1024 * 1024 * 10));
+
+    // TODO: delete another four remote zdb namespaces
+    let checksum3 = manager
+        .checksum_file_with_timwout("testrt".into(), Duration::from_secs(10))
+        .expect("checksum file");
+
+    assert_eq!(checksum1, checksum3);
+
+}
+
+
+#[test]
+fn test_backend_config_update_for_meta() {
+    let mut manager = TestManager::new(
+        TestParams::default()
+            .with_id("mr")
+            .with_port(9911)
+            .with_minimal_shards(4)
+            .with_expected_shards(8),
+    );
+
+    manager.init().expect("starting services");
+    manager
+        .write_file("testtdr".into(), 100)
+        .expect("write file to zdbfs");
+
+    manager.stop_zstor().unwrap();
+    // TODO: delete 2 remote zdb meta namespaces
+    // TODO: add new 2 remote zdb meta ns
+    manager.start_zstor().unwrap();
+    
 }

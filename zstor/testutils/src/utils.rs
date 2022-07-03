@@ -2,6 +2,7 @@ use crate::netns::Netns;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::fs;
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
@@ -219,6 +220,7 @@ pub fn write_random_file(path: &Path, size_in_mb: u32) -> Result<()> {
     exec(cmd)?;
     Ok(())
 }
+
 
 pub fn checksum_file(path: &Path) -> Result<String> {
     let mut cmd = Command::new("md5sum");
