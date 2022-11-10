@@ -169,6 +169,20 @@ impl Handler<Store> for ZstorActor {
                         })
                         .await??;
 
+                    if let Ok(meta_result) = meta.send(LoadMeta {
+                        path: key_path.clone(),
+                    }).await? {
+                        if let Some(stored_metadata) = meta_result {
+                            if *stored_metadata.checksum() == *metadata.checksum() {
+                                debug!(
+                                    "Skipping {:?} for upload because it's already uploaded",
+                                    key_path,
+                                );
+                                continue;
+                            }
+                        }
+                    };
+
                     save_data(&mut cfg, shards, &mut metadata).await?;
 
                     meta.send(SaveMeta {
