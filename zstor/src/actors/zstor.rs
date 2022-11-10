@@ -169,9 +169,12 @@ impl Handler<Store> for ZstorActor {
                         })
                         .await??;
 
-                    if let Ok(meta_result) = meta.send(LoadMeta {
-                        path: key_path.clone(),
-                    }).await? {
+                    if let Ok(meta_result) = meta
+                        .send(LoadMeta {
+                            path: key_path.clone(),
+                        })
+                        .await?
+                    {
                         if let Some(stored_metadata) = meta_result {
                             if *stored_metadata.checksum() == *metadata.checksum() {
                                 debug!(
