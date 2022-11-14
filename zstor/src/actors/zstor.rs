@@ -169,30 +169,30 @@ impl Handler<Store> for ZstorActor {
                         })
                         .await??;
 
-                    if let Ok(meta_result) = meta
+                    match meta
                         .send(LoadMeta {
                             path: key_path.clone(),
                         })
                         .await?
                     {
-                        if let Some(stored_metadata) = meta_result {
-                            if *stored_metadata.checksum() == *metadata.checksum() {
-                                debug!(
-                                    "Skipping {:?} for upload because it's already uploaded",
-                                    key_path,
-                                );
-                                continue;
-                            }
+                        Ok(Some(stored_metadata))
+                            if *stored_metadata.checksum() == *metadata.checksum() =>
+                        {
+                            debug!(
+                                "Skipping {:?} for upload because it's already uploaded",
+                                key_path,
+                            );
+                        }
+                        _ => {
+                            debug!("Metadata for file {:?} not found.", key_path);
+                            save_data(&mut cfg, shards, &mut metadata).await?;
+                            meta.send(SaveMeta {
+                                path: key_path,
+                                meta: metadata,
+                            })
+                            .await??;
                         }
                     };
-
-                    save_data(&mut cfg, shards, &mut metadata).await?;
-
-                    meta.send(SaveMeta {
-                        path: key_path,
-                        meta: metadata,
-                    })
-                    .await??;
 
                     if msg.delete {
                         if let Err(e) = fs::remove_file(&file).await {
