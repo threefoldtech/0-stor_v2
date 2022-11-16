@@ -9,6 +9,34 @@ integrity of objects, and automatic expansion of the storage expansion.
 To this end, `zstor` is self contained: after a full setup, the system
 can reserve capacity to keep itself going indefinitely.
 
+## Storage and data integrity
+
+Zstor uses o-db's to store the data. It does so by splitting up the data in chunks and distributing them over N 0-db's.
+
+```mermaid
+C4Component
+title Zstor setup
+
+Component(zstor, "Zstor instance")
+
+Deployment_Node(zerodbgroup,"0-db group", "located in 1 farm"){
+    System(zerodb1,"0-db 1")
+    System(zerodb2,"0-db 2") 
+    System(zerodbx,"0-db ...") 
+    System(zerodbn,"0-db N") 
+}
+Rel(zstor, zerodb1, "")
+Rel(zstor, zerodb2, "")
+Rel(zstor, zerodbx, "")
+Rel(zstor, zerodbn, "")
+```
+
+Zstor uses forward looking error correcting codes (FLECC) for data consistency and to protect against data loss.
+
+This means zstor constantly tries to spread the data over N, being the *expected_shards*, 0-db's.
+
+As long as there are M (*minimal_shards*), M being smaller than N off course, chunks of data intact, zstor can recover the data.
+
 ## Expected setup
 
 Currently, `zstor` expects a stable system to start from, which is user
