@@ -503,13 +503,8 @@ impl InternalZdb {
             kind: ZdbErrorKind::Read,
             remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
-        })?
-        .ok_or(ZdbError {
-            kind: ZdbErrorKind::Read,
-            remote: self.ci.clone(),
-            internal: ErrorCause::Other(format!("missing key {}", hex::encode(key))),
         })?;
-        Ok(Some(data))
+        Ok(data)
     }
 
     /// Delete some previously stored data by its key
