@@ -169,13 +169,34 @@ impl Handler<Store> for ZstorActor {
                         })
                         .await??;
 
-                    save_data(&mut cfg, shards, &mut metadata).await?;
-
-                    meta.send(SaveMeta {
-                        path: key_path,
-                        meta: metadata,
-                    })
-                    .await??;
+                    match meta
+                        .send(LoadMeta {
+                            path: key_path.clone(),
+                        })
+                        .await??
+                    {
+                        Some(stored_metadata)
+                            if *stored_metadata.checksum() == *metadata.checksum() =>
+                        {
+                            debug!(
+                                "Skipping {:?} for upload because it's already uploaded",
+                                key_path,
+                            );
+                        }
+                        meta_result => {
+                            if let Some(_) = meta_result {
+                                debug!("File {:?} changed.", key_path);
+                            } else {
+                                debug!("Metadata for file {:?} not found.", key_path);
+                            }
+                            save_data(&mut cfg, shards, &mut metadata).await?;
+                            meta.send(SaveMeta {
+                                path: key_path,
+                                meta: metadata,
+                            })
+                            .await??;
+                        }
+                    };
 
                     if msg.delete {
                         if let Err(e) = fs::remove_file(&file).await {
