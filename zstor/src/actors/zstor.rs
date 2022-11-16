@@ -173,9 +173,9 @@ impl Handler<Store> for ZstorActor {
                         .send(LoadMeta {
                             path: key_path.clone(),
                         })
-                        .await?
+                        .await??
                     {
-                        Ok(Some(stored_metadata))
+                        Some(stored_metadata)
                             if *stored_metadata.checksum() == *metadata.checksum() =>
                         {
                             debug!(
@@ -183,8 +183,12 @@ impl Handler<Store> for ZstorActor {
                                 key_path,
                             );
                         }
-                        _ => {
-                            debug!("Metadata for file {:?} not found.", key_path);
+                        meta_result => {
+                            if let Some(_) = meta_result {
+                                debug!("File {:?} changed.", key_path);
+                            } else {
+                                debug!("Metadata for file {:?} not found.", key_path);
+                            }
                             save_data(&mut cfg, shards, &mut metadata).await?;
                             meta.send(SaveMeta {
                                 path: key_path,
