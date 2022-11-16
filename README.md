@@ -16,32 +16,32 @@ provided. In order for the system to work optimally, the following
 should be considered:
 
 - The system relies on the explorer to automatically manage capacity
-	pools and 0-db reservations. In order to do this, an *already
-	registered* identity must be provided in the config, along with a
-	stellar wallet secret. This wallet is used to fund all capacity
-	reservations. `zstor` will attempt to keep _all_ capacity pools
-	registered to this identity funded. It will *not create capacity
-	pools* currently. This means that all pools to be used should be set
-	up by the user.
+ pools and 0-db reservations. In order to do this, an *already
+ registered* identity must be provided in the config, along with a
+ stellar wallet secret. This wallet is used to fund all capacity
+ reservations. `zstor` will attempt to keep *all* capacity pools
+ registered to this identity funded. It will *not create capacity
+ pools* currently. This means that all pools to be used should be set
+ up by the user.
 - `zstor` has a redundancy configuration which introduces the notion of
-	`groups`: a list of one or more 0-db backends which are physically
-	together. In practice, it is expected that:
-	- Every group represents a farm
-	- All 0-db's in a group are managed by a single capacity pool.
-	The above will make sure that `zstor` can correctly expand and
-	replace 0-dbs while keeping the group redundancy profile in tact.
+ `groups`: a list of one or more 0-db backends which are physically
+ together. In practice, it is expected that:
+  - Every group represents a farm
+    - All 0-db's in a group are managed by a single capacity pool.
+ The above will make sure that `zstor` can correctly expand and
+ replace 0-dbs while keeping the group redundancy profile in tact.
 - `zstor` aims to replace backends on the same farm / capacity pool. To
-	do this, it aims to extract reservation ID's from the backends it
-	starts with in the config. The best results will be gained by making
-	sure all 0-db backends are actually running on the grid.
+ do this, it aims to extract reservation ID's from the backends it
+ starts with in the config. The best results will be gained by making
+ sure all 0-db backends are actually running on the grid.
 - Because of the above, it is recommended to run a dedicated identity
-	for the `zstor`, so it only manages pools used by the setup.
-	Optionally, a dedicated wallet can be used (this is probably best
-	security wise).
+ for the `zstor`, so it only manages pools used by the setup.
+ Optionally, a dedicated wallet can be used (this is probably best
+ security wise).
 - Due to the nature of `TFT`, the wallet must have both `TFT`, and `XLM`
-	to fund the transaction (the latter only being used for the small
-	transaction fee). This is necessary as we don't rely on external
-	services for the payment.
+ to fund the transaction (the latter only being used for the small
+ transaction fee). This is necessary as we don't rely on external
+ services for the payment.
 
 ## Daemon - client usage vs standalone usage
 
@@ -54,11 +54,11 @@ until the monitor daemon returns a response after executing the command.
 This setup is recommended as:
 
 - It actually allows for the automatic expansion / replacement of failed
-	0-dbs.
+ 0-dbs.
 - It exposes optional metrics for prometheus to scrape.
 - Only a single upload/download of a file happens at once, meaning you
-	won't burn out your whole cpu by sending multiple upload commands in
-	quick succession.
+ won't burn out your whole cpu by sending multiple upload commands in
+ quick succession.
 
 If the socket path is not specified, `zstor` will fall back to its
 single command flow, where it executes the command in process, and then
@@ -76,23 +76,23 @@ removed, as long as sufficient are left to recover the data.
 - `Rebuild` the data, loading existing data (as long as sufficient zdbs are left),
 reencoding it, and storing it in (new) zdbs according to the current config
 - `Check` a file, returning a 16 byte `blake2b` checksum (in hex) if it
-	is present in the backend (by fetching it from the metastore).
+ is present in the backend (by fetching it from the metastore).
 
 ### Other features
 
 - Monitoring of active 0-db backends. An active backend is considered a
 backend that is tracked in the config, which has sufficient space
-	left to write new blocks. If a backend is full, it will be rotated
-	out by reserving a new one, but the existing backend is not
-	decommissioned.
+ left to write new blocks. If a backend is full, it will be rotated
+ out by reserving a new one, but the existing backend is not
+ decommissioned.
 - Repair queue: periodically, all 0-db's used are checked, to see if the
-	are still online. If a 0-db is unreachable, all objects which have a
-	chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
+ are still online. If a 0-db is unreachable, all objects which have a
+ chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
 - Explorer client, allowing for full self contained operation (after the
-	initial bootstrap currently).
+ initial bootstrap currently).
 - Prometheus metrics. The metrics server is bound to all interfaces, on
-	the port specified in the config. The path is `/metrics`. If no port
-	is set in the config, the metrics server won't be enabled.
+ the port specified in the config. The path is `/metrics`. If no port
+ is set in the config, the metrics server won't be enabled.
 
 ## Building
 
