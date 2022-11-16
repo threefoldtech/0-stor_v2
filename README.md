@@ -11,7 +11,7 @@ can reserve capacity to keep itself going indefinitely.
 
 ## Storage and data integrity
 
-Zstor uses o-db's to store the data. It does so by splitting up the data in chunks and distributing them over N 0-db's.
+Zstor uses 0-db's to store the data. It does so by splitting up the data in chunks and distributing them over N 0-db's.
 
 ```mermaid
 C4Component
