@@ -425,7 +425,6 @@ impl From<String> for ConfigError {
 #[cfg(test)]
 mod tests {
     use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
-    use grid_explorer_client::GridNetwork;
     use std::net::ToSocketAddrs;
 
     #[test]
@@ -467,13 +466,6 @@ mod tests {
             pid_file: Some("/tmp/zstor.pid".into()),
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
-            explorer: Some(super::Explorer {
-                identity_id: 25,
-                identity_mnemonic: "an unexisting mnemonic".into(),
-                network: GridNetwork::Main,
-                horizon_url: None,
-                wallet_secret: "Definitely not a secret".into(),
-            }),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
             groups: vec![
@@ -642,13 +634,6 @@ password = "supersecretpass"
             pid_file: Some("/tmp/zstor.pid".into()),
             zdb_data_dir_path: None,
             zdbfs_mountpoint: Some("/tmp/test".into()),
-            explorer: Some(super::Explorer {
-                identity_id: 25,
-                identity_mnemonic: "an unexisting mnemonic".into(),
-                network: GridNetwork::Main,
-                horizon_url: None,
-                wallet_secret: "Definitely not a secret".into(),
-            }),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
             groups: vec![
