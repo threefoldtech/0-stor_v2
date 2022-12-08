@@ -43,14 +43,6 @@ Currently, `zstor` expects a stable system to start from, which is user
 provided. In order for the system to work optimally, the following
 should be considered:
 
-- The system relies on the explorer to automatically manage capacity
- pools and 0-db reservations. In order to do this, an *already
- registered* identity must be provided in the config, along with a
- stellar wallet secret. This wallet is used to fund all capacity
- reservations. `zstor` will attempt to keep *all* capacity pools
- registered to this identity funded. It will *not create capacity
- pools* currently. This means that all pools to be used should be set
- up by the user.
 - `zstor` has a redundancy configuration which introduces the notion of
  `groups`: a list of one or more 0-db backends which are physically
  together. In practice, it is expected that:
@@ -116,8 +108,6 @@ backend that is tracked in the config, which has sufficient space
 - Repair queue: periodically, all 0-db's used are checked, to see if the
  are still online. If a 0-db is unreachable, all objects which have a
  chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
-- Explorer client, allowing for full self contained operation (after the
- initial bootstrap currently).
 - Prometheus metrics. The metrics server is bound to all interfaces, on
  the port specified in the config. The path is `/metrics`. If no port
  is set in the config, the metrics server won't be enabled.
@@ -165,13 +155,6 @@ socket = "/tmp/zstor.sock"
 prometheus_port = 9100
 zdb_data_dir_path = "/tmp/0-db/data"
 max_zdb_data_dir_size = 25600
-
-[explorer]
-network = "Main"
-wallet_secret = "Definitely not a secret"
-identity_id = 25
-identity_mnemonic = "an unexisting mnemonic"
-horizon_url = "https://my.horizon.server"
 
 [encryption]
 algorithm = "AES"
@@ -259,17 +242,6 @@ password = "supersecretpass"
     then be exposed through the build-in prometheus server.
 - `prometheus_port`: An optional port on which prometheus metrics will be
     exposed. If this is not set, the metrics will not get exposed.
-- `explorer`: Optional configuration for the explorer and wallet to use. If this
-    is set, automatic provisioning of additional storage, and payment of capacity
-    pools will be enabled. This is made up of the following fields:
-  - `network`: The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
-  - `wallet_secret`: The stellar secret of the wallet used to fund capacity
-      pools. This wallet must have TFT, and a small amount of XLM to fund
-      the transactions.
-  - `identity_id`: The id of the identity.
-  - `identity_mnemonic`: The mnemonic of the secret used by the identity.
-  - `horizon_url`: An optional url for a stellar horizon server to use. If this is
-      not set, a default one is used.
 - `encryption`: configuration to use for the encryption stage. Currently
     only `AES` is supported.
 - `compression`: configuration to use for the compression stage.
