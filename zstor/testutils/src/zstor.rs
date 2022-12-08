@@ -158,7 +158,6 @@ impl Zstor {
             pid_file: Some(pid_path),
             zdb_data_dir_path: Some(self.zdb_data_dir_path.clone()),
             zdbfs_mountpoint: Some(self.fs_path.clone()),
-            explorer: None,
             prometheus_port: None,
             max_zdb_data_dir_size: self.max_zdb_data_dir_size,
             groups: vec![Group {

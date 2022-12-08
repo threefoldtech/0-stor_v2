@@ -67,11 +67,6 @@ impl BackendManagerActor {
     fn check_backends(&mut self, ctx: &mut <Self as Actor>::Context) {
         ctx.notify(CheckBackends);
     }
-
-    /// Send a [`ReplaceBackends`] command to this actor
-    fn replace_backends(&mut self, ctx: &mut <Self as Actor>::Context) {
-        ctx.notify(ReplaceBackends);
-    }
 }
 
 /// Message requesting the actor checks the backends, and updates the state of all managed
@@ -214,8 +209,6 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .map(|(ci, (db, state))| (ci.clone(), (db.clone(), state.clone())))
             .collect::<Vec<_>>();
 
-        let config = self.config_addr.clone();
-
         Box::pin(
             async move {
                 let futs = data_backend_info
@@ -293,20 +286,10 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             }
                         }
                     });
-                let meta_info = join_all(futs).await;
-                let cfg = match config.send(GetConfig).await {
-                    // We don't care about the config, only that one is set.
-                    Ok(cfg) => cfg.explorer().map(|_| ()),
-                    Err(e) => {
-                        error!("Could not get config: {}", e);
-                        None
-                    }
-                };
-                (data_info, meta_info, cfg)
+                (data_info, join_all(futs).await)
             }
             .into_actor(self)
-            .map(|res, actor, ctx| {
-                let mut should_sweep = false;
+            .map(|res, actor, _ctx| {
                 for (ci, new_db, new_state, info) in res.0.into_iter() {
                     // update metrics
                     actor.metrics.do_send(SetDataBackendInfo {
@@ -321,9 +304,6 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         if new_db.is_some() {
                             debug!("Caching new connection to {}", ci);
                             *possible_con = new_db;
-                        }
-                        if !(new_state.is_readable() && new_state.is_writeable()) {
-                            should_sweep = true;
                         }
                         // If the backend is not readable, remove the cached connection to trigger
                         // a reconnect.
@@ -354,9 +334,6 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             debug!("Caching new connection to {}", ci);
                             *possible_con = new_db;
                         }
-                        if !(new_state.is_readable() && new_state.is_writeable()) {
-                            should_sweep = true;
-                        }
                         // If the backend is not readable, remove the cached connection to trigger
                         // a reconnect.
                         if !new_state.is_readable() {
@@ -370,12 +347,6 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         }
                         *old_state = new_state
                     }
-                }
-
-                if should_sweep && res.2.is_some() {
-                    // Trigger a sweep of all managed backends, removing those at the end of their
-                    // (managed) lifetime, and try to reserve new ones in their place.
-                    actor.replace_backends(ctx);
                 }
             }),
         )

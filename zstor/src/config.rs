@@ -1,6 +1,5 @@
 use crate::{encryption::SymmetricKey, zdb::ZdbConnectionInfo};
 use gray_codes::{InclusionExclusion, SetMutation};
-use grid_explorer_client::GridNetwork;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -54,8 +53,6 @@ pub struct Config {
     pub compression: Compression,
     /// configuration for the metadata store to use.
     pub meta: Meta,
-    /// Explorer configuration, if this is not set automatic provisioning won't be enabled
-    pub explorer: Option<Explorer>,
     /// The backend groups to write the data to.
     pub groups: Vec<Group>,
 }
@@ -106,51 +103,6 @@ pub enum Meta {
     Zdb(crate::zdb_meta::ZdbMetaStoreConfig),
 }
 
-/// Configuration for the explorer. This includes the seed of the wallet to use.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Explorer {
-    /// The grid network to manage 0-dbs on, one of {Main, Test, Dev}.
-    network: GridNetwork,
-    /// The stellar secret of the wallet used to fund capacity pools. This wallet must have TFT,
-    /// and a small amount of XLM to fund the transactions.
-    wallet_secret: String,
-    /// A custom horizon url to  use instead of the default one. If not set, the default one is
-    /// used.
-    horizon_url: Option<String>,
-    /// The id of the identity.
-    identity_id: u64,
-    /// The mnemonic of the secret used by the identity.
-    identity_mnemonic: String,
-}
-
-impl Explorer {
-    /// Return the grid network used for the explorer to manage the 0-dbs.
-    pub fn grid_network(&self) -> GridNetwork {
-        self.network
-    }
-
-    /// Return the wallet secret of the wallet used to pay for capacity reservations.
-    pub fn wallet_secret(&self) -> &str {
-        &self.wallet_secret
-    }
-
-    /// Return the optional user configured horizon url to use.
-    pub fn horizon_url(&self) -> Option<&str> {
-        self.horizon_url.as_ref().map(|x| x as _)
-    }
-
-    /// Returns the id of the identity used.
-    pub fn identity_id(&self) -> u64 {
-        self.identity_id
-    }
-
-    /// Returns the mnemonic of the identity used.
-    pub fn identity_mnemonic(&self) -> &str {
-        &self.identity_mnemonic
-    }
-}
-
 impl Config {
     /// validate the config. This also makes sure that there is at least 1 valid configuration for
     /// the backends regarding groups and the required redundancy.
@@ -188,11 +140,6 @@ impl Config {
     /// Return the prometheus port on which prometheus formatted metrics will be served, if one is set.
     pub fn prometheus_port(&self) -> Option<u16> {
         self.prometheus_port
-    }
-
-    /// Return the explore configuration for automatic provisioning, if one is set.
-    pub fn explorer(&self) -> Option<&Explorer> {
-        self.explorer.as_ref()
     }
 
     /// Return the encryption config to use for encoding this object.

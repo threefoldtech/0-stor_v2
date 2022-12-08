@@ -1,9 +1,7 @@
 [workspace]
 members = [
 	"zstor",
-	"monitor",
-	"grid_explorer_client",
-	"playground"
+	"monitor"
 ]
 
 [profile.release]
