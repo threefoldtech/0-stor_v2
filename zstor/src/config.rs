@@ -569,12 +569,6 @@ address = "[2a02:1802:5e::dead:beef]:9903"
 namespace = "test2"
 password = "supersecretpass"
 
-[explorer]
-network = "Main"
-wallet_secret = "Definitely not a secret"
-identity_id = 25
-identity_mnemonic = "an unexisting mnemonic"
-
 [[groups]]
 [[groups.backends]]
 address = "[fe80::1]:9900"
@@ -699,12 +693,6 @@ root = "/virtualroot"
 socket = "/tmp/zstor.sock"
 pid_file = "/tmp/zstor.pid"
 zdbfs_mountpoint = "/tmp/test"
-
-[explorer]
-network = "Main"
-wallet_secret = "Definitely not a secret"
-identity_id = 25
-identity_mnemonic = "an unexisting mnemonic"
 
 [encryption]
 algorithm = "AES"
