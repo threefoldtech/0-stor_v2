@@ -147,7 +147,7 @@ impl TestManager {
             Some(self.namespace.as_ref().unwrap().clone()),
         );
         let data_zdb_prc =
-            data_zdb.start(&ZdbArgs::data(&(&self.data_disk).as_ref().unwrap().path))?;
+            data_zdb.start(&ZdbArgs::data(&self.data_disk.as_ref().unwrap().path))?;
         self.data_zdb = Some(data_zdb_prc);
         data_zdb.init_data_namespaces(4, 4)?;
 
@@ -167,8 +167,8 @@ impl TestManager {
     pub fn start_zstor(&mut self) -> Result<()> {
         let hook_path = self.hook_path();
         fs::copy(HOOK_PATH, hook_path.clone())?;
-        let fs_zdb_args = ZdbArgs::fs(&(&self.fs_disk).as_ref().unwrap().path, &hook_path);
-        let workdir = (&self.workdir).as_ref().unwrap();
+        let fs_zdb_args = ZdbArgs::fs(&self.fs_disk.as_ref().unwrap().path, &hook_path);
+        let workdir = self.workdir.as_ref().unwrap();
         let mountpoint = workdir.clone().join("mnt");
         let zstor = Zstor::new(
             &self.data_zdb_address(),
@@ -187,8 +187,8 @@ impl TestManager {
     }
 
     pub fn start_zstor_blocking(&mut self) -> Result<()> {
-        let fs_zdb_args = ZdbArgs::fs(&(&self.fs_disk).as_ref().unwrap().path, &self.hook_path());
-        let workdir = (&self.workdir).as_ref().unwrap();
+        let fs_zdb_args = ZdbArgs::fs(&self.fs_disk.as_ref().unwrap().path, &self.hook_path());
+        let workdir = self.workdir.as_ref().unwrap();
         let mountpoint = workdir.clone().join("mnt");
         let zstor = Zstor::new(
             &self.data_zdb_address(),
@@ -203,7 +203,7 @@ impl TestManager {
         Ok(())
     }
     pub fn start_fs_zdb(&mut self) -> Result<()> {
-        let fs_workdir = &(&self.fs_disk).as_ref().unwrap().path;
+        let fs_workdir = &self.fs_disk.as_ref().unwrap().path;
         let fs_zdb_args = ZdbArgs::fs(fs_workdir, &self.hook_path());
         let zdb = Zdb::new("127.0.0.1", self.params.zdb_fs_port, None);
         self.fs_zdb = Some(zdb.start(&fs_zdb_args)?);
@@ -212,7 +212,7 @@ impl TestManager {
         Ok(())
     }
     pub fn start_zdbfs(&mut self) -> Result<()> {
-        let workdir = (&self.workdir).as_ref().unwrap();
+        let workdir = self.workdir.as_ref().unwrap();
         let mountpoint = workdir.clone().join("mnt");
         let fs = zdbfs::Fs::new(&mountpoint, self.params.zdb_fs_port);
         self.zdbfs = Some(fs.start()?);
@@ -228,7 +228,7 @@ impl TestManager {
         Ok(())
     }
     pub fn stop_zdbfs(&mut self) -> Result<()> {
-        let workdir = (&self.workdir).as_ref().unwrap();
+        let workdir = self.workdir.as_ref().unwrap();
         let mountpoint = workdir.clone().join("mnt");
 
         zdbfs::Fs::stop(&mountpoint, self.zdbfs.as_mut().unwrap())?;
@@ -276,7 +276,7 @@ impl TestManager {
     }
 
     pub fn copy_zstor_log(&self) -> Result<()> {
-        (&self.zstor.as_ref()).unwrap().copy_log()?;
+        self.zstor.as_ref().unwrap().copy_log()?;
         Ok(())
     }
 

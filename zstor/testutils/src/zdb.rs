@@ -90,13 +90,13 @@ impl Zdb {
             zdb_command.arg(v);
         }
         if let Some(v) = &args.index {
-            fs::create_dir_all(&v)?;
+            fs::create_dir_all(v)?;
 
             zdb_command.arg("--index");
             zdb_command.arg(v);
         }
         if let Some(v) = &args.data {
-            fs::create_dir_all(&v)?;
+            fs::create_dir_all(v)?;
             zdb_command.arg("--data");
             zdb_command.arg(v);
         }

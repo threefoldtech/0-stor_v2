@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 const MISSING_DURATION: Duration = Duration::from_secs(15 * 60);
 const FULL_TRESHOLD: u8 = 95; // if a shard is 95% full we rotate it out for writing
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BackendState {
     // The state can't be decided at the moment. The time at which we last saw this backend healthy
     // is also recorded

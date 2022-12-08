@@ -15,7 +15,7 @@ pub type Checksum = [u8; CHECKSUM_LENGTH];
 
 /// MetaData holds all information needed to retrieve, decode, decrypt and decompress shards back
 /// to the original data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetaData {
     /// The minimum amount of shards which are needed to recover the original data.
     data_shards: usize,
@@ -33,7 +33,7 @@ pub struct MetaData {
 }
 
 /// Metadata about the used encryption - algorithm and key
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum EncryptionMeta {
     /// Aes-Gcm authenticated encryption scheme using the AES cipher in GCM mode. The 256 bit
@@ -58,7 +58,7 @@ impl From<EncryptionMeta> for Encryption {
 }
 
 /// Metadata about the used compression.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum CompressionMeta {
     /// The snappy encryption algorithm
@@ -82,7 +82,7 @@ impl From<CompressionMeta> for Compression {
 }
 
 /// Information needed to store a single data shard
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardInfo {
     shard_idx: usize,
     checksum: Checksum,

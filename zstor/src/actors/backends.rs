@@ -720,7 +720,7 @@ pub enum StateInterest {
     Writeable,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Information about the state of a backend.
 pub enum BackendState {
     /// The state can't be decided at the moment. The time at which we last saw this backend healthy

@@ -81,6 +81,8 @@ impl ZdbFsStatsActor {
     fn new() -> Self {
         ZdbFsStatsActor { stats: None }
     }
+
+    #[allow(clippy::result_large_err)]
     fn renew_fd(&mut self, path: PathBuf) -> Result<(), ZstorError> {
         debug!("renewing stats fd");
         let zdbfs_stats = ZdbFsStats::try_new(path)

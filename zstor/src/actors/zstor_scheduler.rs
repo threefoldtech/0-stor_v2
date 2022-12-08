@@ -162,6 +162,7 @@ impl ZstorActorScheduler {
         Self { zstor, ch: None }
     }
 
+    #[allow(clippy::result_large_err)]
     fn push_zstor(
         ch: mpsc::UnboundedSender<ZstorSchedulerMessage>,
         cmd: ZstorCommand,
@@ -174,7 +175,7 @@ impl ZstorActorScheduler {
             if blocking { 0 } else { 1 },
         )
     }
-
+    #[allow(clippy::result_large_err)]
     fn push(
         ch: mpsc::UnboundedSender<ZstorSchedulerMessage>,
         cmd: ZstorSchedulerCommand,

@@ -23,7 +23,7 @@ use tokio::time::timeout;
 // use sha1::{Digest, Sha1};
 
 /// The type of key's used in zdb in sequential mode.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Key {
     /// The key type returned by V1 0-db in sequential mode.
     V1(u32),
@@ -630,6 +630,7 @@ impl InternalZdb {
     }
 
     /// parse a boolean from the string returned by 0-db
+    #[allow(clippy::result_large_err)]
     fn parse_zdb_bool_string(&self, input: &str) -> ZdbResult<bool> {
         Ok(match input {
             "yes" => true,
@@ -644,6 +645,7 @@ impl InternalZdb {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn parse_zdb_string<T>(&self, data_map: &HashMap<&str, &str>, field: &str) -> ZdbResult<T>
     where
         T: FromStr,

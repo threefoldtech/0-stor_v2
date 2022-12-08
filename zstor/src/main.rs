@@ -521,6 +521,7 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn read_cfg(config: &Path) -> ZstorResult<Config> {
     trace!("opening config file {:?}", config);
     let mut cfg_file = File::open(config)

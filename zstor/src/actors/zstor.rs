@@ -184,7 +184,7 @@ impl Handler<Store> for ZstorActor {
                             );
                         }
                         meta_result => {
-                            if let Some(_) = meta_result {
+                            if meta_result.is_some() {
                                 debug!("File {:?} changed.", key_path);
                             } else {
                                 debug!("Metadata for file {:?} not found.", key_path);
@@ -403,17 +403,21 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
     // attempt to retrieve all shards
     let mut shard_loads: Vec<JoinHandle<(usize, Result<(_, _), ZstorError>)>> =
         Vec::with_capacity(metadata.shards().len());
-    for si in metadata.shards().iter().cloned() {
+    for si in metadata.shards() {
+        let idx = si.index();
+        let key = si.key().to_vec();
+        let zdb = si.zdb().clone();
+        let chksum = *si.checksum();
         shard_loads.push(tokio::spawn(async move {
-            let db = match SequentialZdb::new(si.zdb().clone()).await {
+            let db = match SequentialZdb::new(zdb).await {
                 Ok(ok) => ok,
-                Err(e) => return (si.index(), Err(e.into())),
+                Err(e) => return (idx, Err(e.into())),
             };
-            match db.get(si.key()).await {
+            match db.get(&key).await {
                 Ok(potential_shard) => match potential_shard {
-                    Some(shard) => (si.index(), Ok((shard, *si.checksum()))),
+                    Some(shard) => (idx, Ok((shard, chksum))),
                     None => (
-                        si.index(),
+                        idx,
                         // TODO: Proper error here?
                         Err(ZstorError::new_io(
                             "shard not found".to_string(),
@@ -421,7 +425,7 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
                         )),
                     ),
                 },
-                Err(e) => (si.index(), Err(e.into())),
+                Err(e) => (idx, Err(e.into())),
             }
         }));
     }

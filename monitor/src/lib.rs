@@ -111,10 +111,10 @@ async fn read_zstor_config(cfg_path: &Path) -> MonitorResult<ZStorConfig> {
         .await
         .map_err(|e| MonitorError::new_io(ErrorKind::Config, e))?;
 
-    Ok(toml::from_slice(&buf).map_err(|e| MonitorError {
+    toml::from_slice(&buf).map_err(|e| MonitorError {
         kind: ErrorKind::Config,
         internal: InternalError::Format(e),
-    })?)
+    })
 }
 
 #[derive(Debug)]

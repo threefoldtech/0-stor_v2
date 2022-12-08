@@ -113,7 +113,7 @@ impl Handler<StoreFile> for PipelineActor {
             }
         }
 
-        if !std::fs::metadata(&data_file_path)
+        if !std::fs::metadata(data_file_path)
             .map_err(|e| ZstorError::new_io("could not load file metadata".to_string(), e))?
             .is_file()
         {
@@ -198,6 +198,7 @@ impl Handler<RebuildData> for PipelineActor {
 }
 
 /// Actual processing of the file
+#[allow(clippy::result_large_err)]
 fn process_file(data_file: &Path, cfg: &Config) -> ZstorResult<(MetaData, Vec<Shard>)> {
     let file_checksum = checksum(data_file)?;
     debug!(
@@ -208,7 +209,7 @@ fn process_file(data_file: &Path, cfg: &Config) -> ZstorResult<(MetaData, Vec<Sh
 
     // start reading file to encrypt
     trace!("loading file data");
-    let mut encoding_file = File::open(&data_file)
+    let mut encoding_file = File::open(data_file)
         .map_err(|e| ZstorError::new_io("could not open file to encode".to_string(), e))?;
 
     let compressed = Vec::new();
@@ -238,6 +239,7 @@ fn process_file(data_file: &Path, cfg: &Config) -> ZstorResult<(MetaData, Vec<Sh
 /// wrapper around the standard library method [`std::fs::canonicalize_path`]. This method will
 /// work on files which don't exist by creating a dummy file if the file does not exist,
 /// canonicalizing the path, and removing the dummy file.
+#[allow(clippy::result_large_err)]
 fn canonicalize_path(path: &Path) -> ZstorResult<PathBuf> {
     // annoyingly, the path needs to exist for this to work. So here's the plan:
     // first we verify that it is actualy there
@@ -269,6 +271,7 @@ fn canonicalize_path(path: &Path) -> ZstorResult<PathBuf> {
 }
 
 /// Get a 16 byte blake2b checksum of a file
+#[allow(clippy::result_large_err)]
 fn checksum(file: &Path) -> ZstorResult<Checksum> {
     trace!("getting file checksum");
     let mut file =

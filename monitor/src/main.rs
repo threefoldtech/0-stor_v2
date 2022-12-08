@@ -62,6 +62,7 @@ impl Filter for ModuleFilter {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn main() -> MonitorResult<()> {
     let args = Args::from_args();
 

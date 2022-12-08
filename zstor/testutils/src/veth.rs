@@ -21,12 +21,12 @@ impl Veth {
         cmd.arg("ip")
             .arg("link")
             .arg("add")
-            .arg(&name1)
+            .arg(name1)
             .arg("type")
             .arg("veth")
             .arg("peer")
             .arg("name")
-            .arg(&name2);
+            .arg(name2);
         exec(cmd)?;
 
         let (mut veth1, mut veth2) = (

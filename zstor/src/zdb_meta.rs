@@ -32,7 +32,7 @@ const ZDB_METASTORE_DISPOSABLE_SHARDS: usize = 2;
 const CONCURRENT_KEY_REBUILDS: usize = 10;
 
 /// Configuration to create a 0-db based metadata store
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZdbMetaStoreConfig {
     prefix: String,
     encryption: config::Encryption,
@@ -144,7 +144,7 @@ where
                 backend.connection_info().address(),
                 key
             );
-            shard.extend(&checksum);
+            shard.extend(checksum);
             store_requests.push(backend.set(key, shard));
         }
 
@@ -440,7 +440,7 @@ where
                         backend.connection_info().address(),
                         key
                     );
-                    shard.extend(&checksum);
+                    shard.extend(checksum);
                     writes.push((backend, shard));
                     break;
                 }
@@ -470,6 +470,7 @@ where
 
     /// hash a path using blake2b with 16 bytes of output, and hex encode the result
     /// the path is canonicalized before encoding so the full path is used
+    #[allow(clippy::result_large_err)]
     fn build_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
         let canonical_path = canonicalize(path)?;
 
@@ -514,6 +515,7 @@ where
     }
 
     // This does not take into account the virtual root
+    #[allow(clippy::result_large_err)]
     fn build_failure_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
         let mut hasher = VarBlake2b::new(16).unwrap();
         hasher.update(

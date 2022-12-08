@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// Backends are separated into groups. A single group _should_ represent physically close nodes,
 /// which are e.g. in the same data center. A single group can have multiple storage nodes.
 /// Redundancy is specified both on group level, and on nodes in a single group level.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// The minimum amount of shards which are needed to recover the original data.
@@ -58,7 +58,7 @@ pub struct Config {
 }
 
 /// A collection of backends to write to, which _should_ be geographically close to each other.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
     /// The individual backends in the group.
@@ -73,7 +73,7 @@ impl Group {
 }
 
 /// Configuration for the used encryption.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "algorithm", content = "key")]
 #[serde(rename_all = "UPPERCASE")]
@@ -84,7 +84,7 @@ pub enum Encryption {
 }
 
 /// Configuration for the used compression.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "algorithm")]
 #[serde(rename_all = "lowercase")]
@@ -94,7 +94,7 @@ pub enum Compression {
 }
 
 /// Configuration for the metadata store to use
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", content = "config")]
 #[serde(rename_all = "lowercase")]
@@ -273,9 +273,7 @@ impl Config {
         for mutation in InclusionExclusion::of_len(groups.len()) {
             match mutation {
                 SetMutation::Insert(i) => candidate.push((i, groups[i])),
-                SetMutation::Remove(ref i) => {
-                    candidate = candidate.into_iter().filter(|(j, _)| i != j).collect()
-                }
+                SetMutation::Remove(ref i) => candidate.retain(|(j, _)| i != j),
             }
 
             if candidate.len() <= max_groups
