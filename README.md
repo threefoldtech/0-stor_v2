@@ -5,9 +5,7 @@ daemon - client setup, or it can perform single actions without an
 associated daemon, which is mainly useful for uploading/retrieving
 single items. The daemon is part of the same binary, and will run other
 useful features, such as a repair queue which periodically verifies the
-integrity of objects, and automatic expansion of the storage expansion.
-To this end, `zstor` is self contained: after a full setup, the system
-can reserve capacity to keep itself going indefinitely.
+integrity of objects.
 
 ## Storage and data integrity
 
@@ -40,28 +38,11 @@ As long as there are M (*minimal_shards*), M being smaller than N off course, ch
 ## Expected setup
 
 Currently, `zstor` expects a stable system to start from, which is user
-provided. In order for the system to work optimally, the following
-should be considered:
+provided:
 
 - `zstor` has a redundancy configuration which introduces the notion of
- `groups`: a list of one or more 0-db backends which are physically
- together. In practice, it is expected that:
-  - Every group represents a farm
-    - All 0-db's in a group are managed by a single capacity pool.
- The above will make sure that `zstor` can correctly expand and
- replace 0-dbs while keeping the group redundancy profile in tact.
-- `zstor` aims to replace backends on the same farm / capacity pool. To
- do this, it aims to extract reservation ID's from the backends it
- starts with in the config. The best results will be gained by making
- sure all 0-db backends are actually running on the grid.
-- Because of the above, it is recommended to run a dedicated identity
- for the `zstor`, so it only manages pools used by the setup.
- Optionally, a dedicated wallet can be used (this is probably best
- security wise).
-- Due to the nature of `TFT`, the wallet must have both `TFT`, and `XLM`
- to fund the transaction (the latter only being used for the small
- transaction fee). This is necessary as we don't rely on external
- services for the payment.
+ `groups`: a group is a list of 0-db's which have an inherent larger risk of going
+ down together. For example, grid 0-db's which are deployed on the same farm.
 
 ## Daemon - client usage vs standalone usage
 
@@ -73,8 +54,6 @@ unix socket from the config, connect to it, send the command, and wait
 until the monitor daemon returns a response after executing the command.
 This setup is recommended as:
 
-- It actually allows for the automatic expansion / replacement of failed
- 0-dbs.
 - It exposes optional metrics for prometheus to scrape.
 - Only a single upload/download of a file happens at once, meaning you
  won't burn out your whole cpu by sending multiple upload commands in
@@ -102,9 +81,7 @@ reencoding it, and storing it in (new) zdbs according to the current config
 
 - Monitoring of active 0-db backends. An active backend is considered a
 backend that is tracked in the config, which has sufficient space
- left to write new blocks. If a backend is full, it will be rotated
- out by reserving a new one, but the existing backend is not
- decommissioned.
+ left to write new blocks. 
 - Repair queue: periodically, all 0-db's used are checked, to see if the
  are still online. If a 0-db is unreachable, all objects which have a
  chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
