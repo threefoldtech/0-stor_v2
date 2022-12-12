@@ -17,12 +17,15 @@ title Zstor setup
 
 Component(zstor, "Zstor instance")
 
-Deployment_Node(zerodbgroup,"0-db group", "located in 1 farm"){
+Deployment_Node(zerodbgroup0,"0-db group", ""){
     System(zerodb1,"0-db 1")
-    System(zerodb2,"0-db 2") 
+    System(zerodb2,"0-db 2")
+}
+Deployment_Node(zerodbgroup1,"0-db group", ""){
     System(zerodbx,"0-db ...") 
     System(zerodbn,"0-db N") 
 }
+
 Rel(zstor, zerodb1, "")
 Rel(zstor, zerodb2, "")
 Rel(zstor, zerodbx, "")
@@ -81,7 +84,7 @@ reencoding it, and storing it in (new) zdbs according to the current config
 
 - Monitoring of active 0-db backends. An active backend is considered a
 backend that is tracked in the config, which has sufficient space
- left to write new blocks. 
+ left to write new blocks.
 - Repair queue: periodically, all 0-db's used are checked, to see if the
  are still online. If a 0-db is unreachable, all objects which have a
  chunk stored on that 0-db will be rebuild on fully healthy 0-db's.
