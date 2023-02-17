@@ -69,7 +69,7 @@ impl Disk {
     }
     pub fn remove_file(&self, name: &str) -> Result<()> {
         let file_path = self.path.join(name);
-        remove_file(&file_path)?;
+        remove_file(file_path)?;
         Ok(())
     }
 }
