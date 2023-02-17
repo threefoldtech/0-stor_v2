@@ -18,8 +18,8 @@ pub fn exec(mut cmd: Command) -> Result<String> {
     let stdout: String = str::from_utf8(&out.stdout)?.into();
     let stderr = str::from_utf8(&out.stderr)?;
     if !out.status.success() {
-        println!("stderr: {}", stdout);
-        println!("stdout: {}", stderr);
+        println!("stdout: {}", stdout);
+        println!("stderr: {}", stderr);
         return Err(anyhow!(
             "failed to execute with error {}: \nstderr: {}\nstdout: {}",
             out.status,
