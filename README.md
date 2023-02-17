@@ -223,7 +223,7 @@ password = "supersecretpass"
 - `prometheus_port`: An optional port on which prometheus metrics will be
     exposed. If this is not set, the metrics will not get exposed.
 - `encryption`: configuration to use for the encryption stage. Currently
-    only `AES` is supported.
+    only `AES` is supported. The encryption `key` is 32 random bytes in hexadecimal form.
 - `compression`: configuration to use for the compression stage.
     Currently only `snappy` is supported
 - `meta`: configuration for the metadata store to use, currently only
