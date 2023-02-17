@@ -339,7 +339,7 @@ where
         let shard_count =
             old_cluster.encoder.data_shards() + old_cluster.encoder.disposable_shards();
         let mut shard_idx: HashMap<&ZdbConnectionInfo, usize> = HashMap::with_capacity(shard_count);
-        let mut shards = vec![None; shard_count as usize];
+        let mut shards = vec![None; shard_count];
         for (ci, read_result) in join_all(
             old_cluster
                 .backends
