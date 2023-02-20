@@ -213,7 +213,11 @@ password = "supersecretpass"
     the command is run in-process, else it is encoded and send to the socket
     so the daemon can process it.
 - `zdb_data_dir_path`: Optional path to the local 0-db data file directory.
-    If set, it will be monitored and kept within the size limits.
+    If set, it will be monitored and kept within the size limits. This is primarily
+    used when 0-stor is running as part of a QSFS deployment. In this case, a 0-db-fs
+    instance is running, which is using a local 0-db as read/write cache. When this
+    option is set, the size of this cache is monitored, and if needed the least recently
+    accessed files are removed.
 - `max_zdb_data_dir_size`: Maximum size of the data dir in MiB, if this
     is set and the sum of the file sizes in the data dir gets higher than
     this value, the least used, already encoded file will be removed.
