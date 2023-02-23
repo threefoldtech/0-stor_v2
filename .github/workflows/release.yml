@@ -5,17 +5,25 @@ on:
     types: [created]
 
 jobs:
-  build:
-    name: Build release binary
+  release:
+    name: Build release artifact
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
-      - name: Compile and release
-        uses: rust-build/rust-build.action@v1.4.2
+      - name: Checkout the repository
+        uses: actions/checkout@master
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-musl
+          override: true
+      - run: cargo build --release --target x86_64-unknown-linux-musl --features vendored
+      - run: strip target/x86_64-unknown-linux-musl/release/zstor
+      - run: cp target/x86_64-unknown-linux-musl/release/zstor zstor_v2-x86_64-linux-musl
+
+      - name: Upload the artifacts
+        uses: skx/github-action-publish-binaries@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUSTTARGET: x86_64-unknown-linux-musl
-          UPLOAD_MODE: release
-          ARCHIVE_TYPES: tar.gz
-          ARCHIVE_NAME: zstor_v2-x86_64-linux-musl.tar.gz
-          SRC_DIR: zstor
+        with:
+          args: 'zstor_v2-x86_64-linux-musl'
