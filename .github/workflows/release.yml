@@ -15,7 +15,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essentials musl-tools
+          sudo apt install -y build-essential musl-tools
 
       - uses: actions-rs/toolchain@v1
         with:
