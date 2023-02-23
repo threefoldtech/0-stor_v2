@@ -23,8 +23,8 @@ jobs:
           target: x86_64-unknown-linux-musl
           override: true
       - run: cargo build --release --target x86_64-unknown-linux-musl --features vendored
-      - run: strip target/x86_64-unknown-linux-musl/release/zstor
-      - run: cp target/x86_64-unknown-linux-musl/release/zstor zstor_v2-x86_64-linux-musl
+      - run: strip target/x86_64-unknown-linux-musl/release/zstor_v2
+      - run: cp target/x86_64-unknown-linux-musl/release/zstor_v2 zstor_v2-x86_64-linux-musl
 
       - name: Upload the artifacts
         uses: skx/github-action-publish-binaries@master
