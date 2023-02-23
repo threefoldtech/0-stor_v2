@@ -1,4 +1,4 @@
-name: Build
+name: Release
 
 on:
   release:
@@ -18,3 +18,4 @@ jobs:
           UPLOAD_MODE: release
           ARCHIVE_TYPES: tar.gz
           ARCHIVE_NAME: zstor_v2-x86_64-linux-musl.tar.gz
+          SRC_DIR: zstor
