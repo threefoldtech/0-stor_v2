@@ -1,6 +1,6 @@
 [package]
 name = "zstor_v2"
-version = "0.3.0-rc.12"
+version = "0.3.0"
 authors = ["The Threefold Tech developers <info@threefold.tech>"]
 edition = "2021"
 repository = "https://github.com/threefoldtech/0-stor_v2"
@@ -30,7 +30,11 @@ hex = "0.4"
 aes-gcm = { version = "0.9", features = ["std"] }
 snap = "1"
 log = { version = "0.4", features = ["release_max_level_debug"] }
-redis = { version = "0.20", default-features = false, features = ["aio", "tokio-comp", "connection-manager"] }
+redis = { version = "0.20", default-features = false, features = [
+  "aio",
+  "tokio-comp",
+  "connection-manager",
+] }
 sha-1 = "0.9"
 simple_logger = "1.11" # TODO: remove this
 pretty_env_logger = "0.4"
@@ -39,10 +43,16 @@ tokio = { version = "1", features = ["rt", "macros", "fs"] }
 futures = "0.3"
 blake2 = "0.9"
 gray-codes = "0.1"
-log4rs = { version = "1", default-features = false, features = ["rolling_file_appender", "threshold_filter", "fixed_window_roller", "size_trigger", "compound_policy"] }
+log4rs = { version = "1", default-features = false, features = [
+  "rolling_file_appender",
+  "threshold_filter",
+  "fixed_window_roller",
+  "size_trigger",
+  "compound_policy",
+] }
 async-trait = "0.1"
 bincode = "1"
-openssl = { version = "0.10", features = ["vendored"], optional = true } 
+openssl = { version = "0.10", features = ["vendored"], optional = true }
 actix = "0.12"
 actix-rt = "2.2"
 tokio-util = "0.6"
