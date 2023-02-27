@@ -28,13 +28,21 @@ jobs:
     # instead of the full qsfs stack, we avoid using latest, as that could introduce test failure because the components used in the tests
     # change behavior.
     - name: Install 0-db
-      run: sudo wget -O /usr/bin/zdb https://github.com/threefoldtech/0-db/releases/download/v2.0.4/zdb-2.0.4-linux-amd64-static
+      run: |
+        sudo wget -O /usr/bin/zdb https://github.com/threefoldtech/0-db/releases/download/v2.0.4/zdb-2.0.4-linux-amd64-static
+        sudo chmod +x /usr/bin/zdb
     - name: Install 0-db hook script
-      run: wget -O hook.sh https://raw.githubusercontent.com/threefoldtech/quantum-storage/v0.1.0/lib/zdb-hook.sh
+      run: |
+        wget -O hook.sh https://raw.githubusercontent.com/threefoldtech/quantum-storage/v0.1.0/lib/zdb-hook.sh
+        chmod +x hook.sh
     - name: Install 0-db-fs
-      run: sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
+      run: |
+        sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
+        sudo chmod +x /usr/bin/zdbfs
     - name: Install wondershaper
-      run: sudo wget -O /usr/bin/wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
+      run: |
+        sudo wget -O /usr/bin/wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
+        sudo chmod +x /usr/bin/wondershaper
     - name: Build tests
       run: cargo build --tests
     - name: Run tests
