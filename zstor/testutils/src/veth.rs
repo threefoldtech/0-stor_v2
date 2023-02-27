@@ -17,9 +17,8 @@ impl Veth {
         netns2: Option<&Netns>,
         network_speed: Option<u32>,
     ) -> Result<(Veth, Veth)> {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("ip")
-            .arg("link")
+        let mut cmd = Command::new("ip");
+        cmd.arg("link")
             .arg("add")
             .arg(name1)
             .arg("type")
@@ -59,12 +58,8 @@ impl Veth {
         Ok(())
     }
     pub fn set_up(&mut self) -> Result<()> {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("ip")
-            .arg("link")
-            .arg("set")
-            .arg(&self.name)
-            .arg("up");
+        let mut cmd = Command::new("ip");
+        cmd.arg("link").arg("set").arg(&self.name).arg("up");
         if let Some(ns) = &self.namespace {
             cmd = ns.wrap(cmd);
         }
@@ -72,9 +67,8 @@ impl Veth {
         Ok(())
     }
     pub fn set_addr(&mut self, addr: String) -> Result<()> {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("ip")
-            .arg("addr")
+        let mut cmd = Command::new("p");
+        cmd.arg("addr")
             .arg("add")
             .arg(&addr)
             .arg("dev")
@@ -87,8 +81,8 @@ impl Veth {
     }
 
     pub fn delete(&mut self) -> Result<()> {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("ip").arg("link").arg("del").arg(&self.name);
+        let mut cmd = Command::new("ip");
+        cmd.arg("link").arg("del").arg(&self.name);
         if let Some(ns) = &self.namespace {
             cmd = ns.wrap(cmd);
         }
@@ -109,8 +103,8 @@ impl Veth {
     }
 
     pub fn clear_limits(&self) -> Result<()> {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("wondershaper").arg("-a").arg(&self.name).arg("-c");
+        let mut cmd = Command::new("wondershaper");
+        cmd.arg("-a").arg(&self.name).arg("-c");
         exec(cmd)?;
         Ok(())
     }

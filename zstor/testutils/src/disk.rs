@@ -44,8 +44,8 @@ impl Disk {
 
     pub fn delete(&mut self) -> Result<()> {
         if let Some(ref image_path) = self.image {
-            let mut cmd = Command::new("sudo");
-            cmd.arg("umount").arg(&self.path);
+            let mut cmd = Command::new("umount");
+            cmd.arg(&self.path);
             exec(cmd)?;
             let mut cmd = Command::new("rm");
             cmd.arg("-rf").arg(&self.path);

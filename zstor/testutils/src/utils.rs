@@ -171,9 +171,8 @@ pub fn tempdir() -> String {
 }
 
 pub fn sed(path: &Path, src: &str, dst: &str) {
-    let mut cmd = Command::new("sudo");
-    cmd.arg("sed")
-        .arg("-i")
+    let mut cmd = Command::new("sed");
+    cmd.arg("-i")
         .arg(format!("s/{}/{}/g", src, dst))
         .arg(path.to_str().unwrap());
     exec(cmd).expect("replacing in file");
