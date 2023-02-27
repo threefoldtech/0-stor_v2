@@ -67,7 +67,7 @@ impl Veth {
         Ok(())
     }
     pub fn set_addr(&mut self, addr: String) -> Result<()> {
-        let mut cmd = Command::new("p");
+        let mut cmd = Command::new("ip");
         cmd.arg("addr")
             .arg("add")
             .arg(&addr)
