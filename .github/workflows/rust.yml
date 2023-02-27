@@ -21,8 +21,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    # We download specific versions here. The versions themselves don't really matter, but since the aim here is to have tests for 0-stor,
+    # instead of the full qsfs stack, we avoid using latest, as that could introduce test failure because the components used in the tests
+    # change behavior.
+    - name: Install 0-db
+      run: sudo wget -O /usr/bin/zdb https://github.com/threefoldtech/0-db/releases/download/v2.0.4/zdb-2.0.4-linux-amd64-static
+    - name: Install 0-db hook script
+      run: wget -O hook.sh https://raw.githubusercontent.com/threefoldtech/quantum-storage/v0.1.0/lib/zdb-hook.sh
+    - name: Install 0-db-fs
+      run: sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
+    - name: Install wondershaper
+      run: sudo wget -O wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
     - name: Run tests
-      run: cargo test --verbose
+      run: sudo cargo test --verbose
 
   fmt:
     name: Rustfmt
