@@ -35,17 +35,10 @@ jobs:
       run: sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
     - name: Install wondershaper
       run: sudo wget -O wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
-    # Giving a path to the user directory is not a good flow, but invoking cargo with sudo is not available. And there is not a trivial
-    # action.
-    # Also, we need to set up rust specifically for the root user
-    - name: Setup rust on root
-      run: |
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y
-        sudo source "$HOME/.cargo/env"
-        sudo rustup toolchain install stable
-        sudo rustup default stable
+    - name: Build tests
+      run: cargo build --tests
     - name: Run tests
-      run: sudo /home/runner/.cargo/bin/cargo test --verbose
+      run: sudo target/debug/deps/integration_test-*([a-f0-9])
 
   fmt:
     name: Rustfmt
