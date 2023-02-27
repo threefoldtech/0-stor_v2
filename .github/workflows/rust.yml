@@ -38,7 +38,7 @@ jobs:
     - name: Build tests
       run: cargo build --tests
     - name: Run tests
-      run: sudo exec $(find target/debug/deps/integration_test-* -type f -executable -print)
+      run: find target/debug/deps/integration_test-* -type f -executable -print | xargs sudo
 
   fmt:
     name: Rustfmt
