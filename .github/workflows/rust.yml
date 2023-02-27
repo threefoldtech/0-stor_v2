@@ -21,6 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
     # We download specific versions here. The versions themselves don't really matter, but since the aim here is to have tests for 0-stor,
     # instead of the full qsfs stack, we avoid using latest, as that could introduce test failure because the components used in the tests
     # change behavior.
@@ -32,8 +35,17 @@ jobs:
       run: sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
     - name: Install wondershaper
       run: sudo wget -O wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
+    # Giving a path to the user directory is not a good flow, but invoking cargo with sudo is not available. And there is not a trivial
+    # action.
+    # Also, we need to set up rust specifically for the root user
+    - name: Setup rust on root
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y
+        sudo source "$HOME/.cargo/env"
+        sudo rustup toolchain install stable
+        sudo rustup default stable
     - name: Run tests
-      run: sudo cargo test --verbose
+      run: sudo /home/runner/.cargo/bin/cargo test --verbose
 
   fmt:
     name: Rustfmt
