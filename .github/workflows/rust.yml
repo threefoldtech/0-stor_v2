@@ -21,9 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
     # We download specific versions here. The versions themselves don't really matter, but since the aim here is to have tests for 0-stor,
     # instead of the full qsfs stack, we avoid using latest, as that could introduce test failure because the components used in the tests
     # change behavior.
