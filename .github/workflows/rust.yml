@@ -34,7 +34,7 @@ jobs:
     - name: Install 0-db-fs
       run: sudo wget -O /usr/bin/zdbfs https://github.com/threefoldtech/0-db-fs/releases/download/v0.1.10/zdbfs-0.1.10-amd64-linux-static
     - name: Install wondershaper
-      run: sudo wget -O wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
+      run: sudo wget -O /usr/bin/wondershaper https://raw.githubusercontent.com/magnific0/wondershaper/master/wondershaper
     - name: Build tests
       run: cargo build --tests
     - name: Run tests
