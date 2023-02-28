@@ -2749,15 +2749,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "testutils"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "toml",
- "zstor_v2",
-]
-
-[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3339,7 +3330,6 @@ dependencies = [
  "simple_logger",
  "snap",
  "structopt",
- "testutils",
  "tide",
  "tokio",
  "tokio-util",
