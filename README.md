@@ -249,3 +249,25 @@ The key structure is: `/{prefix}/meta/{hashed_path_hex}`
 
 The metadata itself is encrypted, binary encoded, and then dispersed in
 the metadata 0-dbs.
+
+### Metadata cluster requirements
+
+Since the metadata is also encoded before being stored, we need to know the used
+encoding to be able to decode again. Since we can't store metadata about metadata
+itself, this is a static setup. As said, at present there are 4 metadata storage
+0-db's defined. Since the key is defined by the system, these must be run in `user`
+mode. At the moment, it is not possible to define more metadata stores as can be
+done with regular data stores.
+
+The actual metadata is encoded in a 2:2 setup, that is, 2 data shards and 2 parity
+shards. This allows up to 2 (i.e. half) of the metadata stores to be lost, while
+still retaining access to the data. Any 2 stores can be used to recover the data,
+there is no specific difference between them.
+
+Because the system is designed to prioritize recoverability over availability,
+writers will be rejected if the metadata storage is in the degraded state, that is,
+not all 4 stores are available and writeable.
+
+A metadata store can be replaced by a new one, by removing the old one in the config
+and inserting the new one. The repair subsystem will take care of rebulding the data,
+regenerating the shards, and storing the new shards on the new metatada store.
