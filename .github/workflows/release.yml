@@ -22,7 +22,7 @@ jobs:
           toolchain: stable
           target: x86_64-unknown-linux-musl
           override: true
-      - run: cargo build --release --target x86_64-unknown-linux-musl --features vendored
+      - run: RUSTFLAGS="-C target-feature=+aes,+avx,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+xsave,+xsavec,+xsaveopt,+xsaves $RUSTFLAGS" cargo build --release --target x86_64-unknown-linux-musl --features vendored
       - run: strip target/x86_64-unknown-linux-musl/release/zstor_v2
       - run: cp target/x86_64-unknown-linux-musl/release/zstor_v2 zstor_v2-x86_64-linux-musl
 
