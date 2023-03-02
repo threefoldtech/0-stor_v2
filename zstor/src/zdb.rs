@@ -700,7 +700,6 @@ impl SequentialZdb {
 
             // if a key is given, we just return that. Otherwise we interpret the returned byteslice as
             // a key
-            debug_assert!(raw_key.len() == std::mem::size_of::<Key>());
             keys.push(read_le_key(&raw_key))
         }
         Ok(keys)
