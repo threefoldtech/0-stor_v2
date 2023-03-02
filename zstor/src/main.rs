@@ -11,6 +11,7 @@ use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::{Filter, Response};
+use prettytable::{row, Table};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,9 @@ use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, Zst
 use zstor_v2::actors::zstor_scheduler::Signaled;
 use zstor_v2::actors::zstor_scheduler::ZstorActorScheduler;
 use zstor_v2::config::Config;
+use zstor_v2::config::Meta;
 use zstor_v2::zdb::SequentialZdb;
+use zstor_v2::zdb::UserKeyZdb;
 use zstor_v2::{ZstorError, ZstorErrorKind, ZstorResult};
 
 const MIB: u64 = 1 << 20;
@@ -170,6 +173,13 @@ enum Cmd {
     /// metadata storage is reachable. Validation of the configuration also includes making sure
     /// at least 1 distribution can be generated for writing files.
     Test,
+
+    /// Get statistics about backends
+    ///
+    /// Connects to all regular and metadata storage backends in the config, and gathers info about
+    /// the health of the backends. This info inludes if the backend is reachable, and the amount
+    /// of used and free storage space.
+    Status,
 }
 
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
@@ -326,6 +336,153 @@ async fn real_main() -> ZstorResult<()> {
 
             // retrieve a config
             cfg.shard_stores()?;
+        }
+        Cmd::Status => {
+            debug!("Verifying 0-db health");
+
+            let Meta::Zdb(meta_cfg) = cfg.meta();
+            let mut meta_zdbs = Vec::with_capacity(meta_cfg.backends().len());
+            for conn_result in join_all(
+                meta_cfg
+                    .backends()
+                    .iter()
+                    .cloned()
+                    .map(|ci| tokio::spawn(async move { UserKeyZdb::new(ci).await })),
+            )
+            .await
+            {
+                meta_zdbs.push(conn_result?);
+            }
+            let mut meta_table = Table::new();
+            meta_table.set_titles(row![
+                "backend",
+                "reachable",
+                "objects",
+                "used space",
+                "free space",
+                "usage percentage",
+            ]);
+            for mzdb in meta_zdbs {
+                match mzdb {
+                    Err(zdbe) => {
+                        meta_table.add_row(row![
+                            format!(
+                                "{} - {}",
+                                zdbe.remote().address(),
+                                    zdbe.remote().namespace().unwrap_or("default"),
+                            ),
+                            "No",
+                            r->"-",
+                            r->"-",
+                            r->"-",
+                            r->"-",
+                        ]);
+                    }
+                    Ok(zdb) => match zdb.ns_info().await {
+                        Err(e) => {
+                            error!("Failed to get namespace info: {}", e);
+                            meta_table.add_row(row![
+                                format!(
+                                    "{} - {}",
+                                    zdb.connection_info().address(),
+                                    zdb.connection_info().namespace().unwrap_or("default"),
+                                ),
+                                "No",
+                                r->"-",
+                                r->"-",
+                                r->"-",
+                                r->"-"
+                            ]);
+                        }
+                        Ok(ns_info) => {
+                            meta_table.add_row(row![
+                                format!(
+                                    "{} - {}",
+                                    zdb.connection_info().address(),
+                                    zdb.connection_info().namespace().unwrap_or("default"),
+                                ),
+                                "Yes",
+                                r->ns_info.entries(),
+                                r->ns_info.data_size_bytes,
+                                r->ns_info.free_space(),
+                                r->ns_info.data_usage_percentage()
+                            ]);
+                        }
+                    },
+                };
+            }
+            meta_table.printstd();
+
+            let mut storage_zdbs = Vec::with_capacity(cfg.backends().len());
+            for conn_result in join_all(
+                cfg.backends()
+                    .into_iter()
+                    .cloned()
+                    .map(|ci| tokio::spawn(async move { SequentialZdb::new(ci).await })),
+            )
+            .await
+            {
+                storage_zdbs.push(conn_result?);
+            }
+            let mut table = Table::new();
+            table.set_titles(row![
+                "backend",
+                "reachable",
+                "objects",
+                "used space",
+                "free space",
+                "usage percentage",
+            ]);
+            for stzdb in storage_zdbs {
+                match stzdb {
+                    Err(zdbe) => {
+                        table.add_row(row![
+                            format!(
+                                "{} - {}",
+                                zdbe.remote().address(),
+                                zdbe.remote().namespace().unwrap_or("default"),
+                            ),
+                            "No",
+                            r->"-",
+                            r->"-",
+                            r->"-",
+                            r->"-",
+                        ]);
+                    }
+                    Ok(zdb) => match zdb.ns_info().await {
+                        Err(e) => {
+                            error!("Failed to get namespace info: {}", e);
+                            table.add_row(row![
+                                format!(
+                                    "{} - {}",
+                                    zdb.connection_info().address(),
+                                    zdb.connection_info().namespace().unwrap_or("default"),
+                                ),
+                                "No",
+                                r->"-",
+                                r->"-",
+                                r->"-",
+                                r->"-"
+                            ]);
+                        }
+                        Ok(ns_info) => {
+                            table.add_row(row![
+                                format!(
+                                    "{} - {}",
+                                    zdb.connection_info().address(),
+                                    zdb.connection_info().namespace().unwrap_or("default"),
+                                ),
+                                "Yes",
+                                r->ns_info.entries(),
+                                r->ns_info.data_size_bytes,
+                                r->ns_info.free_space(),
+                                r->ns_info.data_usage_percentage()
+                            ]);
+                        }
+                    },
+                };
+            }
+            table.printstd();
         }
         Cmd::Monitor => {
             let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
