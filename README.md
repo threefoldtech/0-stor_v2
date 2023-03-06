@@ -79,6 +79,7 @@ removed, as long as sufficient are left to recover the data.
 reencoding it, and storing it in (new) zdbs according to the current config
 - `Check` a file, returning a 16 byte `blake2b` checksum (in hex) if it
  is present in the backend (by fetching it from the metastore).
+- `Status` : get statistics about backends
 
 ### Other features
 
