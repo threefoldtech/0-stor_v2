@@ -83,6 +83,10 @@ reencoding it, and storing it in (new) zdbs according to the current config
 
 ### Other features
 
+- Config file hot reloading. If the config file is editted, `SIGUSR1` can
+ be send to a running 0-stor process to reload the configuration. Only the
+ backends in the new configuration are used. Data is not rebuild on these
+ new backends as long as the old backends are still operational
 - Monitoring of active 0-db backends. An active backend is considered a
 backend that is tracked in the config, which has sufficient space
  left to write new blocks.
