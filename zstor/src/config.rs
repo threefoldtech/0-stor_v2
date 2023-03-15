@@ -335,7 +335,6 @@ impl Config {
                 self.groups[*group_idx]
                     .backends
                     .choose_multiple(&mut rand::thread_rng(), *amount)
-                    .into_iter()
                     .cloned(),
             );
         }

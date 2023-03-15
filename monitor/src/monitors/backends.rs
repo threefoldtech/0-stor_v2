@@ -64,7 +64,7 @@ pub async fn monitor_backends(
                            .or_insert_with(|| BackendState::Unknown(std::time::Instant::now()));
                    }
 
-                    let keys = backends.keys().into_iter().cloned().collect::<Vec<_>>();
+                    let keys = backends.keys().cloned().collect::<Vec<_>>();
                     for backend_group in keys.chunks(MAX_CONCURRENT_CONNECTIONS) {
                         let mut futs: Vec<JoinHandle<Result<_,(_,ZstorError)>>> = Vec::with_capacity(backend_group.len());
                         for backend in backend_group {
