@@ -199,7 +199,7 @@ impl Config {
     /// be removed.
     /// TODO: remove this.
     pub fn remove_shard(&mut self, address: &ZdbConnectionInfo) {
-        for mut group in &mut self.groups {
+        for group in &mut self.groups {
             group.backends = group
                 .backends
                 .drain(..)
@@ -211,7 +211,7 @@ impl Config {
     /// Remove a backend from the config. If it should be present multiple times, all instances
     /// will be removed.
     pub fn remove_backend(&mut self, backend: &ZdbConnectionInfo) {
-        for mut group in &mut self.groups {
+        for group in &mut self.groups {
             group.backends = group.backends.drain(..).filter(|b| b != backend).collect();
         }
     }
