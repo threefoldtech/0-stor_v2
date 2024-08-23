@@ -463,7 +463,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
                                 None
                             }
                         })
-                        .chain(meta_info.into_iter())
+                        .chain(meta_info)
                         .collect::<HashMap<_, _>>();
                     async move {
                         // If there was an error for one of the nodes, this is pointless.
