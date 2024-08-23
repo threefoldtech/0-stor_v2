@@ -32,7 +32,6 @@ redis = { version = "0.26.1", default-features = false, features = [
   "connection-manager",
 ] }
 sha-1 = "0.10.1"
-simple_logger = "1.11" # TODO: remove this
 structopt = "0.3.26"
 tokio = { version = "1.39.3", features = ["rt", "macros", "fs"] }
 futures = "0.3.30"
@@ -65,3 +64,4 @@ bindgen = "0.70.1"
 [dev-dependencies]
 rand = "0.8.5"
 criterion = "0.5.1"
+simple_logger = "1.11" # TODO: remove this
