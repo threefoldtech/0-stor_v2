@@ -127,10 +127,10 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
 
 /// Load a TOML encoded config file from the given path.
 pub async fn load_config(path: &Path) -> ZstorResult<Config> {
-    let cfg_data = fs::read(path)
+    let cfg_data = fs::read_to_string(path)
         .await
         .map_err(|e| ZstorError::new_io("Couldn't load config file".to_string(), e))?;
-    Ok(toml::from_slice(&cfg_data)?)
+    Ok(toml::from_str(&cfg_data)?)
 }
 
 /// An error originating in zstor
