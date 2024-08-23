@@ -9,10 +9,6 @@ repository = "https://github.com/threefoldtech/0-stor_v2"
 name = "zstor_v2"
 path = "src/main.rs"
 
-[[bin]]
-name = "test-zdb"
-path = "src/test_zdb.rs"
-
 [[bench]]
 name = "aes_encryptor"
 harness = false
