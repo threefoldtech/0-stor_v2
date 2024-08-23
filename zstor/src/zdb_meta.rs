@@ -506,7 +506,9 @@ where
         );
 
         let mut out = [0; 16];
-        hasher.finalize_variable(&mut out);
+        hasher
+            .finalize_variable(&mut out)
+            .expect("Hash is valid size; qed");
         let r = hex::encode(out);
         trace!("hashed path: {}", r);
         let full_key = format!("/{}/meta/{}", self.prefix, r);
@@ -531,7 +533,9 @@ where
         );
 
         let mut out = [0; 16];
-        hasher.finalize_variable(&mut out);
+        hasher
+            .finalize_variable(&mut out)
+            .expect("Hash is valid size; qed");
 
         Ok(format!("/{}/failures/{}", self.prefix, hex::encode(out)))
     }

@@ -338,7 +338,9 @@ impl ZdbConnectionInfo {
             hasher.update(password.as_bytes());
         }
         let mut r = [0; 16];
-        hasher.finalize_variable(&mut r);
+        hasher
+            .finalize_variable(&mut r)
+            .expect("Hash is valid size; qed");
         r
     }
 }
