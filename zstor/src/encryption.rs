@@ -1,5 +1,8 @@
 use crate::config;
-use aes_gcm::aead::{generic_array::GenericArray, Aead, NewAead};
+use aes_gcm::{
+    aead::{generic_array::GenericArray, Aead},
+    KeyInit,
+};
 use rand::prelude::*;
 use serde::{
     de::{self, Visitor},
