@@ -1,7 +1,7 @@
 use crate::meta::{Checksum, CHECKSUM_LENGTH};
 use blake2::{
     digest::{Update, VariableOutput},
-    VarBlake2b,
+    Blake2bVar,
 };
 use log::trace;
 use reed_solomon_erasure::{galois_8::ReedSolomon, Error as RsError};
@@ -175,7 +175,7 @@ impl Shard {
 
     /// Generate a checksum for the data in the shard
     pub fn checksum(&self) -> Checksum {
-        let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
+        let mut hasher = Blake2bVar::new(CHECKSUM_LENGTH).unwrap();
         hasher.update(&self.0);
 
         // expect is safe due to the static size, which is known to be valid

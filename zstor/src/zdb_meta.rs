@@ -8,7 +8,7 @@ use crate::{
 use async_trait::async_trait;
 use blake2::{
     digest::{Update, VariableOutput},
-    VarBlake2b,
+    Blake2bVar,
 };
 use futures::{
     future::{join_all, try_join_all},
@@ -490,7 +490,7 @@ where
 
         trace!("hashing path {:?}", actual_path);
         // The unwrap here is safe since we know that 16 is a valid output size
-        let mut hasher = VarBlake2b::new(16).unwrap();
+        let mut hasher = Blake2bVar::new(16).unwrap();
         // TODO: might not need the move to a regular &str
         hasher.update(
             actual_path
@@ -505,9 +505,9 @@ where
                 .as_bytes(),
         );
 
-        // TODO: is there a better way to do this?
-        let mut r = String::new();
-        hasher.finalize_variable(|resp| r = hex::encode(resp));
+        let mut out = [0; 16];
+        hasher.finalize_variable(&mut out);
+        let r = hex::encode(out);
         trace!("hashed path: {}", r);
         let full_key = format!("/{}/meta/{}", self.prefix, r);
         trace!("full key: {}", full_key);
@@ -517,7 +517,7 @@ where
     // This does not take into account the virtual root
     #[allow(clippy::result_large_err)]
     fn build_failure_key(&self, path: &Path) -> ZdbMetaStoreResult<String> {
-        let mut hasher = VarBlake2b::new(16).unwrap();
+        let mut hasher = Blake2bVar::new(16).unwrap();
         hasher.update(
             path.as_os_str()
                 .to_str()
@@ -530,8 +530,8 @@ where
                 .as_bytes(),
         );
 
-        let mut out = Vec::new();
-        hasher.finalize_variable(|res| out = res.to_vec());
+        let mut out = [0; 16];
+        hasher.finalize_variable(&mut out);
 
         Ok(format!("/{}/failures/{}", self.prefix, hex::encode(out)))
     }

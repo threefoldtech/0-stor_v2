@@ -7,7 +7,7 @@ use crate::{
     ZstorError, ZstorResult,
 };
 use actix::prelude::*;
-use blake2::{digest::VariableOutput, VarBlake2b};
+use blake2::{digest::VariableOutput, Blake2bVar};
 use log::{debug, info, trace};
 use std::fs;
 use std::{
@@ -277,7 +277,7 @@ fn checksum(file: &Path) -> ZstorResult<Checksum> {
     let mut file =
         File::open(file).map_err(|e| ZstorError::new_io("could not open file".to_string(), e))?;
     // The unwrap here is safe since we know that 16 is a valid output size
-    let mut hasher = VarBlake2b::new(CHECKSUM_LENGTH).unwrap();
+    let mut hasher = Blake2bVar::new(CHECKSUM_LENGTH).unwrap();
     std::io::copy(&mut file, &mut hasher)
         .map_err(|e| ZstorError::new_io("could not get file hash".to_string(), e))?;
 

@@ -1,7 +1,7 @@
 use crate::meta::MetaStoreError;
 use blake2::{
     digest::{Update, VariableOutput},
-    VarBlake2b,
+    Blake2bVar,
 };
 use futures::stream::{Stream, StreamExt};
 use log::{debug, trace};
@@ -329,7 +329,7 @@ impl ZdbConnectionInfo {
     /// Get a hash of the connection info using the blake2b hash algorithm. The output size is 16
     /// bytes.
     pub fn blake2_hash(&self) -> [u8; 16] {
-        let mut hasher = VarBlake2b::new(16).unwrap();
+        let mut hasher = Blake2bVar::new(16).unwrap();
         hasher.update(self.address.to_string().as_bytes());
         if let Some(ref ns) = self.namespace {
             hasher.update(ns.as_bytes());
@@ -337,9 +337,9 @@ impl ZdbConnectionInfo {
         if let Some(ref password) = self.password {
             hasher.update(password.as_bytes());
         }
-        let mut r = Vec::with_capacity(0); // no allocation
-        hasher.finalize_variable(|res| r = res.to_vec());
-        r.try_into().unwrap()
+        let mut r = [0; 16];
+        hasher.finalize_variable(&mut r);
+        r
     }
 }
 
