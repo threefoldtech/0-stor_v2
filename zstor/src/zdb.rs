@@ -355,13 +355,13 @@ impl InternalZdb {
         // NOTE: this behavior appears to be consistent with the `redis-cli` interface
         debug!("connecting to zdb at {}", info.address);
         let ci = ConnectionInfo {
-            addr: Box::new(ConnectionAddr::Tcp(
-                info.address.ip().to_string(),
-                info.address.port(),
-            )),
-            db: 0,
-            username: None,
-            passwd: None,
+            addr: ConnectionAddr::Tcp(info.address.ip().to_string(), info.address.port()),
+            redis: redis::RedisConnectionInfo {
+                db: 0,
+                username: None,
+                password: None,
+                protocol: redis::ProtocolVersion::RESP3,
+            },
         };
 
         let client = redis::Client::open(ci.clone()).map_err(|e| ZdbError {
@@ -491,7 +491,7 @@ impl InternalZdb {
             ZDB_TIMEOUT,
             redis::cmd("GET")
                 .arg(key)
-                .query_async::<_, Option<Vec<u8>>>(&mut self.conn.clone()),
+                .query_async::<Option<Vec<u8>>>(&mut self.conn.clone()),
         )
         .await
         .map_err(|_| ZdbError {
