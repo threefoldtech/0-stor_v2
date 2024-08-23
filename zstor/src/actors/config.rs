@@ -1,7 +1,7 @@
 use crate::{
     config::{Config, Meta},
     zdb::ZdbConnectionInfo,
-    ZstorError,
+    ZstorError, ZstorErrorKind,
 };
 use actix::prelude::*;
 use log::{debug, error};
@@ -82,7 +82,10 @@ impl Handler<ReloadConfig> for ConfigActor {
             }
             .into_actor(self)
             .map(|res, this, _| {
-                let config = toml::from_slice(&res?)?;
+                let config = toml::from_str(
+                    &String::from_utf8(res?)
+                        .map_err(|e| ZstorError::new(ZstorErrorKind::Config, Box::new(e)))?,
+                )?;
                 this.config = Arc::new(config);
                 debug!("Config actor finished reloading running config");
                 Ok(())
@@ -139,7 +142,7 @@ impl Handler<ReplaceMetaBackend> for ConfigActor {
 
 /// Save a config to the config file.
 async fn save_config(config_path: PathBuf, config: Arc<Config>) -> Result<(), ZstorError> {
-    let data = toml::to_vec(config.deref()).map_err(ZstorError::from)?;
+    let data = toml::to_string(config.deref()).map_err(ZstorError::from)?;
     fs::write(&config_path, data)
         .await
         .map_err(|e| ZstorError::new_io("Could not save config file".into(), e))
