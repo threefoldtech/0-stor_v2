@@ -23,17 +23,6 @@ impl Default for NopExplorerActor {
     }
 }
 
-/// Message requesting the actor checks the pools, and fills them if their expiration time is lower
-/// than the threshold.
-#[derive(Debug, Message)]
-#[rtype(result = "()")]
-struct CheckPools;
-
-/// Message to trigger a balance check on the wallet used.
-#[derive(Debug, Message)]
-#[rtype(result = "()")]
-struct CheckWalletBalances;
-
 /// Message requesting the actor to expand the backend storage. An optional existing reservation
 /// ID can be passed. In this case, an attempt is made to reserve the storage on the same pool. If
 /// the decomission flag is passed as well, the old reservation is attempted to be removed.
