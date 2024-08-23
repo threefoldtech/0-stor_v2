@@ -64,4 +64,4 @@ bindgen = "0.70.1"
 [dev-dependencies]
 rand = "0.8.5"
 criterion = "0.5.1"
-simple_logger = "1.11" # TODO: remove this
+simple_logger = "5.0.0"
