@@ -65,8 +65,8 @@ path-clean = "0.1.0"
 prettytable = { version = "0.10.0", default-features = false }
 
 [build-dependencies]
-bindgen = "0.59"
+bindgen = "0.70.1"
 
 [dev-dependencies]
 rand = "0.7"
-criterion = "0.3"
+criterion = "0.5.1"

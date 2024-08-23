@@ -6,7 +6,7 @@ fn main() {
 
     let bindings = bindgen::Builder::default()
         .header("include/types.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .allowlist_type("fs_stats_t")
         .derive_default(true)
         .generate()
