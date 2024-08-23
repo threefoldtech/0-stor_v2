@@ -127,7 +127,7 @@ impl CollectionKeys {
             // SAFETY: the some variant here is only set through methods, and is only filled in
             // through a leak of the boxed variable. Therefore we can safely recreate the box and
             // let it go out of scope to deallocate it.
-            unsafe { Box::from_raw(cmd as *const redis::Cmd as *mut redis::Cmd) };
+            let _ = unsafe { Box::from_raw(cmd as *const redis::Cmd as *mut redis::Cmd) };
         }
         if let Some(ca) = self.active_con.take() {
             // SAFETY: convert a raw pointer to the ConnectionManager. The conversion to a box,
@@ -136,7 +136,7 @@ impl CollectionKeys {
             // similarly to the above. The validity of the raw pointer is reliant on the fact that
             // the ConnectionManager is not moved. This should ideally be a Pin<_>, but the redis
             // lib does not seem to like that.
-            unsafe { Box::from_raw(ca as *mut ConnectionManager) };
+            let _ = unsafe { Box::from_raw(ca as *mut ConnectionManager) };
         }
         // Clear the running future, this is needed in case this method gets called while the
         // object is still alive, i.e. as part of the [`Stream`] impl. It is however not strictly
