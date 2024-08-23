@@ -569,6 +569,7 @@ namespace = "test2"
 password = "supersecretpass"
 
 [[groups]]
+
 [[groups.backends]]
 address = "[fe80::1]:9900"
 
@@ -577,6 +578,7 @@ address = "[fe80::1]:9900"
 namespace = "test"
 
 [[groups]]
+
 [[groups.backends]]
 address = "[2a02:1802:5e::dead:babe]:9900"
 
