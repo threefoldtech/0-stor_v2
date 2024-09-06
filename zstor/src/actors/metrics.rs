@@ -5,7 +5,8 @@ use crate::{
 use actix::prelude::*;
 use log::warn;
 use prometheus::{
-    register_int_gauge, register_int_gauge_vec, Encoder, IntGauge, IntGaugeVec, TextEncoder,
+    register_int_counter, register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
+    Encoder, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, TextEncoder,
 };
 use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
@@ -29,21 +30,21 @@ struct PromMetrics {
     data_size_bytes_gauges: IntGaugeVec,
     data_limit_bytes_gauges: IntGaugeVec,
     index_size_bytes_gauges: IntGaugeVec,
-    index_io_errors_gauges: IntGaugeVec,
-    index_faults_gauges: IntGaugeVec,
-    data_io_errors_gauges: IntGaugeVec,
-    data_faults_gauges: IntGaugeVec,
+    index_io_errors: IntCounterVec,
+    index_faults: IntCounterVec,
+    data_io_errors: IntCounterVec,
+    data_faults: IntCounterVec,
     index_disk_freespace_bytes_gauges: IntGaugeVec,
     data_disk_freespace_bytes_gauges: IntGaugeVec,
 
-    zstor_store_commands_finished_gauges: IntGaugeVec,
-    zstor_retrieve_commands_finished_gauges: IntGaugeVec,
-    zstor_rebuild_commands_finished_gauges: IntGaugeVec,
-    zstor_check_commands_finished_gauges: IntGaugeVec,
+    zstor_store_commands_finished: IntCounterVec,
+    zstor_retrieve_commands_finished: IntCounterVec,
+    zstor_rebuild_commands_finished: IntCounterVec,
+    zstor_check_commands_finished: IntCounterVec,
 
-    fs_fuse_reqs: IntGauge,
-    fs_cache_hits: IntGauge,
-    fs_cache_miss: IntGauge,
+    fs_fuse_reqs: IntCounter,
+    fs_cache_hits: IntCounter,
+    fs_cache_miss: IntCounter,
     fs_cache_full: IntGauge,
     fs_cache_linear_flush: IntGauge,
     fs_cache_random_flush: IntGauge,
@@ -52,10 +53,10 @@ struct PromMetrics {
     fs_cache_entries: IntGauge,
     fs_cache_blocks: IntGauge,
     fs_cache_blocksize: IntGauge,
-    fs_syscalls: IntGaugeVec,
-    fs_bytes_read: IntGauge,
-    fs_bytes_written: IntGauge,
-    fs_fuse_errors: IntGauge,
+    fs_syscalls: IntCounterVec,
+    fs_bytes_read: IntCounter,
+    fs_bytes_written: IntCounter,
+    fs_fuse_errors: IntCounter,
 }
 
 impl MetricsActor {
@@ -100,25 +101,25 @@ impl MetricsActor {
                 &["address", "namespace", "backend_type"]
             )
             .unwrap(),
-            index_io_errors_gauges: register_int_gauge_vec!(
+            index_io_errors: register_int_counter_vec!(
                 "index_io_errors",
                 "index_io_errors in namespace",
                 &["address", "namespace", "backend_type"]
             )
             .unwrap(),
-            index_faults_gauges: register_int_gauge_vec!(
+            index_faults: register_int_counter_vec!(
                 "index_faults",
                 "index_faults in namespace",
                 &["address", "namespace", "backend_type"]
             )
             .unwrap(),
-            data_io_errors_gauges: register_int_gauge_vec!(
+            data_io_errors: register_int_counter_vec!(
                 "data_io_errors",
                 "data_io_errors in namespace",
                 &["address", "namespace", "backend_type"]
             )
             .unwrap(),
-            data_faults_gauges: register_int_gauge_vec!(
+            data_faults: register_int_counter_vec!(
                 "data_faults",
                 "data_faults in namespace",
                 &["address", "namespace", "backend_type"]
@@ -136,38 +137,38 @@ impl MetricsActor {
                 &["address", "namespace", "backend_type"]
             )
             .unwrap(),
-            zstor_store_commands_finished_gauges: register_int_gauge_vec!(
+            zstor_store_commands_finished: register_int_counter_vec!(
                 "zstore_store_commands_finished",
                 "zstor store commands that finished",
                 &["success"]
             )
             .unwrap(),
-            zstor_retrieve_commands_finished_gauges: register_int_gauge_vec!(
+            zstor_retrieve_commands_finished: register_int_counter_vec!(
                 "zstore_retrieve_commands_finished",
                 "zstor retrieve commands that finished",
                 &["success"]
             )
             .unwrap(),
-            zstor_rebuild_commands_finished_gauges: register_int_gauge_vec!(
+            zstor_rebuild_commands_finished: register_int_counter_vec!(
                 "zstore_rebuild_commands_finished",
                 "zstor rebuild commands that finished",
                 &["success"]
             )
             .unwrap(),
-            zstor_check_commands_finished_gauges: register_int_gauge_vec!(
+            zstor_check_commands_finished: register_int_counter_vec!(
                 "zstore_check_commands_finished",
                 "zstor check commands that finished",
                 &["success"]
             )
             .unwrap(),
-            fs_fuse_reqs: register_int_gauge!("fs_fuse_reqs", "Total amount of fuse requests")
+            fs_fuse_reqs: register_int_counter!("fs_fuse_reqs", "Total amount of fuse requests")
                 .unwrap(),
-            fs_cache_hits: register_int_gauge!(
+            fs_cache_hits: register_int_counter!(
                 "fs_cache_hits",
                 "Total amount of cache hits in the filesystem"
             )
             .unwrap(),
-            fs_cache_miss: register_int_gauge!(
+            fs_cache_miss: register_int_counter!(
                 "fs_cache_miss",
                 "Total amount of cache misses in the filesystem"
             )
@@ -212,23 +213,23 @@ impl MetricsActor {
                 "Amount of bytes used by cache blocks"
             )
             .unwrap(),
-            fs_syscalls: register_int_gauge_vec!(
+            fs_syscalls: register_int_counter_vec!(
                 "fs_syscalls",
                 "Total amount of syscalls done on the filesystem",
                 &["syscall"]
             )
             .unwrap(),
-            fs_bytes_read: register_int_gauge!(
+            fs_bytes_read: register_int_counter!(
                 "fs_bytes_read",
                 "Total amount of bytes read from the filessytem"
             )
             .unwrap(),
-            fs_bytes_written: register_int_gauge!(
+            fs_bytes_written: register_int_counter!(
                 "fs_bytes_written",
                 "Total amount of bytes written to the filessytem"
             )
             .unwrap(),
-            fs_fuse_errors: register_int_gauge!(
+            fs_fuse_errors: register_int_counter!(
                 "fs_fuse_errors",
                 "Total amount of errors returned by fuse calls"
             )
@@ -370,16 +371,16 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 if let Err(e) = self.prom_metrics.index_size_bytes_gauges.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
                 };
-                if let Err(e) = self.prom_metrics.index_io_errors_gauges.remove(&labels) {
+                if let Err(e) = self.prom_metrics.index_io_errors.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
                 };
-                if let Err(e) = self.prom_metrics.index_faults_gauges.remove(&labels) {
+                if let Err(e) = self.prom_metrics.index_faults.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
                 };
-                if let Err(e) = self.prom_metrics.data_io_errors_gauges.remove(&labels) {
+                if let Err(e) = self.prom_metrics.data_io_errors.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
                 };
-                if let Err(e) = self.prom_metrics.data_faults_gauges.remove(&labels) {
+                if let Err(e) = self.prom_metrics.data_faults.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
                 };
                 if let Err(e) = self
@@ -429,22 +430,11 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 .prom_metrics
                 .index_size_bytes_gauges
                 .get_metric_with(&labels)?;
-            let index_io_errors_gauge = self
-                .prom_metrics
-                .index_io_errors_gauges
-                .get_metric_with(&labels)?;
-            let index_faults_gauge = self
-                .prom_metrics
-                .index_faults_gauges
-                .get_metric_with(&labels)?;
-            let data_io_errors_gauge = self
-                .prom_metrics
-                .data_io_errors_gauges
-                .get_metric_with(&labels)?;
-            let data_faults_gauge = self
-                .prom_metrics
-                .data_faults_gauges
-                .get_metric_with(&labels)?;
+            let index_io_errors_gauge =
+                self.prom_metrics.index_io_errors.get_metric_with(&labels)?;
+            let index_faults_gauge = self.prom_metrics.index_faults.get_metric_with(&labels)?;
+            let data_io_errors_gauge = self.prom_metrics.data_io_errors.get_metric_with(&labels)?;
+            let data_faults_gauge = self.prom_metrics.data_faults.get_metric_with(&labels)?;
             let index_disk_freespace_bytes_gauge = self
                 .prom_metrics
                 .index_disk_freespace_bytes_gauges
@@ -461,10 +451,10 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                     .unwrap_or(info.data_disk_freespace_bytes) as i64,
             );
             index_size_bytes_gauge.set(info.index_size_bytes as i64);
-            index_io_errors_gauge.set(info.index_io_errors as i64);
-            index_faults_gauge.set(info.index_faults as i64);
-            data_io_errors_gauge.set(info.data_io_errors as i64);
-            data_faults_gauge.set(info.data_faults as i64);
+            index_io_errors_gauge.inc_by(info.index_io_errors as u64 - index_io_errors_gauge.get());
+            index_faults_gauge.inc_by(info.index_faults as u64 - index_faults_gauge.get());
+            data_io_errors_gauge.inc_by(info.data_io_errors as u64 - data_io_errors_gauge.get());
+            data_faults_gauge.inc_by(info.data_faults as u64 - data_io_errors_gauge.get());
             index_disk_freespace_bytes_gauge.set(info.index_disk_freespace_bytes as i64);
             data_disk_freespace_bytes_gauge.set(info.data_disk_freespace_bytes as i64);
         }
@@ -475,93 +465,109 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         let mut labels = HashMap::new();
         labels.insert("success", "true");
 
-        self.prom_metrics
-            .zstor_store_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .successful_zstor_commands
-                    .get(&ZstorCommandId::Store)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_retrieve_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .successful_zstor_commands
-                    .get(&ZstorCommandId::Retrieve)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_rebuild_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .successful_zstor_commands
-                    .get(&ZstorCommandId::Rebuild)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_check_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .successful_zstor_commands
-                    .get(&ZstorCommandId::Check)
-                    .unwrap_or(&0) as i64,
-            );
+        let stores = self
+            .prom_metrics
+            .zstor_store_commands_finished
+            .get_metric_with(&labels)?;
+        stores.inc_by(
+            *self
+                .successful_zstor_commands
+                .get(&ZstorCommandId::Store)
+                .unwrap_or(&0) as u64
+                - stores.get(),
+        );
+        let retrieves = self
+            .prom_metrics
+            .zstor_retrieve_commands_finished
+            .get_metric_with(&labels)?;
+        retrieves.inc_by(
+            *self
+                .successful_zstor_commands
+                .get(&ZstorCommandId::Retrieve)
+                .unwrap_or(&0) as u64
+                - retrieves.get(),
+        );
+        let rebuilds = self
+            .prom_metrics
+            .zstor_rebuild_commands_finished
+            .get_metric_with(&labels)?;
+        rebuilds.inc_by(
+            *self
+                .successful_zstor_commands
+                .get(&ZstorCommandId::Rebuild)
+                .unwrap_or(&0) as u64
+                - retrieves.get(),
+        );
+        let checks = self
+            .prom_metrics
+            .zstor_check_commands_finished
+            .get_metric_with(&labels)?;
+        checks.inc_by(
+            *self
+                .successful_zstor_commands
+                .get(&ZstorCommandId::Check)
+                .unwrap_or(&0) as u64
+                - checks.get(),
+        );
 
         // Failed calls
         let mut labels = HashMap::new();
         labels.insert("success", "false");
-        self.prom_metrics
-            .zstor_store_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .failed_zstor_commands
-                    .get(&ZstorCommandId::Store)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_retrieve_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .failed_zstor_commands
-                    .get(&ZstorCommandId::Retrieve)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_rebuild_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .failed_zstor_commands
-                    .get(&ZstorCommandId::Rebuild)
-                    .unwrap_or(&0) as i64,
-            );
-        self.prom_metrics
-            .zstor_check_commands_finished_gauges
-            .get_metric_with(&labels)?
-            .set(
-                *self
-                    .failed_zstor_commands
-                    .get(&ZstorCommandId::Check)
-                    .unwrap_or(&0) as i64,
-            );
+        let stores = self
+            .prom_metrics
+            .zstor_store_commands_finished
+            .get_metric_with(&labels)?;
+        stores.inc_by(
+            *self
+                .failed_zstor_commands
+                .get(&ZstorCommandId::Store)
+                .unwrap_or(&0) as u64
+                - stores.get(),
+        );
+        let retrieves = self
+            .prom_metrics
+            .zstor_retrieve_commands_finished
+            .get_metric_with(&labels)?;
+        retrieves.inc_by(
+            *self
+                .failed_zstor_commands
+                .get(&ZstorCommandId::Retrieve)
+                .unwrap_or(&0) as u64
+                - retrieves.get(),
+        );
+        let rebuilds = self
+            .prom_metrics
+            .zstor_rebuild_commands_finished
+            .get_metric_with(&labels)?;
+        rebuilds.inc_by(
+            *self
+                .failed_zstor_commands
+                .get(&ZstorCommandId::Rebuild)
+                .unwrap_or(&0) as u64
+                - rebuilds.get(),
+        );
+        let checks = self
+            .prom_metrics
+            .zstor_check_commands_finished
+            .get_metric_with(&labels)?;
+        checks.inc_by(
+            *self
+                .failed_zstor_commands
+                .get(&ZstorCommandId::Check)
+                .unwrap_or(&0) as u64
+                - checks.get(),
+        );
 
         // 0-db-fs info
         self.prom_metrics
             .fs_fuse_reqs
-            .set(self.zdbfs_stats.fuse_reqs as i64);
+            .inc_by(self.zdbfs_stats.fuse_reqs as u64 - self.prom_metrics.fs_fuse_reqs.get());
         self.prom_metrics
             .fs_cache_hits
-            .set(self.zdbfs_stats.cache_hit as i64);
+            .inc_by(self.zdbfs_stats.cache_hit as u64 - self.prom_metrics.fs_cache_hits.get());
         self.prom_metrics
             .fs_cache_miss
-            .set(self.zdbfs_stats.cache_miss as i64);
+            .inc_by(self.zdbfs_stats.cache_miss as u64 - self.prom_metrics.fs_cache_miss.get());
         self.prom_metrics
             .fs_cache_full
             .set(self.zdbfs_stats.cache_full as i64);
@@ -573,13 +579,13 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             .set(self.zdbfs_stats.cache_random_flush as i64);
         self.prom_metrics
             .fs_bytes_read
-            .set(self.zdbfs_stats.read_bytes as i64);
+            .inc_by(self.zdbfs_stats.read_bytes as u64 - self.prom_metrics.fs_bytes_read.get());
         self.prom_metrics
             .fs_bytes_written
-            .set(self.zdbfs_stats.write_bytes as i64);
+            .inc_by(self.zdbfs_stats.write_bytes as u64 - self.prom_metrics.fs_bytes_written.get());
         self.prom_metrics
             .fs_fuse_errors
-            .set(self.zdbfs_stats.errors as i64);
+            .inc_by(self.zdbfs_stats.errors as u64 - self.prom_metrics.fs_fuse_errors.get());
         self.prom_metrics
             .fs_cache_branches
             .set(self.zdbfs_stats.cache_branches as i64);
@@ -598,80 +604,51 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         // set syscall info
         let mut labels = HashMap::new();
         labels.insert("syscall", "getattr");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_getattr as i64);
+        let getattr = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        getattr.inc_by(self.zdbfs_stats.syscall_getattr as u64 - getattr.get());
         labels.insert("syscall", "setattr");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_setattr as i64);
+        let setattr = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        setattr.inc_by(self.zdbfs_stats.syscall_setattr as u64 - setattr.get());
         labels.insert("syscall", "create");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_create as i64);
+        let create = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        create.inc_by(self.zdbfs_stats.syscall_create as u64 - create.get());
         labels.insert("syscall", "readdir");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_readdir as i64);
+        let readdir = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        readdir.inc_by(self.zdbfs_stats.syscall_readdir as u64 - readdir.get());
         labels.insert("syscall", "open");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_open as i64);
+        let open = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        open.inc_by(self.zdbfs_stats.syscall_open as u64 - open.get());
         labels.insert("syscall", "read");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_read as i64);
+        let read = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        read.inc_by(self.zdbfs_stats.syscall_read as u64 - read.get());
         labels.insert("syscall", "write");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_write as i64);
+        let writes = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        writes.inc_by(self.zdbfs_stats.syscall_write as u64 - writes.get());
         labels.insert("syscall", "mkdir");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_mkdir as i64);
+        let dirs = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        dirs.inc_by(self.zdbfs_stats.syscall_mkdir as u64 - dirs.get());
         labels.insert("syscall", "unlink");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_unlink as i64);
+        let unlinks = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        unlinks.inc_by(self.zdbfs_stats.syscall_unlink as u64 - unlinks.get());
         labels.insert("syscall", "rmdir");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_rmdir as i64);
+        let rmdirs = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        rmdirs.inc_by(self.zdbfs_stats.syscall_rmdir as u64 - rmdirs.get());
         labels.insert("syscall", "rename");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_rename as i64);
+        let renames = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+
+        renames.inc_by(self.zdbfs_stats.syscall_rename as u64 - renames.get());
         labels.insert("syscall", "link");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_link as i64);
+        let links = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        links.inc_by(self.zdbfs_stats.syscall_link as u64 - links.get());
         labels.insert("syscall", "symlink");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_symlink as i64);
+        let symlinks = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        symlinks.inc_by(self.zdbfs_stats.syscall_symlink as u64 - symlinks.get());
         labels.insert("syscall", "statsfs");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_statsfs as i64);
+        let stats = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        stats.inc_by(self.zdbfs_stats.syscall_statsfs as u64 - stats.get());
         labels.insert("syscall", "ioctl");
-        self.prom_metrics
-            .fs_syscalls
-            .get_metric_with(&labels)?
-            .set(self.zdbfs_stats.syscall_ioctl as i64);
+        let ioctls = self.prom_metrics.fs_syscalls.get_metric_with(&labels)?;
+        ioctls.inc_by(self.zdbfs_stats.syscall_ioctl as u64 - ioctls.get());
 
         let mut buffer = Vec::new();
         let encoder = TextEncoder::new();
