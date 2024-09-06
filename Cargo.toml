@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["zstor", "monitor"]
+members = ["zstor"]
 
 [profile.release]
 # opt-level = 'z'
