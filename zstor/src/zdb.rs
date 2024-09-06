@@ -386,7 +386,7 @@ impl InternalZdb {
 
         trace!("opened connection to db");
         trace!("pinging db");
-        timeout(ZDB_TIMEOUT, redis::cmd("PING").query_async(&mut conn))
+        timeout(ZDB_TIMEOUT, redis::cmd("PING").query_async::<()>(&mut conn))
             .await
             .map_err(|_| ZdbError {
                 kind: ZdbErrorKind::Connect,
@@ -402,6 +402,7 @@ impl InternalZdb {
 
         Ok(Self { conn, ci: info })
     }
+
     async fn select_ns(&self) -> ZdbResult<()> {
         // open the correct namespace, with or without password
         if let Some(ns) = &self.ci.namespace {
@@ -412,28 +413,31 @@ impl InternalZdb {
                 ns_select.arg(pass);
             }
             trace!("opening namespace {}", ns);
-            timeout(ZDB_TIMEOUT, ns_select.query_async(&mut self.conn.clone()))
-                .await
-                .map_err(|_| ZdbError {
-                    // try to guess the right kind of failure based on wether we are authenticating
-                    // or not
-                    kind: if self.ci.password.is_some() {
-                        ZdbErrorKind::Auth
-                    } else {
-                        ZdbErrorKind::Ns
-                    },
-                    remote: self.ci.clone(),
-                    internal: ErrorCause::Timeout,
-                })?
-                .map_err(|e| ZdbError {
-                    kind: if let redis::ErrorKind::AuthenticationFailed = e.kind() {
-                        ZdbErrorKind::Auth
-                    } else {
-                        ZdbErrorKind::Ns
-                    },
-                    remote: self.ci.clone(),
-                    internal: ErrorCause::Redis(e),
-                })?;
+            timeout(
+                ZDB_TIMEOUT,
+                ns_select.query_async::<()>(&mut self.conn.clone()),
+            )
+            .await
+            .map_err(|_| ZdbError {
+                // try to guess the right kind of failure based on wether we are authenticating
+                // or not
+                kind: if self.ci.password.is_some() {
+                    ZdbErrorKind::Auth
+                } else {
+                    ZdbErrorKind::Ns
+                },
+                remote: self.ci.clone(),
+                internal: ErrorCause::Timeout,
+            })?
+            .map_err(|e| ZdbError {
+                kind: if let redis::ErrorKind::AuthenticationFailed = e.kind() {
+                    ZdbErrorKind::Auth
+                } else {
+                    ZdbErrorKind::Ns
+                },
+                remote: self.ci.clone(),
+                internal: ErrorCause::Redis(e),
+            })?;
             trace!("opened namespace");
         }
         Ok(())
@@ -534,9 +538,7 @@ impl InternalZdb {
             kind: ZdbErrorKind::Write,
             remote: self.ci.clone(),
             internal: ErrorCause::Redis(e),
-        })?;
-
-        Ok(())
+        })
     }
 
     /// Get a stream of all the keys in the namespace
