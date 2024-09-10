@@ -362,7 +362,7 @@ impl InternalZdb {
                 db: 0,
                 username: None,
                 password: None,
-                protocol: redis::ProtocolVersion::RESP3,
+                protocol: redis::ProtocolVersion::RESP2,
             },
         };
 
