@@ -1,5 +1,5 @@
 use crate::actors::{
-    config::{ConfigActor, GetConfig, ReplaceMetaBackend},
+    config::{ConfigActor, GetConfig, ReloadConfig, ReplaceMetaBackend},
     explorer::{ExpandStorage, SizeRequest},
     meta::{MarkWriteable, MetaStoreActor, ReplaceMetaStore},
     metrics::{MetricsActor, SetDataBackendInfo, SetMetaBackendInfo},
@@ -103,78 +103,9 @@ impl Actor for BackendManagerActor {
 
         ctx.wait(
             async move {
-                match cfg_addr.send(GetConfig).await {
-                    Err(e) => {
-                        error!("Could not get config: {}", e);
-                        // we won't manage the dbs
-                        (HashMap::new(), HashMap::new())
-                    }
-                    Ok(config) => {
-                        let managed_seq_dbs = stream::iter(config.backends())
-                            .filter_map(|ci| async move {
-                                let db = match SequentialZdb::new(ci.clone()).await {
-                                    Ok(db) => db,
-                                    Err(e) => {
-                                        warn!(
-                                            "Could not connect to backend {} in config file: {}",
-                                            ci, e
-                                        );
-                                        return Some((ci.clone(), (None, BackendState::new())));
-                                    }
-                                };
-                                let ns_info = match db.ns_info().await {
-                                    Ok(info) => info,
-                                    Err(e) => {
-                                        warn!("Failed to get ns info from backend {}: {}", ci, e);
-                                        return Some((ci.clone(), (Some(db), BackendState::new())));
-                                    }
-                                };
-
-                                let free_space = ns_info.free_space();
-                                let state = if free_space <= FREESPACE_TRESHOLD {
-                                    BackendState::LowSpace(free_space)
-                                } else {
-                                    BackendState::Healthy
-                                };
-
-                                Some((ci.clone(), (Some(db), state)))
-                            })
-                            .collect()
-                            .await;
-                        let managed_meta_dbs = match config.meta() {
-                            Meta::Zdb(zdb_meta_cfg) => {
-                                stream::iter(zdb_meta_cfg.backends())
-                                    .filter_map(|ci| async move {
-                                        let db = match UserKeyZdb::new(ci.clone()).await {
-                                            Ok(db) => db,
-                                            Err(e) => {
-                                                warn!("Failed to connect to metadata backend {} in config file: {}", ci ,e);
-                                                return Some((ci.clone(), (None, BackendState::new())));
-                                            }
-                                        };
-                                        let ns_info = match db.ns_info().await {
-                                            Ok(info) => info,
-                                            Err(e) => {
-                                                warn!("Failed to get ns info from metadata backend {}: {}", ci, e);
-                                                return Some((ci.clone(), (Some(db), BackendState::new())));
-                                            }
-                                        };
-                                        let free_space = ns_info.free_space();
-                                        let state = if free_space <= FREESPACE_TRESHOLD {
-                                            BackendState::LowSpace(free_space)
-                                        } else {
-                                            BackendState::Healthy
-                                        };
-
-                                        Some((ci.clone(), (Some(db), state)))
-                                    })
-                                    .collect()
-                                    .await
-                            }
-                        };
-                        (managed_seq_dbs, managed_meta_dbs)
-                    }
-                }
+                let (managed_seq_dbs, managed_meta_dbs) =
+                    get_zdbs_from_config(cfg_addr.clone()).await;
+                (managed_seq_dbs, managed_meta_dbs)
             }
             .into_actor(self)
             .map(|res, actor, _| {
@@ -187,6 +118,129 @@ impl Actor for BackendManagerActor {
             Duration::from_secs(BACKEND_CHECK_INTERVAL_SECONDS),
             Self::check_backends,
         );
+    }
+}
+impl Handler<ReloadConfig> for BackendManagerActor {
+    type Result = Result<(), ZstorError>;
+
+    fn handle(&mut self, _: ReloadConfig, ctx: &mut Self::Context) -> Self::Result {
+        let cfg_addr = self.config_addr.clone();
+        let fut = Box::pin(
+            async move {
+                let (managed_seq_dbs, managed_meta_dbs) =
+                    get_zdbs_from_config(cfg_addr.clone()).await;
+                (managed_seq_dbs, managed_meta_dbs)
+            }
+            .into_actor(self)
+            .map(|(seq_dbs, meta_dbs), actor, _| {
+                // remove the data backends that are no longer managed from  the metrics
+                for (ci, _) in actor.managed_seq_dbs.iter() {
+                    if !seq_dbs.contains_key(ci) {
+                        actor.metrics.do_send(SetDataBackendInfo {
+                            ci: ci.clone(),
+                            info: None,
+                        });
+                    }
+                }
+
+                // remove the meta backends that are no longer managed from  the metrics
+                for (ci, _) in actor.managed_meta_dbs.iter() {
+                    if !meta_dbs.contains_key(ci) {
+                        actor.metrics.do_send(SetMetaBackendInfo {
+                            ci: ci.clone(),
+                            info: None,
+                        });
+                    }
+                }
+                actor.managed_seq_dbs = seq_dbs;
+                actor.managed_meta_dbs = meta_dbs;
+            }),
+        );
+        ctx.spawn(fut);
+        Ok(())
+    }
+}
+
+async fn get_zdbs_from_config(
+    cfg_addr: Addr<ConfigActor>,
+) -> (
+    HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
+    HashMap<ZdbConnectionInfo, (Option<UserKeyZdb>, BackendState)>,
+) {
+    match cfg_addr.send(GetConfig).await {
+        Err(e) => {
+            error!("Could not get config: {}", e);
+            // we won't manage the dbs
+            (HashMap::new(), HashMap::new())
+        }
+        Ok(config) => {
+            let managed_seq_dbs = stream::iter(config.backends())
+                .filter_map(|ci| async move {
+                    let db = match SequentialZdb::new(ci.clone()).await {
+                        Ok(db) => db,
+                        Err(e) => {
+                            warn!("Could not connect to backend {} in config file: {}", ci, e);
+                            return Some((ci.clone(), (None, BackendState::new())));
+                        }
+                    };
+                    let ns_info = match db.ns_info().await {
+                        Ok(info) => info,
+                        Err(e) => {
+                            warn!("Failed to get ns info from backend {}: {}", ci, e);
+                            return Some((ci.clone(), (Some(db), BackendState::new())));
+                        }
+                    };
+
+                    let free_space = ns_info.free_space();
+                    let state = if free_space <= FREESPACE_TRESHOLD {
+                        BackendState::LowSpace(free_space)
+                    } else {
+                        BackendState::Healthy
+                    };
+                    Some((ci.clone(), (Some(db), state)))
+                })
+                .collect()
+                .await;
+
+            let managed_meta_dbs = match config.meta() {
+                Meta::Zdb(zdb_meta_cfg) => {
+                    stream::iter(zdb_meta_cfg.backends())
+                        .filter_map(|ci| async move {
+                            let db = match UserKeyZdb::new(ci.clone()).await {
+                                Ok(db) => db,
+                                Err(e) => {
+                                    warn!(
+                                    "Failed to connect to metadata backend {} in config file: {}",
+                                    ci, e
+                                );
+                                    return Some((ci.clone(), (None, BackendState::new())));
+                                }
+                            };
+                            let ns_info = match db.ns_info().await {
+                                Ok(info) => info,
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to get ns info from metadata backend {}: {}",
+                                        ci, e
+                                    );
+                                    return Some((ci.clone(), (Some(db), BackendState::new())));
+                                }
+                            };
+                            let free_space = ns_info.free_space();
+                            let state = if free_space <= FREESPACE_TRESHOLD {
+                                BackendState::LowSpace(free_space)
+                            } else {
+                                BackendState::Healthy
+                            };
+
+                            Some((ci.clone(), (Some(db), state)))
+                        })
+                        .collect()
+                        .await
+                }
+            };
+            (managed_seq_dbs, managed_meta_dbs)
+        }
     }
 }
 

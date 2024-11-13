@@ -11,14 +11,25 @@ use prometheus::{
 use std::mem;
 use std::{collections::HashMap, fmt, string::FromUtf8Error};
 
-const BACKEND_TYPE_DATA: &str = "data";
-const BACKEND_TYPE_META: &str = "meta";
+enum BackendType {
+    Data,
+    Meta,
+}
+
+impl BackendType {
+    fn as_str(&self) -> &str {
+        match self {
+            BackendType::Data => "data",
+            BackendType::Meta => "meta",
+        }
+    }
+}
 
 /// A metrics actor collecting metrics from the system.
 pub struct MetricsActor {
     data_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
     meta_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
-    removed_zdbs: Vec<ZdbConnectionInfo>,
+    removed_zdbs: Vec<(ZdbConnectionInfo, BackendType)>,
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     zdbfs_stats: stats_t,
@@ -299,7 +310,7 @@ impl Handler<SetDataBackendInfo> for MetricsActor {
             self.data_zdbs.insert(msg.ci, info);
         } else {
             self.data_zdbs.remove(&msg.ci);
-            self.removed_zdbs.push(msg.ci);
+            self.removed_zdbs.push((msg.ci, BackendType::Data));
         }
     }
 }
@@ -312,7 +323,7 @@ impl Handler<SetMetaBackendInfo> for MetricsActor {
             self.meta_zdbs.insert(msg.ci, info);
         } else {
             self.meta_zdbs.remove(&msg.ci);
-            self.removed_zdbs.push(msg.ci);
+            self.removed_zdbs.push((msg.ci, BackendType::Meta));
         }
     }
 }
@@ -348,16 +359,12 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             // Take ownerhsip of the removed zdb list, and leave an empty (default) list in its
             // place.
             let removed_zdbs = mem::take(&mut self.removed_zdbs);
-            for ci in removed_zdbs {
+            for (ci, backend_type) in removed_zdbs {
                 let mut labels = HashMap::new();
                 labels.insert("namespace", ci.namespace().unwrap_or(""));
                 let address = ci.address().to_string();
                 labels.insert("address", &address);
-                if self.data_zdbs.contains_key(&ci) {
-                    labels.insert("backend_type", BACKEND_TYPE_DATA);
-                } else {
-                    labels.insert("backend_type", BACKEND_TYPE_META);
-                }
+                labels.insert("backend_type", backend_type.as_str());
 
                 if let Err(e) = self.prom_metrics.entries_gauges.remove(&labels) {
                     warn!("Failed to delete removed metric by label: {}", e)
@@ -404,18 +411,18 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
         for (ci, (info, backend_type)) in self
             .data_zdbs
             .iter()
-            .map(|(ci, info)| (ci, (info, BACKEND_TYPE_DATA)))
+            .map(|(ci, info)| (ci, (info, BackendType::Data)))
             .chain(
                 self.meta_zdbs
                     .iter()
-                    .map(|(ci, info)| (ci, (info, BACKEND_TYPE_META))),
+                    .map(|(ci, info)| (ci, (info, BackendType::Meta))),
             )
         {
             let mut labels = HashMap::new();
             labels.insert("namespace", ci.namespace().unwrap_or(""));
             let address = ci.address().to_string();
             labels.insert("address", &address);
-            labels.insert("backend_type", backend_type);
+            labels.insert("backend_type", backend_type.as_str());
 
             let entries_gauge = self.prom_metrics.entries_gauges.get_metric_with(&labels)?;
             let data_size_bytes_gauge = self
