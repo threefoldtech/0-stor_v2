@@ -92,21 +92,27 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
     let pipeline_addr = SyncArbiter::start(1, || PipelineActor);
 
+    let explorer = NopExplorerActor::new().start().recipient();
+
+    let backends = BackendManagerActor::new(
+        cfg_addr.clone(),
+        explorer,
+        metrics_addr.clone(),
+        meta_addr.clone(),
+    )
+    .start();
+
     let zstor = ZstorActor::new(
         cfg_addr.clone(),
         pipeline_addr,
         meta_addr.clone(),
         metrics_addr.clone(),
+        backends.clone(),
     )
     .start();
 
     let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
 
-    let explorer = NopExplorerActor::new().start().recipient();
-
-    let backends =
-        BackendManagerActor::new(cfg_addr, explorer, metrics_addr.clone(), meta_addr.clone())
-            .start();
     let _ = RepairActor::new(meta_addr, backends, zstor.clone()).start();
 
     // Setup prometheus endpoint if needed

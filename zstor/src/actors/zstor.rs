@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::{fs, io, task::JoinHandle};
 
-use super::config::ReloadConfig;
+use super::{backends::BackendManagerActor, config::ReloadConfig};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// All possible commands zstor operates on.
@@ -105,6 +105,7 @@ pub struct ZstorActor {
     pipeline: Addr<PipelineActor>,
     meta: Addr<MetaStoreActor>,
     metrics: Addr<MetricsActor>,
+    backend: Addr<BackendManagerActor>,
 }
 
 impl ZstorActor {
@@ -114,12 +115,14 @@ impl ZstorActor {
         pipeline: Addr<PipelineActor>,
         meta: Addr<MetaStoreActor>,
         metrics: Addr<MetricsActor>,
+        backend: Addr<BackendManagerActor>,
     ) -> ZstorActor {
         Self {
             cfg,
             pipeline,
             meta,
             metrics,
+            backend,
         }
     }
 }
@@ -395,7 +398,11 @@ impl Handler<ReloadConfig> for ZstorActor {
 
     fn handle(&mut self, _: ReloadConfig, _: &mut Self::Context) -> Self::Result {
         let cfg = self.cfg.clone();
-        Box::pin(async move { cfg.send(ReloadConfig).await? })
+        let backend = self.backend.clone();
+        Box::pin(async move {
+            let _ = cfg.send(ReloadConfig).await?;
+            backend.send(ReloadConfig).await?
+        })
     }
 }
 
