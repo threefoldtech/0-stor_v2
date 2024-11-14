@@ -83,6 +83,11 @@ pub struct DeleteFailure {
 }
 
 #[derive(Message)]
+#[rtype(result = "bool")]
+/// Message to check if the metastore is writable.
+pub struct CheckWritable;
+
+#[derive(Message)]
 #[rtype(result = "Result<Vec<FailureMeta>, MetaStoreError>")]
 /// Message for retrieving all [`FailureMeta`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
 pub struct GetFailures;
@@ -111,10 +116,11 @@ pub struct MetaStoreActor {
 
 impl MetaStoreActor {
     /// Create a new [`MetaStoreActor`] from a given [`MetaStore`].
-    pub fn new(meta_store: Box<dyn MetaStore>) -> MetaStoreActor {
+    pub fn new(meta_store: Box<dyn MetaStore>, writeable: bool) -> MetaStoreActor {
+        log::info!("metastore actor writeable: {}", writeable);
         Self {
             meta_store: Arc::from(meta_store),
-            writeable: true,
+            writeable,
         }
     }
 }
@@ -218,6 +224,15 @@ impl Handler<SaveFailure> for MetaStoreActor {
                 .save_failure(&msg.data_path, &msg.key_dir_path, msg.should_delete)
                 .await
         })
+    }
+}
+
+impl Handler<CheckWritable> for MetaStoreActor {
+    type Result = ResponseFuture<bool>;
+
+    fn handle(&mut self, _: CheckWritable, _: &mut Self::Context) -> Self::Result {
+        let writeable = self.writeable;
+        Box::pin(async move { writeable })
     }
 }
 

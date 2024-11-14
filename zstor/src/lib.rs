@@ -24,7 +24,7 @@ use compression::CompressorError;
 use config::ConfigError;
 use encryption::EncryptionError;
 use erasure::EncodingError;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use meta::MetaStoreError;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -63,17 +63,18 @@ pub type ZstorResult<T> = Result<T, ZstorError>;
 pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<ZstorActor>> {
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
-            let backends = try_join_all(
+            let backends = join_all(
                 zdb_cfg
                     .backends()
                     .iter()
                     .map(|ci| UserKeyZdb::new(ci.clone())),
             )
-            .await?;
+            .await;
             let encryptor = match cfg.encryption() {
                 Encryption::Aes(key) => encryption::AesGcm::new(key.clone()),
             };
             let encoder = zdb_cfg.encoder();
+            let backends = backends.into_iter().filter_map(|res| res.ok()).collect();
             Box::new(ZdbMetaStore::new(
                 backends,
                 encoder,
@@ -88,7 +89,8 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     if let Some(mountpoint) = cfg.zdbfs_mountpoint() {
         let _ = ZdbFsStatsProxyActor::new(mountpoint.to_path_buf(), metrics_addr.clone()).start();
     }
-    let meta_addr = MetaStoreActor::new(metastore).start();
+    let meta_writable = metastore.writable();
+    let meta_addr = MetaStoreActor::new(metastore, meta_writable).start();
     let cfg_addr = ConfigActor::new(cfg_path, cfg.clone()).start();
     let pipeline_addr = SyncArbiter::start(1, || PipelineActor);
 
