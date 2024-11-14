@@ -1,6 +1,6 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig},
-    meta::{LoadMeta, LoadMetaByKey, MetaStoreActor, SaveMeta, SaveMetaByKey},
+    meta::{CheckWritable, LoadMeta, LoadMetaByKey, MetaStoreActor, SaveMeta, SaveMetaByKey},
     metrics::{MetricsActor, ZstorCommandFinsihed, ZstorCommandId},
     pipeline::{PipelineActor, RebuildData, RecoverFile, StoreFile},
 };
@@ -138,8 +138,17 @@ impl Handler<Store> for ZstorActor {
         let pipeline = self.pipeline.clone();
         let config = self.cfg.clone();
         let meta = self.meta.clone();
+
         AtomicResponse::new(Box::pin(
             async move {
+                let meta_writeable = meta.send(CheckWritable).await.unwrap();
+                if !meta_writeable {
+                    return Err(ZstorError::new_io(
+                        "Metastore is not writable".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                    ));
+                }
+
                 let ft = fs::metadata(&msg.file)
                     .await
                     .map_err(|e| ZstorError::new_io("Could not load file metadata".into(), e))?

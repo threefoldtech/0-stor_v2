@@ -114,6 +114,11 @@ where
         }
     }
 
+    /// writable returns true if the metastore is writable
+    pub fn writable(&self) -> bool {
+        self.writeable
+    }
+
     /// helper functions to encrypt and write data to backends.
     async fn write_value(&self, key: &str, value: &[u8]) -> ZdbMetaStoreResult<()> {
         debug!("Writing data to zdb metastore");
