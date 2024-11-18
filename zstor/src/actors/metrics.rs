@@ -309,8 +309,13 @@ impl Handler<SetDataBackendInfo> for MetricsActor {
         if let Some(info) = msg.info {
             self.data_zdbs.insert(msg.ci, info);
         } else {
-            self.data_zdbs.remove(&msg.ci);
-            self.removed_zdbs.push((msg.ci, BackendType::Data));
+            let v = self.data_zdbs.remove(&msg.ci);
+            // when the zdb is down, backend actors always send a None info
+            // in this case we should remove the zdb from the metrics *only* if it was present.
+            // Otherwise we will do unnecessary work and the `removed_zdbs` list will exploded
+            if v.is_some() {
+                self.removed_zdbs.push((msg.ci, BackendType::Data));
+            }
         }
     }
 }
@@ -322,8 +327,13 @@ impl Handler<SetMetaBackendInfo> for MetricsActor {
         if let Some(info) = msg.info {
             self.meta_zdbs.insert(msg.ci, info);
         } else {
-            self.meta_zdbs.remove(&msg.ci);
-            self.removed_zdbs.push((msg.ci, BackendType::Meta));
+            let v = self.meta_zdbs.remove(&msg.ci);
+            // when the zdb is down, backend actors always send a None info
+            // in this case we should remove the zdb from the metrics *only* if it was present.
+            // Otherwise we will do unnecessary work and the `removed_zdbs` list will exploded
+            if v.is_some() {
+                self.removed_zdbs.push((msg.ci, BackendType::Meta));
+            }
         }
     }
 }
