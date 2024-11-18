@@ -806,7 +806,7 @@ impl UserKeyZdb {
 }
 
 /// Information about a 0-db namespace, as reported by the db itself.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NsInfo {
     /// The name of the namespace.
     pub name: String,

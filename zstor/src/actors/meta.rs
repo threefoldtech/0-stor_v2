@@ -106,6 +106,9 @@ pub struct MarkWriteable {
 pub struct ReplaceMetaStore {
     /// The new metastore to set
     pub new_store: Box<dyn MetaStore + Send>,
+
+    /// writeable flag
+    pub writeable: bool,
 }
 
 /// Actor for a metastore
@@ -272,6 +275,8 @@ impl Handler<ReplaceMetaStore> for MetaStoreActor {
     type Result = ();
 
     fn handle(&mut self, msg: ReplaceMetaStore, _: &mut Self::Context) -> Self::Result {
+        log::info!("ReplaceMetaStore writeable: {}", msg.writeable);
         self.meta_store = Arc::from(msg.new_store as Box<dyn MetaStore>);
+        self.writeable = msg.writeable;
     }
 }
