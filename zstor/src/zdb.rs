@@ -540,6 +540,31 @@ impl InternalZdb {
             internal: ErrorCause::Redis(e),
         })
     }
+    async fn scan(&self, cursor: Option<Vec<u8>>) -> ZdbResult<(Vec<u8>, Vec<ScanEntry>)> {
+        trace!(
+            "scanning namespace {} ",
+            self.ci.namespace.as_deref().unwrap_or("default"),
+        );
+        self.select_ns().await?;
+
+        let mut scan_cmd = redis::cmd("SCAN");
+        if let Some(ref cur) = cursor {
+            scan_cmd.arg(cur as &[u8]);
+        }
+
+        let mut conn = self.conn.clone();
+        let res: (Vec<u8>, Vec<ScanEntry>) = match scan_cmd.query_async(&mut conn).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(ZdbError {
+                    kind: ZdbErrorKind::Read,
+                    remote: self.ci.clone(),
+                    internal: ErrorCause::Redis(e),
+                })
+            }
+        };
+        Ok(res)
+    }
 
     /// Get a stream of all the keys in the namespace
     fn keys(&self) -> CollectionKeys {
@@ -784,6 +809,31 @@ impl UserKeyZdb {
     /// Delete some previously stored data from it's key.
     pub async fn delete<K: AsRef<[u8]>>(&self, key: K) -> ZdbResult<()> {
         self.internal.delete(key.as_ref()).await
+    }
+
+    /// scan the namespace for keys. The cursor can be used to continue a previous scan.
+    pub async fn scan(
+        &self,
+        cursor: Option<Vec<u8>>,
+        prefix: Option<&str>,
+    ) -> ZdbResult<(Vec<u8>, Vec<String>)> {
+        let res: (Vec<u8>, Vec<ScanEntry>) = match self.internal.scan(cursor).await {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
+        let mut keys = Vec::new();
+        let cursor = res.0;
+        let entries = res.1;
+        for entry in &entries {
+            let raw_key = entry[0].0.clone();
+            if let Some(p) = prefix {
+                if !raw_key.starts_with(p.as_bytes()) {
+                    continue;
+                }
+            }
+            String::from_utf8(raw_key).ok().map(|s| keys.push(s));
+        }
+        Ok((cursor, keys))
     }
 
     /// Get a stream which yields all the keys in the namespace.

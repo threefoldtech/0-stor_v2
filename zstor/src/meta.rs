@@ -4,10 +4,13 @@ use crate::zdb::{Key, UserKeyZdb, ZdbConnectionInfo};
 use crate::zdb_meta::ZdbMetaStore;
 use async_trait::async_trait;
 use futures::future::try_join_all;
+use futures::stream::Stream;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::{fmt, io};
+
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
 /// A checksum of a data object
@@ -206,6 +209,11 @@ pub trait MetaStore {
 
     /// Check to see if a Zdb backend has been marked as replaced based on its connection info
     async fn is_replaced(&self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
+
+    /// Get stream of the key for all objects with a given prefix
+    async fn object_keys<'a>(
+        &'a self,
+    ) -> Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>, MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;

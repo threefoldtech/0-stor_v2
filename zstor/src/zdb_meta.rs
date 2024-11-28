@@ -22,6 +22,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use std::pin::Pin;
+
 /// Amount of data shards to use for the encoder used by the 0-db MetaStore.
 const ZDB_METASTORE_DATA_SHARDS: usize = 2;
 /// Amount of disposable shards to use for the encoder used by the 0-db MetaStore.
@@ -237,14 +239,8 @@ where
         Ok(())
     }
 
-    /// Return a stream of all function with a given prefix
-    async fn keys<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
-        debug!("Starting metastore key iteration with prefix {}", prefix);
-
-        // First get the lengh of all the backends
+    /// Helper function to get the backend with the most keys
+    async fn get_most_keys_backend(&self) -> ZdbMetaStoreResult<usize> {
         let mut ns_requests = Vec::with_capacity(self.backends.len());
         for backend in self.backends.iter() {
             ns_requests.push(backend.ns_info());
@@ -262,14 +258,27 @@ where
                 }
             }
         }
-
-        // If there is no reachable backend, we can't list the keys.
         if !healthy_backend {
             return Err(ZdbMetaStoreError {
                 kind: ErrorKind::InsufficientHealthBackends,
                 internal: InternalError::Other("no healthy backend found to list keys".into()),
             });
         }
+
+        Ok(most_keys_idx)
+    }
+
+    /// Return a stream of all function with a given prefix
+    async fn keys<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
+        debug!("Starting metastore key iteration with prefix {}", prefix);
+
+        let most_keys_idx = match self.get_most_keys_backend().await {
+            Ok(idx) => idx,
+            Err(e) => return Err(e),
+        };
 
         // Now iterate over the keys of the longest backend
         Ok(self.backends[most_keys_idx]
@@ -281,6 +290,33 @@ where
                 };
                 None
             }))
+    }
+
+    async fn stream_keys(
+        &self,
+        prefix: String,
+    ) -> Result<Pin<Box<dyn Stream<Item = String> + Send + '_>>, MetaStoreError> {
+        debug!("Starting metastore key iteration with prefix {}", prefix);
+
+        let most_keys_idx = match self.get_most_keys_backend().await {
+            Ok(idx) => idx,
+            Err(_) => return Err(MetaStoreError::not_writeable()),
+        };
+
+        let stream = self.backends[most_keys_idx]
+            .keys()
+            .filter_map(move |raw_key| {
+                let prefix = prefix.clone();
+                async move {
+                    if raw_key.starts_with(prefix.as_bytes()) {
+                        String::from_utf8(raw_key).ok()
+                    } else {
+                        None
+                    }
+                }
+            });
+
+        Ok(Box::pin(stream))
     }
 
     /// Rebuild an old metdata cluster on a new one. This method does not return untill all known
@@ -581,6 +617,13 @@ where
 
     async fn save_meta(&self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
         Ok(self.save_meta_by_key(&self.build_key(path)?, meta).await?)
+    }
+
+    async fn object_keys(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = String> + Send + '_>>, MetaStoreError> {
+        let prefix = format!("/{}/meta/", self.prefix);
+        self.stream_keys(prefix.to_owned()).await
     }
 
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
