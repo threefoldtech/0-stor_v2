@@ -831,7 +831,9 @@ impl UserKeyZdb {
                     continue;
                 }
             }
-            String::from_utf8(raw_key).ok().map(|s| keys.push(s));
+            if let Ok(s) = String::from_utf8(raw_key) {
+                keys.push(s)
+            }
         }
         Ok((cursor, keys))
     }
