@@ -8,6 +8,7 @@ use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
+
 /// The length of file and shard checksums
 pub const CHECKSUM_LENGTH: usize = 16;
 /// A checksum of a data object
@@ -206,6 +207,14 @@ pub trait MetaStore {
 
     /// Check to see if a Zdb backend has been marked as replaced based on its connection info
     async fn is_replaced(&self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
+
+    /// scan the metadata keys
+    async fn scan_meta_keys(
+        &self,
+        cursor: Option<Vec<u8>>,
+        backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
+    ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;

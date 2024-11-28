@@ -237,14 +237,8 @@ where
         Ok(())
     }
 
-    /// Return a stream of all function with a given prefix
-    async fn keys<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
-        debug!("Starting metastore key iteration with prefix {}", prefix);
-
-        // First get the lengh of all the backends
+    /// Helper function to get the backend with the most keys
+    async fn get_most_keys_backend(&self) -> ZdbMetaStoreResult<usize> {
         let mut ns_requests = Vec::with_capacity(self.backends.len());
         for backend in self.backends.iter() {
             ns_requests.push(backend.ns_info());
@@ -262,14 +256,45 @@ where
                 }
             }
         }
-
-        // If there is no reachable backend, we can't list the keys.
         if !healthy_backend {
             return Err(ZdbMetaStoreError {
                 kind: ErrorKind::InsufficientHealthBackends,
                 internal: InternalError::Other("no healthy backend found to list keys".into()),
             });
         }
+
+        Ok(most_keys_idx)
+    }
+
+    async fn scan_keys(
+        &self,
+        cursor: Option<Vec<u8>>,
+        prefix: Option<&str>,
+        backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
+    ) -> ZdbMetaStoreResult<(usize, Vec<u8>, Vec<String>)> {
+        let most_keys_idx = match backend_idx {
+            Some(idx) => idx,
+            None => self.get_most_keys_backend().await?,
+        };
+
+        let (new_cursor, keys) = self.backends[most_keys_idx]
+            .scan(cursor, prefix, max_timestamp)
+            .await?;
+        Ok((most_keys_idx, new_cursor, keys))
+    }
+
+    /// Return a stream of all function with a given prefix
+    async fn keys<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> ZdbMetaStoreResult<impl Stream<Item = String> + 'a> {
+        debug!("Starting metastore key iteration with prefix {}", prefix);
+
+        let most_keys_idx = match self.get_most_keys_backend().await {
+            Ok(idx) => idx,
+            Err(e) => return Err(e),
+        };
 
         // Now iterate over the keys of the longest backend
         Ok(self.backends[most_keys_idx]
@@ -581,6 +606,23 @@ where
 
     async fn save_meta(&self, path: &Path, meta: &MetaData) -> Result<(), MetaStoreError> {
         Ok(self.save_meta_by_key(&self.build_key(path)?, meta).await?)
+    }
+
+    async fn scan_meta_keys(
+        &self,
+        cursor: Option<Vec<u8>>,
+        backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
+    ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError> {
+        let prefix = format!("/{}/meta/", self.prefix);
+
+        match self
+            .scan_keys(cursor, Some(&prefix), backend_idx, max_timestamp)
+            .await
+        {
+            Ok((backend_idx, cursor, keys)) => Ok((backend_idx, cursor, keys)),
+            Err(e) => Err(MetaStoreError::from(e)),
+        }
     }
 
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
