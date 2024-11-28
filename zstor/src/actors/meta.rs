@@ -58,6 +58,17 @@ pub struct IsReplaced {
 }
 
 #[derive(Message)]
+#[rtype(result = "Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>")]
+/// Message for retrieving all [`MetaData`] keys in a [`MetaStore`] managed by a [`MetaStoreActor`].
+pub struct ScanMetaKeys {
+    /// idx of the backend to scan, `None` to use backend with most keys.
+    pub backend_idx: Option<usize>,
+
+    /// cursor to start scanning from, `None` to start from the beginning.
+    pub cursor: Option<Vec<u8>>,
+}
+
+#[derive(Message)]
 #[rtype(result = "Result<Vec<(String, MetaData)>, MetaStoreError>")]
 /// Message for retrieving all [`MetaData`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
 pub struct ObjectMetas;
@@ -201,6 +212,19 @@ impl Handler<IsReplaced> for MetaStoreActor {
     fn handle(&mut self, msg: IsReplaced, _: &mut Self::Context) -> Self::Result {
         let meta_store = self.meta_store.clone();
         Box::pin(async move { meta_store.is_replaced(&msg.ci).await })
+    }
+}
+impl Handler<ScanMetaKeys> for MetaStoreActor {
+    type Result = ResponseFuture<Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>>;
+
+    fn handle(&mut self, msg: ScanMetaKeys, _: &mut Self::Context) -> Self::Result {
+        let meta_store = self.meta_store.clone();
+        Box::pin(async move {
+            let (backend_idx, cursor, keys) = meta_store
+                .scan_meta_keys(msg.cursor, msg.backend_idx)
+                .await?;
+            Ok((backend_idx, cursor, keys))
+        })
     }
 }
 

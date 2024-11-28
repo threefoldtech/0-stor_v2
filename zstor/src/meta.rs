@@ -215,6 +215,13 @@ pub trait MetaStore {
         &'a self,
     ) -> Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>, MetaStoreError>;
 
+    /// blabla
+    async fn scan_meta_keys(
+        &self,
+        cursor: Option<Vec<u8>>,
+        backend_idx: Option<usize>,
+    ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>;
+
     /// Get the (key, metadata) for all stored objects
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;
 
