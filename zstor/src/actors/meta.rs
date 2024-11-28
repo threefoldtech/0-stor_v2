@@ -304,10 +304,7 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
             let mut backend_idx = None;
             //let actor = self.meta_store.clone();
             loop {
-                let res = match metastore
-                    .scan_meta_keys(cursor.clone(), backend_idx.clone())
-                    .await
-                {
+                let res = match metastore.scan_meta_keys(cursor.clone(), backend_idx).await {
                     Ok((idx, c, keys)) => (idx, c, keys),
                     Err(e) => {
                         log::error!("Error scanning keys: {}", e);
@@ -333,13 +330,7 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                     };
                     // save meta by key
                     let key = key.clone();
-                    match addr
-                        .send(SaveMetaByKey {
-                            key: key,
-                            meta: meta,
-                        })
-                        .await
-                    {
+                    match addr.send(SaveMetaByKey { key, meta }).await {
                         Ok(Ok(_)) => {}
                         _ => {
                             log::error!("Error saving meta by key");

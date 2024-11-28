@@ -301,12 +301,7 @@ impl Handler<RebuildMeta> for ZstorActor {
                 }
             };
             // save meta by key
-            metastore
-                .send(SaveMetaByKey {
-                    key: key,
-                    meta: meta,
-                })
-                .await??;
+            metastore.send(SaveMetaByKey { key, meta }).await??;
             Ok(())
         })
     }
