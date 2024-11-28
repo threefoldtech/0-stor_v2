@@ -114,6 +114,10 @@ pub struct MarkWriteable {
 #[derive(Message)]
 #[rtype(result = "()")]
 /// Message to replace the metastore in use.
+pub struct RebuildAllMeta;
+#[derive(Message)]
+#[rtype(result = "()")]
+/// Message to replace the metastore in use.
 pub struct ReplaceMetaStore {
     /// The new metastore to set
     pub new_store: Box<dyn MetaStore + Send>,
@@ -284,6 +288,71 @@ impl Handler<GetFailures> for MetaStoreActor {
     fn handle(&mut self, _: GetFailures, _: &mut Self::Context) -> Self::Result {
         let meta_store = self.meta_store.clone();
         Box::pin(async move { meta_store.get_failures().await })
+    }
+}
+
+impl Handler<RebuildAllMeta> for MetaStoreActor {
+    type Result = ResponseFuture<()>;
+
+    fn handle(&mut self, _: RebuildAllMeta, ctx: &mut Self::Context) -> Self::Result {
+        let metastore = self.meta_store.clone();
+        let addr = ctx.address();
+        Box::pin(async move {
+            // scan all keys
+            // for each key:
+            let mut cursor = None;
+            let mut backend_idx = None;
+            //let actor = self.meta_store.clone();
+            loop {
+                let res = match metastore
+                    .scan_meta_keys(cursor.clone(), backend_idx.clone())
+                    .await
+                {
+                    Ok((idx, c, keys)) => (idx, c, keys),
+                    Err(e) => {
+                        log::error!("Error scanning keys: {}", e);
+                        break;
+                    }
+                };
+
+                let keys = res.2;
+                if keys.is_empty() {
+                    continue;
+                }
+                for key in keys {
+                    let meta = match addr.send(LoadMetaByKey { key: key.clone() }).await {
+                        Ok(Ok(m)) => m.unwrap(),
+                        Ok(Err(e)) => {
+                            log::error!("Error loading meta by key: {}", e);
+                            continue;
+                        }
+                        Err(e) => {
+                            log::error!("Error loading meta by key: {}", e);
+                            continue;
+                        }
+                    };
+                    // save meta by key
+                    let key = key.clone();
+                    match addr
+                        .send(SaveMetaByKey {
+                            key: key,
+                            meta: meta,
+                        })
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        _ => {
+                            log::error!("Error saving meta by key");
+                        }
+                    }
+                }
+                if res.1.len() == 1 && res.1[0] == 0 {
+                    break;
+                }
+                cursor = Some(res.1);
+                backend_idx = Some(res.0);
+            }
+        })
     }
 }
 

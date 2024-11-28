@@ -92,6 +92,14 @@ pub struct Rebuild {
 }
 
 #[derive(Serialize, Deserialize, Debug, Message, Clone)]
+#[rtype(result = "Result<(), ZstorError>")]
+/// Message for the rebuild metadata command of zstor.
+pub struct RebuildMeta {
+    /// The metadata key to rebuild.
+    pub key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Message, Clone)]
 #[rtype(result = "Result<Option<Checksum>, ZstorError>")]
 /// Message for the check command of zstor.
 pub struct Check {
@@ -278,6 +286,31 @@ impl Handler<Retrieve> for ZstorActor {
     }
 }
 
+impl Handler<RebuildMeta> for ZstorActor {
+    type Result = ResponseFuture<Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: RebuildMeta, _: &mut Self::Context) -> Self::Result {
+        let metastore = self.meta.clone();
+        let key = msg.key.clone();
+        Box::pin(async move {
+            // load meta by key
+            let meta = match metastore.send(LoadMetaByKey { key: msg.key }).await?? {
+                Some(meta) => meta,
+                None => {
+                    return Ok(());
+                }
+            };
+            // save meta by key
+            metastore
+                .send(SaveMetaByKey {
+                    key: key,
+                    meta: meta,
+                })
+                .await??;
+            Ok(())
+        })
+    }
+}
 impl Handler<Rebuild> for ZstorActor {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
