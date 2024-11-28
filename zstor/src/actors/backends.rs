@@ -1,7 +1,7 @@
 use crate::actors::{
     config::{ConfigActor, GetConfig, ReloadConfig, ReplaceMetaBackend},
     explorer::{ExpandStorage, SizeRequest},
-    meta::{MarkWriteable, MetaStoreActor, ReplaceMetaStore},
+    meta::{MarkWriteable, MetaStoreActor, RebuildAllMeta, ReplaceMetaStore},
     metrics::{MetricsActor, SetDataBackendInfo, SetMetaBackendInfo},
 };
 use crate::{
@@ -165,6 +165,8 @@ impl Handler<ReloadConfig> for BackendManagerActor {
 
     fn handle(&mut self, _: ReloadConfig, ctx: &mut Self::Context) -> Self::Result {
         let cfg_addr = self.config_addr.clone();
+        //let metastore = self.metastore.clone();
+
         let fut = Box::pin(
             async move {
                 let (managed_seq_dbs, managed_meta_dbs) =
@@ -182,14 +184,22 @@ impl Handler<ReloadConfig> for BackendManagerActor {
                         });
                     }
                 }
-
+                let mut any_new_meta = false;
                 // remove the meta backends that are no longer managed from  the metrics
                 for (ci, _) in actor.managed_meta_dbs.iter() {
                     if !meta_dbs.contains_key(ci) {
+                        any_new_meta = true;
                         actor.metrics.do_send(SetMetaBackendInfo {
                             ci: ci.clone(),
                             info: None,
                         });
+                    }
+                }
+
+                if any_new_meta {
+                    log::info!("New metadata backends, rebuilding metadata cluster");
+                    if let Err(err) = actor.metastore.try_send(RebuildAllMeta) {
+                        error!("Failed to send RebuildAllMeta message: {}", err);
                     }
                 }
                 actor.managed_seq_dbs = seq_dbs;
