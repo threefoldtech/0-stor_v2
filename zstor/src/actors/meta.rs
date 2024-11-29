@@ -267,6 +267,10 @@ impl Handler<GetFailures> for MetaStoreActor {
     }
 }
 
+/// Rebuild all meta data in the metastore:
+/// - scan all keys in the metastore before current timestamp
+/// - load meta by key
+/// - save meta by key
 impl Handler<RebuildAllMeta> for MetaStoreActor {
     type Result = ResponseFuture<()>;
 
@@ -277,6 +281,10 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
         Box::pin(async move {
             let mut cursor = None;
             let mut backend_idx = None;
+
+            // get current timestamp
+            // we use this timestamp to prevent rebuilding meta that created after this timestamp,
+            // otherwise we will have endless loop of meta rebuild
             use std::time::{SystemTime, UNIX_EPOCH};
 
             let timestamp = SystemTime::now()

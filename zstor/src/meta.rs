@@ -209,6 +209,11 @@ pub trait MetaStore {
     async fn is_replaced(&self, ci: &ZdbConnectionInfo) -> Result<bool, MetaStoreError>;
 
     /// scan the metadata keys
+    ///
+    /// If `cursor` is `None`, the scan will start from the beginning.
+    /// If `backend_idx` is `None`, the scan will use backend which has the most keys.
+    ///
+    /// Returns the backend index and cursor for the next scan and the keys themselves
     async fn scan_meta_keys(
         &self,
         cursor: Option<Vec<u8>>,
