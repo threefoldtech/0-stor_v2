@@ -273,14 +273,17 @@ where
         cursor: Option<Vec<u8>>,
         prefix: Option<&str>,
         backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
     ) -> ZdbMetaStoreResult<(usize, Vec<u8>, Vec<String>)> {
         let most_keys_idx = match backend_idx {
             Some(idx) => idx,
             None => self.get_most_keys_backend().await?,
         };
 
-        let (cursor, keys) = self.backends[most_keys_idx].scan(cursor, prefix).await?;
-        Ok((most_keys_idx, cursor, keys))
+        let (new_cursor, keys) = self.backends[most_keys_idx]
+            .scan(cursor, prefix, max_timestamp)
+            .await?;
+        Ok((most_keys_idx, new_cursor, keys))
     }
 
     /// Return a stream of all function with a given prefix
@@ -645,10 +648,14 @@ where
         &self,
         cursor: Option<Vec<u8>>,
         backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
     ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError> {
         let prefix = format!("/{}/meta/", self.prefix);
 
-        match self.scan_keys(cursor, Some(&prefix), backend_idx).await {
+        match self
+            .scan_keys(cursor, Some(&prefix), backend_idx, max_timestamp)
+            .await
+        {
             Ok((backend_idx, cursor, keys)) => Ok((backend_idx, cursor, keys)),
             Err(e) => Err(MetaStoreError::from(e)),
         }

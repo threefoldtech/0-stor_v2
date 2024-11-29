@@ -197,6 +197,7 @@ impl Handler<ReloadConfig> for BackendManagerActor {
                 }
 
                 if any_new_meta {
+                    log::info!("New metadata backends, rebuilding metadata cluster");
                     if let Err(err) = actor.metastore.try_send(RebuildAllMeta) {
                         error!("Failed to send RebuildAllMeta message: {}", err);
                     }

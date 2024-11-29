@@ -93,7 +93,7 @@ impl fmt::Debug for InternalZdb {
 
 /// The type returned by the SCAN command in 0-db. In practice, the outer vec only contains a
 /// single element.
-type ScanEntry = Vec<(Vec<u8>, u32, u32)>;
+type ScanEntry = Vec<(Vec<u8>, u32, u64)>; // payload, size of payload in byte, creation timestamp
 /// The outpout of a `SCAN` Cmd (future).
 type ScanResult = redis::RedisResult<(Vec<u8>, Vec<ScanEntry>)>;
 
@@ -244,6 +244,7 @@ impl Stream for CollectionKeys {
 
         // Set new cursor
         self.cursor = Some(res.0);
+
         // New buffer - Converting the Vec into a VecDeque will, sadly, realloc the vec (under the
         // assumption that the vec has cap == len).
         self.buffer = res.1.into();
@@ -816,15 +817,19 @@ impl UserKeyZdb {
         &self,
         cursor: Option<Vec<u8>>,
         prefix: Option<&str>,
+        max_timestamp: Option<u64>,
     ) -> ZdbResult<(Vec<u8>, Vec<String>)> {
-        let res: (Vec<u8>, Vec<ScanEntry>) = match self.internal.scan(cursor).await {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
+        let (cursor, entries): (Vec<u8>, Vec<ScanEntry>) = self.internal.scan(cursor).await?;
+
         let mut keys = Vec::new();
-        let cursor = res.0;
-        let entries = res.1;
         for entry in &entries {
+            // check timestamp
+            if let Some(ts) = max_timestamp {
+                if entry[0].2 > ts {
+                    continue;
+                }
+            }
+            // check prefix
             let raw_key = entry[0].0.clone();
             if let Some(p) = prefix {
                 if !raw_key.starts_with(p.as_bytes()) {
@@ -835,6 +840,7 @@ impl UserKeyZdb {
                 keys.push(s)
             }
         }
+
         Ok((cursor, keys))
     }
 

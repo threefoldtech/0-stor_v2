@@ -220,6 +220,7 @@ pub trait MetaStore {
         &self,
         cursor: Option<Vec<u8>>,
         backend_idx: Option<usize>,
+        max_timestamp: Option<u64>,
     ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects

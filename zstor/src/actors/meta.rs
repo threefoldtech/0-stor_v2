@@ -58,17 +58,6 @@ pub struct IsReplaced {
 }
 
 #[derive(Message)]
-#[rtype(result = "Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>")]
-/// Message for retrieving all [`MetaData`] keys in a [`MetaStore`] managed by a [`MetaStoreActor`].
-pub struct ScanMetaKeys {
-    /// idx of the backend to scan, `None` to use backend with most keys.
-    pub backend_idx: Option<usize>,
-
-    /// cursor to start scanning from, `None` to start from the beginning.
-    pub cursor: Option<Vec<u8>>,
-}
-
-#[derive(Message)]
 #[rtype(result = "Result<Vec<(String, MetaData)>, MetaStoreError>")]
 /// Message for retrieving all [`MetaData`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
 pub struct ObjectMetas;
@@ -218,19 +207,6 @@ impl Handler<IsReplaced> for MetaStoreActor {
         Box::pin(async move { meta_store.is_replaced(&msg.ci).await })
     }
 }
-impl Handler<ScanMetaKeys> for MetaStoreActor {
-    type Result = ResponseFuture<Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>>;
-
-    fn handle(&mut self, msg: ScanMetaKeys, _: &mut Self::Context) -> Self::Result {
-        let meta_store = self.meta_store.clone();
-        Box::pin(async move {
-            let (backend_idx, cursor, keys) = meta_store
-                .scan_meta_keys(msg.cursor, msg.backend_idx)
-                .await?;
-            Ok((backend_idx, cursor, keys))
-        })
-    }
-}
 
 impl Handler<ObjectMetas> for MetaStoreActor {
     type Result = ResponseFuture<Result<Vec<(String, MetaData)>, MetaStoreError>>;
@@ -297,14 +273,25 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
     fn handle(&mut self, _: RebuildAllMeta, ctx: &mut Self::Context) -> Self::Result {
         let metastore = self.meta_store.clone();
         let addr = ctx.address();
+        log::info!("Rebuilding all meta handler");
         Box::pin(async move {
             // scan all keys
             // for each key:
             let mut cursor = None;
             let mut backend_idx = None;
-            //let actor = self.meta_store.clone();
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            log::info!("Starting rebuild at timestamp: {}", timestamp);
             loop {
-                let res = match metastore.scan_meta_keys(cursor.clone(), backend_idx).await {
+                let (idx, new_cursor, keys) = match metastore
+                    .scan_meta_keys(cursor.clone(), backend_idx, Some(timestamp))
+                    .await
+                {
                     Ok((idx, c, keys)) => (idx, c, keys),
                     Err(e) => {
                         log::error!("Error scanning keys: {}", e);
@@ -312,12 +299,9 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                     }
                 };
 
-                let keys = res.2;
-                if keys.is_empty() {
-                    continue;
-                }
                 for key in keys {
-                    let meta = match addr.send(LoadMetaByKey { key: key.clone() }).await {
+                    log::info!("Rebuilding meta key: {}", key);
+                    let meta: MetaData = match addr.send(LoadMetaByKey { key: key.clone() }).await {
                         Ok(Ok(m)) => m.unwrap(),
                         Ok(Err(e)) => {
                             log::error!("Error loading meta by key: {}", e);
@@ -337,11 +321,11 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                         }
                     }
                 }
-                if res.1.len() == 1 && res.1[0] == 0 {
+                if new_cursor.len() == 1 && new_cursor[0] == 0 {
                     break;
                 }
-                cursor = Some(res.1);
-                backend_idx = Some(res.0);
+                cursor = Some(new_cursor);
+                backend_idx = Some(idx);
             }
         })
     }
