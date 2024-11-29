@@ -215,7 +215,7 @@ pub trait MetaStore {
         &'a self,
     ) -> Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>, MetaStoreError>;
 
-    /// blabla
+    /// scan the metadata keys
     async fn scan_meta_keys(
         &self,
         cursor: Option<Vec<u8>>,

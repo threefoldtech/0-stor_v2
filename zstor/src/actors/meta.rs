@@ -304,25 +304,31 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                     let meta: MetaData = match addr.send(LoadMetaByKey { key: key.clone() }).await {
                         Ok(Ok(m)) => m.unwrap(),
                         Ok(Err(e)) => {
-                            log::error!("Error loading meta by key: {}", e);
+                            log::error!("Error loading meta by key:{} -  {}", key, e);
                             continue;
                         }
                         Err(e) => {
-                            log::error!("Error loading meta by key: {}", e);
+                            log::error!("Error loading meta by key:{} -  {}", key, e);
                             continue;
                         }
                     };
+
                     // save meta by key
-                    let key = key.clone();
-                    match addr.send(SaveMetaByKey { key, meta }).await {
+                    match addr
+                        .send(SaveMetaByKey {
+                            key: key.clone(),
+                            meta: meta,
+                        })
+                        .await
+                    {
                         Ok(Ok(_)) => {}
-                        _ => {
-                            log::error!("Error saving meta by key");
+                        Ok(Err(e)) => {
+                            log::error!("Error saving meta by key:{} -  {}", key, e);
+                        }
+                        Err(e) => {
+                            log::error!("Error saving meta by key:{} -  {}", key, e);
                         }
                     }
-                }
-                if new_cursor.len() == 1 && new_cursor[0] == 0 {
-                    break;
                 }
                 cursor = Some(new_cursor);
                 backend_idx = Some(idx);
