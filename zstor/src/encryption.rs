@@ -124,7 +124,7 @@ impl<'de> Deserialize<'de> for SymmetricKey {
 
 struct SymKeyVisitor;
 
-impl<'de> Visitor<'de> for SymKeyVisitor {
+impl Visitor<'_> for SymKeyVisitor {
     type Value = SymmetricKey;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
