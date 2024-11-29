@@ -708,7 +708,7 @@ impl<'a> DropFile<'a> {
     }
 }
 
-impl<'a> Drop for DropFile<'a> {
+impl Drop for DropFile<'_> {
     fn drop(&mut self) {
         // try to remove the file
         if let Err(e) = fs::remove_file(self.path) {
