@@ -9,14 +9,14 @@ use crate::{
     encryption::AesGcm,
     zdb::{NsInfo, SequentialZdb, UserKeyZdb, ZdbConnectionInfo, ZdbRunMode},
     zdb_meta::ZdbMetaStore,
-    ZstorError,
+    ZstorError, ZstorErrorKind,
 };
 use actix::prelude::*;
 use futures::{
     future::{join, join_all},
     {stream, StreamExt},
 };
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -79,6 +79,8 @@ impl BackendManagerActor {
         )>,
     ) -> Option<Vec<UserKeyZdb>> {
         let mut need_refresh = false;
+        // check if the state of the backends has changed
+        // - if there is change in writeable state
         for (ci, _, new_state, _) in &meta_info {
             if let Some((_, old_state)) = self.managed_meta_dbs.get(ci) {
                 if old_state.is_writeable() != new_state.is_writeable() {
@@ -120,6 +122,17 @@ struct CheckBackends;
 #[rtype(result = "()")]
 struct ReplaceBackends;
 
+/// Message to do metastore refresh
+#[derive(Debug, Message)]
+#[rtype(result = "Result<(), ZstorError>")]
+struct RefreshMeta {
+    /// the backends
+    backends: Vec<UserKeyZdb>,
+
+    /// rebuild all meta flag
+    rebuild_meta: bool,
+}
+
 /// Message to request connections to backends with a given capabitlity. If a healthy connection
 /// is being managed to his backend, this is returned. If a connection to this backend is not
 /// managed, or the connection is in an unhealthy state, a new connection is attempted.
@@ -160,12 +173,61 @@ impl Actor for BackendManagerActor {
     }
 }
 
+impl Handler<RefreshMeta> for BackendManagerActor {
+    type Result = ResponseFuture<Result<(), ZstorError>>;
+
+    fn handle(&mut self, msg: RefreshMeta, _: &mut Self::Context) -> Self::Result {
+        let config_addr = self.config_addr.clone();
+        let metastore = self.metastore.clone();
+
+        Box::pin(async move {
+            let config = match config_addr.send(GetConfig).await {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    error!("Failed to get running config: {}", e);
+                    return Err(ZstorError::new(ZstorErrorKind::Config, Box::new(e)));
+                }
+            };
+
+            let Meta::Zdb(meta_config) = config.meta();
+            let encoder = meta_config.encoder();
+            let encryptor = match config.encryption() {
+                Encryption::Aes(key) => AesGcm::new(key.clone()),
+            };
+            let backends = msg.backends;
+            let new_cluster = ZdbMetaStore::new(
+                backends,
+                encoder.clone(),
+                encryptor.clone(),
+                meta_config.prefix().to_owned(),
+                config.virtual_root().clone(),
+            );
+            let writeable = new_cluster.writable();
+            if let Err(e) = metastore
+                .send(ReplaceMetaStore {
+                    new_store: Box::new(new_cluster),
+                    writeable,
+                })
+                .await
+            {
+                error!("Failed to send ReplaceMetaStore message: {}", e);
+            }
+            if msg.rebuild_meta && writeable {
+                if let Err(err) = metastore.try_send(RebuildAllMeta) {
+                    error!("Failed to send RebuildAllMeta message: {}", err);
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 impl Handler<ReloadConfig> for BackendManagerActor {
     type Result = Result<(), ZstorError>;
 
     fn handle(&mut self, _: ReloadConfig, ctx: &mut Self::Context) -> Self::Result {
         let cfg_addr = self.config_addr.clone();
-        //let metastore = self.metastore.clone();
+        let addr = ctx.address();
 
         let fut = Box::pin(
             async move {
@@ -174,7 +236,7 @@ impl Handler<ReloadConfig> for BackendManagerActor {
                 (managed_seq_dbs, managed_meta_dbs)
             }
             .into_actor(self)
-            .map(|(seq_dbs, meta_dbs), actor, _| {
+            .map(move |(seq_dbs, meta_dbs), actor, _| {
                 // remove the data backends that are no longer managed from  the metrics
                 for (ci, _) in actor.managed_seq_dbs.iter() {
                     if !seq_dbs.contains_key(ci) {
@@ -184,11 +246,12 @@ impl Handler<ReloadConfig> for BackendManagerActor {
                         });
                     }
                 }
-                let mut any_new_meta = false;
+
+                let mut refresh_meta = false;
                 // remove the meta backends that are no longer managed from  the metrics
                 for (ci, _) in actor.managed_meta_dbs.iter() {
                     if !meta_dbs.contains_key(ci) {
-                        any_new_meta = true;
+                        refresh_meta = true;
                         actor.metrics.do_send(SetMetaBackendInfo {
                             ci: ci.clone(),
                             info: None,
@@ -196,17 +259,26 @@ impl Handler<ReloadConfig> for BackendManagerActor {
                     }
                 }
 
-                if any_new_meta {
-                    log::info!("New metadata backends, rebuilding metadata cluster");
-                    if let Err(err) = actor.metastore.try_send(RebuildAllMeta) {
-                        error!("Failed to send RebuildAllMeta message: {}", err);
-                    }
-                }
                 actor.managed_seq_dbs = seq_dbs;
                 actor.managed_meta_dbs = meta_dbs;
+
+                if refresh_meta {
+                    let meta_backends: Vec<UserKeyZdb> = actor
+                        .managed_meta_dbs
+                        .values()
+                        .filter_map(|(zdb, _)| zdb.clone())
+                        .collect();
+                    if let Err(err) = addr.try_send(RefreshMeta {
+                        backends: meta_backends,
+                        rebuild_meta: true,
+                    }) {
+                        error!("Failed to send MyReplaceMeta message: {}", err);
+                    }
+                }
             }),
         );
         ctx.spawn(fut);
+
         Ok(())
     }
 }
@@ -297,7 +369,7 @@ async fn get_zdbs_from_config(
 impl Handler<CheckBackends> for BackendManagerActor {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, _: CheckBackends, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _: CheckBackends, ctx: &mut Self::Context) -> Self::Result {
         let data_backend_info = self
             .managed_seq_dbs
             .iter()
@@ -313,6 +385,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .map(|(ci, (db, state))| (ci.clone(), (db.clone(), state.clone())))
             .collect::<Vec<_>>();
 
+        let actor_addr = ctx.address();
         Box::pin(
             async move {
                 let futs = data_backend_info
@@ -395,40 +468,17 @@ impl Handler<CheckBackends> for BackendManagerActor {
             }
             .into_actor(self)
             .then(|(data_info, meta_info), actor, _| {
+                // in this block, we will check if the metadata backends need to be refreshed
+                // and then do the necessary actions
                 let new_meta_backends = actor.check_new_metastore(meta_info.clone());
-
-                let config_addr = actor.config_addr.clone();
-                let metastore = actor.metastore.clone();
                 async move {
                     if let Some(backends) = new_meta_backends {
-                        let config = match config_addr.send(GetConfig).await {
-                            Ok(cfg) => cfg,
-                            Err(e) => {
-                                error!("Failed to get running config: {}", e);
-                                return (data_info, meta_info);
-                            }
-                        };
-                        let Meta::Zdb(meta_config) = config.meta();
-                        let encoder = meta_config.encoder();
-                        let encryptor = match config.encryption() {
-                            Encryption::Aes(key) => AesGcm::new(key.clone()),
-                        };
-                        let new_cluster = ZdbMetaStore::new(
+                        info!("Refreshing metadata cluster");
+                        if let Err(err) = actor_addr.try_send(RefreshMeta {
                             backends,
-                            encoder.clone(),
-                            encryptor.clone(),
-                            meta_config.prefix().to_owned(),
-                            config.virtual_root().clone(),
-                        );
-                        let writeable = new_cluster.writable();
-                        if let Err(e) = metastore
-                            .send(ReplaceMetaStore {
-                                new_store: Box::new(new_cluster),
-                                writeable,
-                            })
-                            .await
-                        {
-                            error!("Failed to send ReplaceMetaStore message: {}", e);
+                            rebuild_meta: false,
+                        }) {
+                            error!("Failed to send MyReplaceMeta message: {}", err);
                         }
                     }
                     (data_info, meta_info)
