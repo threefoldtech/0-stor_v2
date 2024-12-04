@@ -30,6 +30,7 @@ pub struct MetricsActor {
     data_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
     meta_zdbs: HashMap<ZdbConnectionInfo, NsInfo>,
     removed_zdbs: Vec<(ZdbConnectionInfo, BackendType)>,
+    dead_zdbs: HashMap<ZdbConnectionInfo, BackendType>,
     successful_zstor_commands: HashMap<ZstorCommandId, usize>,
     failed_zstor_commands: HashMap<ZstorCommandId, usize>,
     zdbfs_stats: stats_t,
@@ -37,6 +38,7 @@ pub struct MetricsActor {
 }
 
 struct PromMetrics {
+    connection_status_gauges: IntGaugeVec,
     entries_gauges: IntGaugeVec,
     data_size_bytes_gauges: IntGaugeVec,
     data_limit_bytes_gauges: IntGaugeVec,
@@ -77,6 +79,7 @@ impl MetricsActor {
             data_zdbs: HashMap::new(),
             meta_zdbs: HashMap::new(),
             removed_zdbs: Vec::new(),
+            dead_zdbs: HashMap::new(),
             successful_zstor_commands: HashMap::new(),
             failed_zstor_commands: HashMap::new(),
             zdbfs_stats: stats_t::default(),
@@ -87,6 +90,12 @@ impl MetricsActor {
 
     fn setup_prometheus() -> PromMetrics {
         PromMetrics {
+            connection_status_gauges: register_int_gauge_vec!(
+                "connection_status",
+                "Status of the connection to the 0-db",
+                &["address", "namespace", "backend_type"]
+            )
+            .unwrap(),
             entries_gauges: register_int_gauge_vec!(
                 "entries",
                 "entries in namespace",
@@ -307,14 +316,16 @@ impl Handler<SetDataBackendInfo> for MetricsActor {
 
     fn handle(&mut self, msg: SetDataBackendInfo, _: &mut Self::Context) -> Self::Result {
         if let Some(info) = msg.info {
-            self.data_zdbs.insert(msg.ci, info);
+            self.data_zdbs.insert(msg.ci.clone(), info);
+            self.dead_zdbs.remove(&msg.ci);
         } else {
-            let v = self.data_zdbs.remove(&msg.ci);
+            let nsinfo: Option<NsInfo> = self.data_zdbs.remove(&msg.ci);
             // when the zdb is down, backend actors always send a None info
             // in this case we should remove the zdb from the metrics *only* if it was present.
-            // Otherwise we will do unnecessary work and the `removed_zdbs` list will exploded
-            if v.is_some() {
-                self.removed_zdbs.push((msg.ci, BackendType::Data));
+            // Otherwise we will do unnecessary work and the `removed_zdbs` list might exploded
+            if nsinfo.is_some() {
+                self.removed_zdbs.push((msg.ci.clone(), BackendType::Data));
+                self.dead_zdbs.insert(msg.ci, BackendType::Data);
             }
         }
     }
@@ -325,14 +336,16 @@ impl Handler<SetMetaBackendInfo> for MetricsActor {
 
     fn handle(&mut self, msg: SetMetaBackendInfo, _: &mut Self::Context) -> Self::Result {
         if let Some(info) = msg.info {
-            self.meta_zdbs.insert(msg.ci, info);
+            self.meta_zdbs.insert(msg.ci.clone(), info);
+            self.dead_zdbs.remove(&msg.ci);
         } else {
-            let v = self.meta_zdbs.remove(&msg.ci);
+            let nsinfo = self.meta_zdbs.remove(&msg.ci);
             // when the zdb is down, backend actors always send a None info
             // in this case we should remove the zdb from the metrics *only* if it was present.
-            // Otherwise we will do unnecessary work and the `removed_zdbs` list will exploded
-            if v.is_some() {
-                self.removed_zdbs.push((msg.ci, BackendType::Meta));
+            // Otherwise we will do unnecessary work and the `removed_zdbs` list might exploded
+            if nsinfo.is_some() {
+                self.removed_zdbs.push((msg.ci.clone(), BackendType::Meta));
+                self.dead_zdbs.insert(msg.ci, BackendType::Meta);
             }
         }
     }
@@ -434,6 +447,10 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             labels.insert("address", &address);
             labels.insert("backend_type", backend_type.as_str());
 
+            let connection_status_gauge = self
+                .prom_metrics
+                .connection_status_gauges
+                .get_metric_with(&labels)?;
             let entries_gauge = self.prom_metrics.entries_gauges.get_metric_with(&labels)?;
             let data_size_bytes_gauge = self
                 .prom_metrics
@@ -461,6 +478,7 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
                 .data_disk_freespace_bytes_gauges
                 .get_metric_with(&labels)?;
 
+            connection_status_gauge.set(1);
             entries_gauge.set(info.entries as i64);
             data_size_bytes_gauge.set(info.data_size_bytes as i64);
             data_limit_bytes_gauge.set(
@@ -474,6 +492,21 @@ impl Handler<GetPrometheusMetrics> for MetricsActor {
             data_faults_gauge.inc_by(info.data_faults as u64 - data_io_errors_gauge.get());
             index_disk_freespace_bytes_gauge.set(info.index_disk_freespace_bytes as i64);
             data_disk_freespace_bytes_gauge.set(info.data_disk_freespace_bytes as i64);
+        }
+
+        // dead zdbs
+        for (ci, backend_type) in self.dead_zdbs.iter() {
+            let mut labels = HashMap::new();
+            labels.insert("namespace", ci.namespace().unwrap_or(""));
+            let address = ci.address().to_string();
+            labels.insert("address", &address);
+            labels.insert("backend_type", backend_type.as_str());
+
+            let connection_status_gauge = self
+                .prom_metrics
+                .connection_status_gauges
+                .get_metric_with(&labels)?;
+            connection_status_gauge.set(0);
         }
 
         // Update zstor stats
