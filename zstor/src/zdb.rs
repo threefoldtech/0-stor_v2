@@ -818,15 +818,15 @@ impl UserKeyZdb {
         cursor: Option<Vec<u8>>,
         prefix: Option<&str>,
         max_timestamp: Option<u64>,
-    ) -> ZdbResult<(Vec<u8>, Vec<String>)> {
+    ) -> ZdbResult<(Option<Vec<u8>>, Vec<String>)> {
         let (cursor, entries): (Vec<u8>, Vec<ScanEntry>) = self.internal.scan(cursor).await?;
 
         let mut keys = Vec::new();
         for entry in &entries {
             // check timestamp
-            if let Some(ts) = max_timestamp {
-                if entry[0].2 > ts {
-                    continue;
+            if let Some(max_timestamp) = max_timestamp {
+                if entry[0].2 > max_timestamp {
+                    return Ok((None, keys));
                 }
             }
             // check prefix
@@ -841,7 +841,7 @@ impl UserKeyZdb {
             }
         }
 
-        Ok((cursor, keys))
+        Ok((Some(cursor), keys))
     }
 
     /// Get a stream which yields all the keys in the namespace.

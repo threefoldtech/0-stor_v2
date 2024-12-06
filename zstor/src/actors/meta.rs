@@ -58,6 +58,21 @@ pub struct IsReplaced {
 }
 
 #[derive(Message)]
+#[rtype(result = "Result<(usize, Option<Vec<u8>>, Vec<(String, MetaData)>), MetaStoreError>")]
+/// Message for  scan [`MetaData`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
+pub struct ScanMeta {
+    /// Cursor to start scanning from.
+    pub cursor: Option<Vec<u8>>,
+
+    /// Backend index to scan from.
+    /// If none, it will use the backend with most keys
+    pub backend_idx: Option<usize>,
+
+    /// Maximum timestamp to scan until.
+    pub max_timestamp: Option<u64>,
+}
+
+#[derive(Message)]
 #[rtype(result = "Result<Vec<(String, MetaData)>, MetaStoreError>")]
 /// Message for retrieving all [`MetaData`] objects in a [`MetaStore`] managed by a [`MetaStoreActor`].
 pub struct ObjectMetas;
@@ -208,6 +223,46 @@ impl Handler<IsReplaced> for MetaStoreActor {
     }
 }
 
+impl Handler<ScanMeta> for MetaStoreActor {
+    type Result =
+        ResponseFuture<Result<(usize, Option<Vec<u8>>, Vec<(String, MetaData)>), MetaStoreError>>;
+
+    fn handle(&mut self, msg: ScanMeta, ctx: &mut Self::Context) -> Self::Result {
+        let meta_store = self.meta_store.clone();
+        let addr = ctx.address();
+
+        Box::pin(async move {
+            let (new_cursor, backend_idx, keys) = match meta_store
+                .scan_meta_keys(msg.cursor, msg.backend_idx, msg.max_timestamp)
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    return Err(e);
+                }
+            };
+
+            let mut metas = Vec::with_capacity(keys.len());
+
+            for key in keys {
+                let meta: MetaData = match addr.send(LoadMetaByKey { key: key.clone() }).await {
+                    Ok(Ok(m)) => m.unwrap(),
+                    Ok(Err(e)) => {
+                        log::error!("Error loading meta by key:{} -  {}", key, e);
+                        continue;
+                    }
+                    Err(e) => {
+                        log::error!("Error loading meta by key:{} -  {}", key, e);
+                        continue;
+                    }
+                };
+                metas.push((key, meta));
+            }
+            Ok((new_cursor, backend_idx, metas))
+        })
+    }
+}
+
 impl Handler<ObjectMetas> for MetaStoreActor {
     type Result = ResponseFuture<Result<Vec<(String, MetaData)>, MetaStoreError>>;
 
@@ -336,7 +391,10 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                         }
                     }
                 }
-                cursor = Some(new_cursor);
+                if cursor.is_none() {
+                    break;
+                }
+                cursor = new_cursor;
                 backend_idx = Some(idx);
             }
         })

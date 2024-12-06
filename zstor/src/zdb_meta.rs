@@ -272,7 +272,7 @@ where
         prefix: Option<&str>,
         backend_idx: Option<usize>,
         max_timestamp: Option<u64>,
-    ) -> ZdbMetaStoreResult<(usize, Vec<u8>, Vec<String>)> {
+    ) -> ZdbMetaStoreResult<(usize, Option<Vec<u8>>, Vec<String>)> {
         let most_keys_idx = match backend_idx {
             Some(idx) => idx,
             None => self.get_most_keys_backend().await?,
@@ -613,16 +613,12 @@ where
         cursor: Option<Vec<u8>>,
         backend_idx: Option<usize>,
         max_timestamp: Option<u64>,
-    ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError> {
+    ) -> Result<(usize, Option<Vec<u8>>, Vec<String>), MetaStoreError> {
         let prefix = format!("/{}/meta/", self.prefix);
 
-        match self
-            .scan_keys(cursor, Some(&prefix), backend_idx, max_timestamp)
+        self.scan_keys(cursor, Some(&prefix), backend_idx, max_timestamp)
             .await
-        {
-            Ok((backend_idx, cursor, keys)) => Ok((backend_idx, cursor, keys)),
-            Err(e) => Err(MetaStoreError::from(e)),
-        }
+            .map_err(MetaStoreError::from)
     }
 
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError> {
