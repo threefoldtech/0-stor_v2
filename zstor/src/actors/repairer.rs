@@ -1,15 +1,10 @@
-use crate::{
-    actors::{
-        backends::{BackendManagerActor, RequestBackends, StateInterest},
-        meta::{MetaStoreActor, ObjectMetas},
-        zstor::{Rebuild, ZstorActor},
-    },
-    zdb::ZdbConnectionInfo,
+use crate::actors::{
+    backends::{BackendManagerActor, RequestBackends, StateInterest},
+    meta::{MetaStoreActor, ObjectMetas},
+    zstor::{Rebuild, ZstorActor},
 };
 use actix::prelude::*;
-use log::{debug, error, warn};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use log::{error, warn};
 use std::time::Duration;
 
 /// Amount of time between starting a new sweep of the backend objects.
@@ -84,37 +79,13 @@ impl Handler<SweepObjects> for RepairActor {
                 },
             };
 
-            // prevent same backend from being checked multiple times
-            let mut unique_zdbs = HashMap::new();
             for (key, metadata) in obj_metas.into_iter() {
-                let mut need_rebuild_check = false;
-                let backend_requests: Vec<ZdbConnectionInfo> = metadata
+                let backend_requests = metadata
                     .shards()
                     .iter()
-                    .map(|shard_info| shard_info.zdb().clone())
-                    .filter(|zdb| match unique_zdbs.entry(zdb.clone()) {
-                        Entry::Occupied(entry) => {
-                            let is_healthy: &bool = entry.get();
-                            if !*is_healthy {
-                                need_rebuild_check = true;
-                            }
-                            false
-                        }
-                        Entry::Vacant(entry) => {
-                            entry.insert(false);
-                            true
-                        }
-                    })
-                    .collect();
-                if backend_requests.is_empty() {
-                    debug!("No unchecked backends found for object: {}", key);
-                    continue;
-                }
-                debug!("number of backends to check = {}", backend_requests.len());
-
-                if !need_rebuild_check {
-                    continue;
-                }
+                    .map(|shard_info| shard_info.zdb())
+                    .cloned()
+                    .collect::<Vec<_>>();
                 let backends = match backend_manager
                     .send(RequestBackends {
                         backend_requests,
@@ -128,13 +99,7 @@ impl Handler<SweepObjects> for RepairActor {
                     }
                     Ok(backends) => backends,
                 };
-                let must_rebuild = backends.into_iter().fold(false, |rebuild, b| {
-                    let is_healthy = matches!(b, Ok(Some(_)));
-                    if let Ok(Some(zdb)) = b {
-                        unique_zdbs.insert(zdb.connection_info().clone(), is_healthy);
-                    }
-                    rebuild || !is_healthy
-                });
+                let must_rebuild = backends.into_iter().any(|b| !matches!(b, Ok(Some(_))));
                 if must_rebuild {
                     if let Err(e) = zstor
                         .send(Rebuild {
