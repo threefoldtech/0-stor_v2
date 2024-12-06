@@ -213,13 +213,14 @@ pub trait MetaStore {
     /// If `cursor` is `None`, the scan will start from the beginning.
     /// If `backend_idx` is `None`, the scan will use backend which has the most keys.
     ///
-    /// Returns the backend index and cursor for the next scan and the keys themselves
+    /// Returns the backend index and cursor for the next scan and the keys themselves.
+    /// If there are no more keys with timestamp >= max_timestamp, the cursor will be `None`
     async fn scan_meta_keys(
         &self,
         cursor: Option<Vec<u8>>,
         backend_idx: Option<usize>,
         max_timestamp: Option<u64>,
-    ) -> Result<(usize, Vec<u8>, Vec<String>), MetaStoreError>;
+    ) -> Result<(usize, Option<Vec<u8>>, Vec<String>), MetaStoreError>;
 
     /// Get the (key, metadata) for all stored objects
     async fn object_metas(&self) -> Result<Vec<(String, MetaData)>, MetaStoreError>;
