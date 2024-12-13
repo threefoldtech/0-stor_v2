@@ -340,13 +340,11 @@ impl Handler<Rebuild> for ZstorActor {
                     if let Some(data) = data {
                         if data.as_slice() == shards[i].as_ref() {
                             used_backends.push((key, Some(old_metadata.shards()[i].zdb().clone())));
-                            debug!("Shard {} is the SAME", i);
                         } else {
                             used_backends.push((key, None));
-                            warn!("Shard {} is DIFFERENT", i);
+                            error!("Shard {} is DIFFERENT", i);
                         }
                     } else {
-                        debug!("Shard {} is MISSING", i);
                         used_backends.push((key, None));
                     }
                 }
