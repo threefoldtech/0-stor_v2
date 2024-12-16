@@ -541,7 +541,8 @@ impl InternalZdb {
             internal: ErrorCause::Redis(e),
         })
     }
-    async fn scan(&self, cursor: Option<Vec<u8>>) -> ZdbResult<(Vec<u8>, Vec<ScanEntry>)> {
+
+    async fn scan(&self, cursor: Option<Vec<u8>>) -> ZdbResult<(Option<Vec<u8>>, Vec<ScanEntry>)> {
         trace!(
             "scanning namespace {} ",
             self.ci.namespace.as_deref().unwrap_or("default"),
@@ -554,17 +555,24 @@ impl InternalZdb {
         }
 
         let mut conn = self.conn.clone();
-        let res: (Vec<u8>, Vec<ScanEntry>) = match scan_cmd.query_async(&mut conn).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(ZdbError {
-                    kind: ZdbErrorKind::Read,
-                    remote: self.ci.clone(),
-                    internal: ErrorCause::Redis(e),
-                })
-            }
-        };
-        Ok(res)
+        let (new_cursor, entries): (Vec<u8>, Vec<ScanEntry>) =
+            match scan_cmd.query_async(&mut conn).await {
+                Ok(r) => r,
+                Err(e) => {
+                    // zdb will return `No: more data` error when the scan is done. This is not an
+                    // error, but a signal that the scan is done.
+                    if e.to_string() == "No: more data" {
+                        return Ok((None, Vec::new()));
+                    } else {
+                        return Err(ZdbError {
+                            kind: ZdbErrorKind::Read,
+                            remote: self.ci.clone(),
+                            internal: ErrorCause::Redis(e),
+                        });
+                    }
+                }
+            };
+        Ok((Some(new_cursor), entries))
     }
 
     /// Get a stream of all the keys in the namespace
@@ -819,7 +827,7 @@ impl UserKeyZdb {
         prefix: Option<&str>,
         max_timestamp: Option<u64>,
     ) -> ZdbResult<(Option<Vec<u8>>, Vec<String>)> {
-        let (cursor, entries): (Vec<u8>, Vec<ScanEntry>) = self.internal.scan(cursor).await?;
+        let (new_cursor, entries) = self.internal.scan(cursor).await?;
 
         let mut keys = Vec::new();
         for entry in &entries {
@@ -841,7 +849,7 @@ impl UserKeyZdb {
             }
         }
 
-        Ok((Some(cursor), keys))
+        Ok((new_cursor, keys))
     }
 
     /// Get a stream which yields all the keys in the namespace.
