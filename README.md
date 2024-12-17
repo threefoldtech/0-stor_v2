@@ -272,6 +272,8 @@ there is no specific difference between them.
 Because the system is designed to prioritize recoverability over availability,
 writers will be rejected if the metadata storage is in the degraded state, that is,
 not all 4 stores are available and writeable.
+However, read operations are still possible with at least two stores available.
+Similarly, the 0-stor daemon can be started with a minimum of two stores available.
 
 A metadata store can be replaced by a new one, by removing the old one in the config
 and inserting the new one. The repair subsystem will take care of rebulding the data,
