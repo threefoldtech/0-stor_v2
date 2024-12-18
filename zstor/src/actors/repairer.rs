@@ -67,7 +67,7 @@ struct SweepGuard {
 
 impl Drop for SweepGuard {
     fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
+        self.flag.store(false, Ordering::Relaxed);
     }
 }
 
@@ -75,7 +75,7 @@ impl Handler<SweepObjects> for RepairActor {
     type Result = ResponseFuture<()>;
 
     fn handle(&mut self, _: SweepObjects, _: &mut Self::Context) -> Self::Result {
-        if self.handling_sweep_objects.swap(true, Ordering::Acquire) {
+        if self.handling_sweep_objects.swap(true, Ordering::Relaxed) {
             log::info!("Dropping SweepObjects message - still processing");
             return Box::pin(async {});
         }
