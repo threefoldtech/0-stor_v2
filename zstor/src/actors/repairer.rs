@@ -125,6 +125,7 @@ impl Handler<SweepObjects> for RepairActor {
                             .send(Rebuild {
                                 file: None,
                                 key: Some(key),
+                                metadata: Some(metadata),
                             })
                             .await
                         {
