@@ -2,7 +2,6 @@ use actix::Actor;
 use actix::Addr;
 use actix_rt::signal::unix::SignalKind;
 use futures::future::join_all;
-use log::LevelFilter;
 use log::{debug, error, info, trace};
 use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
@@ -47,6 +46,11 @@ struct Opts {
         parse(from_os_str)
     )]
     config: PathBuf,
+
+    /// Enable debug logging.
+    #[structopt(name = "debug", long, short)]
+    debug: bool,
+
     /// Path to the log file to use. The logfile will automatically roll over if the size
     /// increases beyond 10MiB.
     #[structopt(
@@ -236,6 +240,13 @@ async fn write_pid_file(path: &Path) -> ZstorResult<bool> {
 
 async fn real_main() -> ZstorResult<()> {
     let opts = Opts::from_args();
+
+    let log_level = if opts.debug {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+
     // TODO: add check for file name
     let mut rolled_log_file = opts.log_file.clone();
     let name = if let Some(ext) = rolled_log_file.extension() {
@@ -275,12 +286,8 @@ async fn real_main() -> ZstorResult<()> {
                 }))
                 .build("logfile", Box::new(log_file)),
         )
-        .logger(Logger::builder().build("filelogger", LevelFilter::Debug))
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .build(log::LevelFilter::Debug),
-        )
+        .logger(Logger::builder().build("filelogger", log_level))
+        .build(Root::builder().appender("logfile").build(log_level))
         .unwrap();
     log4rs::init_config(log_config).unwrap();
 
