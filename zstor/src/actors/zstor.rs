@@ -89,6 +89,9 @@ pub struct Rebuild {
     /// for this key. If it exists, the data will be reconstructed according to the new policy,
     /// and the old metadata is replaced with the new metadata.
     pub key: Option<String>,
+
+    /// metadata of the file/key to rebuild
+    pub metadata: Option<MetaData>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Message, Clone)]
@@ -285,6 +288,7 @@ impl Handler<Rebuild> for ZstorActor {
         let pipeline = self.pipeline.clone();
         let config = self.cfg.clone();
         let meta = self.meta.clone();
+
         AtomicResponse::new(Box::pin(
             async move {
                 let cfg = config.send(GetConfig).await?;
@@ -300,31 +304,41 @@ impl Handler<Rebuild> for ZstorActor {
                         std::io::Error::from(std::io::ErrorKind::InvalidInput),
                     ));
                 }
-                let old_metadata = if let Some(ref file) = msg.file {
-                    meta.send(LoadMeta { path: file.clone() })
+
+                let old_metadata = match (msg.metadata, &msg.file, &msg.key) {
+                    (Some(metadata), _, _) => {
+                        debug!(
+                            "Using provided metadata for rebuild file:{:?} key: {:?}",
+                            &msg.file, &msg.key
+                        );
+                        metadata
+                    }
+                    (None, Some(file), _) => meta
+                        .send(LoadMeta { path: file.clone() })
                         .await??
                         .ok_or_else(|| {
                             ZstorError::new_io(
                                 "no metadata found for file".to_string(),
                                 std::io::Error::from(std::io::ErrorKind::NotFound),
                             )
-                        })?
-                } else if let Some(ref key) = msg.key {
-                    // key is set so the unwrap is safe
-                    meta.send(LoadMetaByKey { key: key.clone() })
+                        })?,
+                    (None, None, Some(key)) => meta
+                        .send(LoadMetaByKey { key: key.clone() })
                         .await??
                         .ok_or_else(|| {
                             ZstorError::new_io(
                                 "no metadata found for file".to_string(),
                                 std::io::Error::from(std::io::ErrorKind::NotFound),
                             )
-                        })?
-                } else {
-                    unreachable!();
+                        })?,
+                    _ => unreachable!(),
                 };
 
+                // load the data from the storage backends
                 let input = load_data(&old_metadata).await?;
                 let existing_data = input.clone();
+
+                // rebuild the data (in memory only)
                 let (mut metadata, shards) = pipeline
                     .send(RebuildData {
                         input,
@@ -333,7 +347,9 @@ impl Handler<Rebuild> for ZstorActor {
                     })
                     .await??;
 
-                // build a list of the key and the backend used for the shards
+                // build a list of (key, backend used for the shards)
+                // - if the shard still exists in the backend, we set the backend to the old backend
+                // - if the shard is missing, we set the backend to None
                 let mut used_backends = Vec::new();
                 for (i, data) in existing_data.iter().enumerate() {
                     let key = old_metadata.shards()[i].key().to_vec();
@@ -510,6 +526,8 @@ async fn check_backend_space(
     }
 }
 
+// Find valid backends for the shards
+// if the backend is part of the skip_backends, we don't need to check it again
 async fn find_valid_backends(
     cfg: &mut Config,
     shard_len: usize,

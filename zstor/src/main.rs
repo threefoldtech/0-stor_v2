@@ -311,7 +311,15 @@ async fn real_main() -> ZstorResult<()> {
             handle_command(ZstorCommand::Retrieve(Retrieve { file }), opts.config).await?
         }
         Cmd::Rebuild { file, key } => {
-            handle_command(ZstorCommand::Rebuild(Rebuild { file, key }), opts.config).await?
+            handle_command(
+                ZstorCommand::Rebuild(Rebuild {
+                    file,
+                    key,
+                    metadata: None,
+                }),
+                opts.config,
+            )
+            .await?
         }
         Cmd::Check { file } => {
             handle_command(ZstorCommand::Check(Check { path: file }), opts.config).await?
