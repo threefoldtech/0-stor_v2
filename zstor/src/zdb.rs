@@ -759,6 +759,39 @@ impl SequentialZdb {
         Ok(Some(data))
     }
 
+    /// get data from the zdb with a retry mechanism.
+    /// The retry will only happen at temporary errors,
+    /// currently only timeouts.
+    pub async fn get_with_retry(
+        &self,
+        keys: &[Key],
+        max_attempts: u64,
+    ) -> ZdbResult<Option<Vec<u8>>> {
+        if max_attempts < 2 {
+            return self.get(keys).await;
+        }
+
+        let mut last_error = None;
+
+        for attempt in 0..max_attempts {
+            match self.get(keys).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    if e.internal == ErrorCause::Timeout {
+                        last_error = Some(e);
+                        if attempt < max_attempts - 1 {
+                            debug!("timeout error on attempt {}, retrying", attempt + 1);
+                        }
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap())
+    }
+
     /// Returns the [`ZdbConnectionInfo`] object used to connect to this db.
     #[inline]
     pub fn connection_info(&self) -> &ZdbConnectionInfo {
@@ -1037,7 +1070,7 @@ impl ZdbError {
 }
 
 /// The cause of a zero db error.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum ErrorCause {
     Redis(redis::RedisError),
     Other(String),

@@ -258,7 +258,7 @@ impl Handler<Retrieve> for ZstorActor {
                         )
                     })?;
 
-                let shards = load_data(&metadata).await?;
+                let shards = load_data(&metadata, 1).await?;
 
                 pipeline
                     .send(RecoverFile {
@@ -335,7 +335,7 @@ impl Handler<Rebuild> for ZstorActor {
                 };
 
                 // load the data from the storage backends
-                let input = load_data(&old_metadata).await?;
+                let input = load_data(&old_metadata, 3).await?;
                 let existing_data = input.clone();
 
                 // rebuild the data (in memory only)
@@ -454,7 +454,8 @@ impl Handler<ReloadConfig> for ZstorActor {
     }
 }
 
-async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
+/// load data from the storage backends
+async fn load_data(metadata: &MetaData, max_attempts: u64) -> ZstorResult<Vec<Option<Vec<u8>>>> {
     // attempt to retrieve all shards
     let mut shard_loads: Vec<JoinHandle<(usize, Result<(_, _), ZstorError>)>> =
         Vec::with_capacity(metadata.shards().len());
@@ -468,7 +469,7 @@ async fn load_data(metadata: &MetaData) -> ZstorResult<Vec<Option<Vec<u8>>>> {
                 Ok(ok) => ok,
                 Err(e) => return (idx, Err(e.into())),
             };
-            match db.get(&key).await {
+            match db.get_with_retry(&key, max_attempts).await {
                 Ok(potential_shard) => match potential_shard {
                     Some(shard) => (idx, Ok((shard, chksum))),
                     None => (
