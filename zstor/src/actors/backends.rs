@@ -476,6 +476,11 @@ impl Handler<CheckBackends> for BackendManagerActor {
                         info!("Refreshing metadata cluster");
                         if let Err(err) = actor_addr.try_send(RefreshMeta {
                             backends,
+                            // we don't to rebuild the metadata because:
+                            // - If it is from writeable to not writeable, we can't rebuild anyway
+                            // - If it is from not writeable to writeable, we don't need to rebuild
+                            //    because there was no write during not-writeable status
+                            // - if it is new metadata backend, already rebuild by hot reload handler
                             rebuild_meta: false,
                         }) {
                             error!("Failed to send MyReplaceMeta message: {}", err);

@@ -3,6 +3,7 @@ use crate::{
     zdb::ZdbConnectionInfo,
 };
 use actix::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Message)]
@@ -134,6 +135,7 @@ pub struct ReplaceMetaStore {
 pub struct MetaStoreActor {
     meta_store: Arc<dyn MetaStore>,
     writeable: bool,
+    rebuild_all_meta_counter: Arc<AtomicU64>,
 }
 
 impl MetaStoreActor {
@@ -143,6 +145,23 @@ impl MetaStoreActor {
         Self {
             meta_store: Arc::from(meta_store),
             writeable,
+            rebuild_all_meta_counter: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// create a guard for the rebuild meta operation.
+    /// This guard is used to check if a newer rebuild operation has started
+    /// and the current one should be stopped.
+    /// We stop the current one because the newer one will have the latest meta store configuration,
+    /// so there is no point to continue the current one.
+    fn create_rebuild_meta_guard(&self) -> RebuildAllMetaGuard {
+        let new_gen = self
+            .rebuild_all_meta_counter
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        RebuildAllMetaGuard {
+            generation: new_gen,
+            current_gen: self.rebuild_all_meta_counter.clone(),
         }
     }
 }
@@ -322,6 +341,16 @@ impl Handler<GetFailures> for MetaStoreActor {
     }
 }
 
+struct RebuildAllMetaGuard {
+    generation: u64,
+    current_gen: Arc<AtomicU64>,
+}
+
+impl RebuildAllMetaGuard {
+    fn is_current(&self) -> bool {
+        self.generation == self.current_gen.load(Ordering::SeqCst)
+    }
+}
 /// Rebuild all meta data in the metastore:
 /// - scan all keys in the metastore before current timestamp
 /// - load meta by key
@@ -333,6 +362,8 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
         let metastore = self.meta_store.clone();
         let addr = ctx.address();
         log::info!("Rebuilding all meta handler");
+        let rebuild_guard = self.create_rebuild_meta_guard();
+
         Box::pin(async move {
             let mut cursor = None;
             let mut backend_idx = None;
@@ -361,6 +392,10 @@ impl Handler<RebuildAllMeta> for MetaStoreActor {
                 };
 
                 for key in keys {
+                    if !rebuild_guard.is_current() {
+                        log::info!("Newer rebuild started, stopping current one");
+                        break;
+                    }
                     log::info!("Rebuilding meta key: {}", key);
                     let meta: MetaData = match addr.send(LoadMetaByKey { key: key.clone() }).await {
                         Ok(Ok(m)) => m.unwrap(),
