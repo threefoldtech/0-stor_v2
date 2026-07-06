@@ -9,7 +9,7 @@ use crate::{
     erasure::Shard,
     meta::{Checksum, MetaData, ShardInfo},
     zdb::{Key, SequentialZdb, ZdbConnectionInfo, ZdbError, ZdbResult},
-    ZstorError, ZstorResult,
+    ZstorError, ZstorErrorKind, ZstorResult,
 };
 use actix::prelude::*;
 use futures::future::{join_all, try_join_all};
@@ -21,7 +21,11 @@ use std::{
 };
 use tokio::{fs, io, task::JoinHandle};
 
-use super::{backends::BackendManagerActor, config::ReloadConfig};
+use super::{
+    backends::BackendManagerActor,
+    config::ReloadConfig,
+    repairer::{SweepNow, SweepReport},
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// All possible commands zstor operates on.
@@ -34,6 +38,8 @@ pub enum ZstorCommand {
     Rebuild(Rebuild),
     /// Command to check if a file exists in the backend.
     Check(Check),
+    /// Command to run a repair sweep over all stored objects.
+    Sweep(SweepNow),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -45,6 +51,8 @@ pub enum ZstorResponse {
     Err(String),
     /// A checksum of a file.
     Checksum(Checksum),
+    /// The report of a completed repair sweep.
+    Sweep(SweepReport),
 }
 
 #[derive(Serialize, Deserialize, Debug, Message, Clone)]
@@ -365,13 +373,7 @@ impl Handler<Rebuild> for ZstorActor {
                     }
                 }
 
-                rebuild_data(
-                    &mut cfg.deref().clone(),
-                    shards,
-                    &mut metadata,
-                    used_backends,
-                )
-                .await?;
+                rebuild_data(cfg.deref(), shards, &mut metadata, used_backends).await?;
 
                 info!(
                     "Rebuild file from {} to {}",
@@ -528,12 +530,10 @@ async fn check_backend_space(
 }
 
 // Find valid backends for the shards
-// if the backend is part of the skip_backends, we don't need to check it again
 async fn find_valid_backends(
     cfg: &mut Config,
     shard_len: usize,
     needed_backends: usize,
-    skip_backends: Vec<(Vec<Key>, Option<ZdbConnectionInfo>)>,
 ) -> ZstorResult<Vec<SequentialZdb>> {
     loop {
         debug!("Finding backend config");
@@ -543,11 +543,6 @@ async fn find_valid_backends(
 
         let handles: Vec<_> = backends
             .into_iter()
-            .filter(|backend| {
-                !skip_backends
-                    .iter()
-                    .any(|(_, b)| b.as_ref() == Some(backend))
-            })
             .map(|backend| {
                 tokio::spawn(async move { check_backend_space(backend, shard_len).await })
             })
@@ -572,8 +567,99 @@ async fn find_valid_backends(
     }
 }
 
+/// Find backends to hold rebuilt shards.
+///
+/// Candidates are all backends in the config which do not already hold a live shard of the
+/// object being rebuilt. Every candidate is probed, and the healthy ones are picked in an
+/// order which prefers groups holding the fewest live shards of this object, so the rebuilt
+/// object keeps its spread over the configured groups. Unlike the write path, this does not
+/// require every configured backend to be healthy: as long as enough healthy candidates
+/// exist to hold the missing shards, the rebuild can proceed - which is exactly the state a
+/// fabric is in after losing a backend while a spare is configured.
+async fn find_rebuild_backends(
+    cfg: &Config,
+    shard_len: usize,
+    needed_backends: usize,
+    used_backends: &[(Vec<Key>, Option<ZdbConnectionInfo>)],
+) -> ZstorResult<Vec<SequentialZdb>> {
+    let used: Vec<&ZdbConnectionInfo> = used_backends
+        .iter()
+        .filter_map(|(_, ci)| ci.as_ref())
+        .collect();
+
+    // Track how many live shards of this object every group already holds, and collect the
+    // backends which are candidates for the missing shards.
+    let mut group_load: Vec<usize> = vec![0; cfg.groups().len()];
+    let mut candidates = Vec::new();
+    for (group_idx, group) in cfg.groups().iter().enumerate() {
+        for backend in group.backends() {
+            if used.contains(&backend) {
+                group_load[group_idx] += 1;
+            } else {
+                candidates.push((group_idx, backend.clone()));
+            }
+        }
+    }
+
+    let probes = candidates.into_iter().map(|(group_idx, ci)| async move {
+        (group_idx, check_backend_space(ci, shard_len).await)
+    });
+    let mut healthy = Vec::new();
+    for (group_idx, result) in join_all(probes).await {
+        match result {
+            Ok(db) => healthy.push((group_idx, db)),
+            Err(e) => debug!("Skipping rebuild target candidate: {}", e),
+        }
+    }
+
+    if healthy.len() < needed_backends {
+        return Err(ZstorError::with_message(
+            ZstorErrorKind::Storage,
+            format!(
+                "cannot rebuild to full redundancy: {} healthy spare backend(s) available, {} needed - provision replacement capacity or restore the missing backend(s)",
+                healthy.len(),
+                needed_backends
+            ),
+        ));
+    }
+
+    Ok(pick_least_loaded_groups(
+        healthy,
+        &mut group_load,
+        needed_backends,
+    ))
+}
+
+/// Pick `needed` entries out of `candidates`, always taking a candidate from the group with the
+/// lowest current load, and counting every pick towards that group's load. This keeps the picks
+/// spread over the groups.
+///
+/// # Panics
+///
+/// Panics if `candidates` holds fewer than `needed` entries.
+fn pick_least_loaded_groups<T>(
+    mut candidates: Vec<(usize, T)>,
+    group_load: &mut [usize],
+    needed: usize,
+) -> Vec<T> {
+    let mut picked = Vec::with_capacity(needed);
+    while picked.len() < needed {
+        // Unwrap is safe: candidates holds at least the amount of entries still to be picked.
+        let least_loaded = candidates
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, (group_idx, _))| group_load[*group_idx])
+            .map(|(idx, _)| idx)
+            .unwrap();
+        let (group_idx, entry) = candidates.swap_remove(least_loaded);
+        group_load[group_idx] += 1;
+        picked.push(entry);
+    }
+    picked
+}
+
 async fn rebuild_data(
-    cfg: &mut Config,
+    cfg: &Config,
     shards: Vec<Shard>,
     metadata: &mut MetaData,
     // used_backends specifies which backends are already used
@@ -592,11 +678,11 @@ async fn rebuild_data(
         }
     }
 
-    let new_dbs = find_valid_backends(
+    let new_dbs = find_rebuild_backends(
         cfg,
         shard_len,
         shards.len() - existing_backends_num,
-        used_backends.clone(),
+        &used_backends,
     )
     .await?;
 
@@ -661,7 +747,7 @@ async fn save_data(
         shards[0].len()
     };
 
-    let dbs = find_valid_backends(cfg, shard_len, shards.len(), [].to_vec()).await?;
+    let dbs = find_valid_backends(cfg, shard_len, shards.len()).await?;
 
     trace!("store shards in backends");
 
@@ -704,4 +790,47 @@ async fn get_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     }
 
     Ok(dir_entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_least_loaded_groups;
+
+    #[test]
+    fn picks_spread_over_empty_groups() {
+        // Object lost its shard on a backend in group 0; groups 0 and 1 still hold one shard
+        // each, group 2 holds none. The replacement should land in group 2.
+        let candidates = vec![(0, "spare_g0"), (2, "spare_g2")];
+        let mut load = vec![1, 1, 0];
+        let picked = pick_least_loaded_groups(candidates, &mut load, 1);
+        assert_eq!(picked, vec!["spare_g2"]);
+        assert_eq!(load, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn picks_count_towards_group_load() {
+        // Two picks with two spares in the empty group 1 and one in group 0: the second pick
+        // must not land in group 1 again, even though it started out least loaded.
+        let candidates = vec![(0, "spare_g0"), (1, "spare_g1_a"), (1, "spare_g1_b")];
+        let mut load = vec![1, 0];
+        let picked = pick_least_loaded_groups(candidates, &mut load, 2);
+        assert!(picked.contains(&"spare_g0"));
+        assert_eq!(
+            picked
+                .iter()
+                .filter(|name| name.starts_with("spare_g1"))
+                .count(),
+            1
+        );
+        assert_eq!(load, vec![2, 1]);
+    }
+
+    #[test]
+    fn picks_exhaust_balanced_groups() {
+        let candidates = vec![(0, "a"), (0, "b"), (1, "c"), (1, "d")];
+        let mut load = vec![0, 0];
+        let picked = pick_least_loaded_groups(candidates, &mut load, 4);
+        assert_eq!(picked.len(), 4);
+        assert_eq!(load, vec![2, 2]);
+    }
 }
