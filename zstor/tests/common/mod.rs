@@ -1,8 +1,11 @@
-//! Integration tests for the repair sweep, run against real 0-db processes.
+//! Shared harness for the integration tests which run against real 0-db processes.
 //!
 //! These tests need a 0-db binary: set the ZDB_BINARY environment variable to its path, or
 //! have `zdb` on the PATH. When no binary is found the tests print a notice and pass without
 //! testing anything, so the regular test suite stays independent of external tools.
+
+// This module is compiled once per test binary, and not every binary uses every helper.
+#![allow(dead_code)]
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -39,8 +42,29 @@ fn zdb_binary() -> Option<PathBuf> {
 
 /// A running fleet of 0-db processes, killed and cleaned up on drop.
 pub struct ZdbFleet {
+    bin: PathBuf,
     root: PathBuf,
-    children: Vec<(u16, Option<Child>)>,
+    children: Vec<(u16, String, Option<Child>)>,
+}
+
+fn spawn_one(bin: &Path, root: &Path, port: u16, mode: &str) -> Child {
+    let dir = root.join(format!("zdb-{}", port));
+    std::fs::create_dir_all(&dir).expect("can create zdb dir");
+    Command::new(bin)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--listen")
+        .arg("127.0.0.1")
+        .arg("--data")
+        .arg(dir.join("data"))
+        .arg("--index")
+        .arg(dir.join("index"))
+        .arg("--mode")
+        .arg(mode)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("can spawn zdb")
 }
 
 impl ZdbFleet {
@@ -48,28 +72,16 @@ impl ZdbFleet {
         let mut children = Vec::new();
         for (mode, ports) in [("seq", seq_ports), ("user", user_ports)] {
             for &port in ports {
-                let dir = root.join(format!("zdb-{}", port));
-                std::fs::create_dir_all(&dir).expect("can create zdb dir");
-                let child = Command::new(bin)
-                    .arg("--port")
-                    .arg(port.to_string())
-                    .arg("--listen")
-                    .arg("127.0.0.1")
-                    .arg("--data")
-                    .arg(dir.join("data"))
-                    .arg("--index")
-                    .arg(dir.join("index"))
-                    .arg("--mode")
-                    .arg(mode)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("can spawn zdb");
-                children.push((port, Some(child)));
+                let child = spawn_one(bin, &root, port, mode);
+                children.push((port, mode.to_string(), Some(child)));
             }
         }
-        let fleet = ZdbFleet { root, children };
-        for (port, _) in &fleet.children {
+        let fleet = ZdbFleet {
+            bin: bin.to_path_buf(),
+            root,
+            children,
+        };
+        for (port, _, _) in &fleet.children {
             wait_reachable(*port);
         }
         fleet
@@ -77,7 +89,7 @@ impl ZdbFleet {
 
     /// Kill the 0-db listening on the given port.
     pub fn kill_port(&mut self, port: u16) {
-        for (p, child) in self.children.iter_mut() {
+        for (p, _, child) in self.children.iter_mut() {
             if *p == port {
                 if let Some(mut child) = child.take() {
                     let _ = child.kill();
@@ -88,11 +100,24 @@ impl ZdbFleet {
         }
         panic!("no zdb running on port {}", port);
     }
+
+    /// Restart a previously killed 0-db on its old port, over its surviving data dirs.
+    pub fn respawn_port(&mut self, port: u16) {
+        for (p, mode, child) in self.children.iter_mut() {
+            if *p == port {
+                assert!(child.is_none(), "zdb on port {} is still running", port);
+                *child = Some(spawn_one(&self.bin, &self.root, port, mode));
+                wait_reachable(port);
+                return;
+            }
+        }
+        panic!("no zdb known on port {}", port);
+    }
 }
 
 impl Drop for ZdbFleet {
     fn drop(&mut self) {
-        for (_, child) in self.children.iter_mut() {
+        for (_, _, child) in self.children.iter_mut() {
             if let Some(mut child) = child.take() {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -161,6 +186,7 @@ fn make_config(
         unattended_repair: Some(unattended_repair),
         repair_interval_secs: Some(repair_interval_secs),
         missing_backend_grace_secs: Some(1),
+        degraded_write_margin: None,
         encryption: Encryption::Aes(SymmetricKey::new([3u8; 32])),
         compression: Compression::Snappy,
         meta: Meta::Zdb(ZdbMetaStoreConfig::new(
@@ -183,6 +209,13 @@ pub struct TestRig {
     pub system: ZstorSystem,
     pub data_file: PathBuf,
     pub payload: Vec<u8>,
+}
+
+impl TestRig {
+    /// The root directory of the test fleet, usable for additional scratch files.
+    pub fn fleet_root(&self) -> &Path {
+        &self.fleet.root
+    }
 }
 
 /// Stand up a fleet, a zstor system over it, and one stored object. Returns None when no zdb

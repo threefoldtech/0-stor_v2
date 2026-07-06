@@ -355,21 +355,28 @@ impl Handler<Rebuild> for ZstorActor {
                     })
                     .await??;
 
-                // build a list of (key, backend used for the shards)
+                // build a list of (key, backend used for the shards), indexed by shard
+                // position:
                 // - if the shard still exists in the backend, we set the backend to the old backend
-                // - if the shard is missing, we set the backend to None
-                let mut used_backends = Vec::new();
-                for (i, data) in existing_data.iter().enumerate() {
-                    let key = old_metadata.shards()[i].key().to_vec();
-                    if let Some(data) = data {
-                        if data.as_slice() == shards[i].as_ref() {
-                            used_backends.push((key, Some(old_metadata.shards()[i].zdb().clone())));
-                        } else {
-                            used_backends.push((key, None));
-                            error!("Shard {} is DIFFERENT", i);
+                // - if the shard is missing (unreachable backend, corrupt data, or never placed
+                //   because the object was written degraded), we set the backend to None
+                let expected_shards = old_metadata.data_shards() + old_metadata.disposable_shards();
+                let mut used_backends = Vec::with_capacity(expected_shards);
+                for position in 0..expected_shards {
+                    let old_shard = old_metadata
+                        .shards()
+                        .iter()
+                        .find(|si| si.index() == position);
+                    let key = old_shard.map(|si| si.key().to_vec()).unwrap_or_default();
+                    match (old_shard, existing_data[position].as_ref()) {
+                        (Some(si), Some(data)) if data.as_slice() == shards[position].as_ref() => {
+                            used_backends.push((key, Some(si.zdb().clone())));
                         }
-                    } else {
-                        used_backends.push((key, None));
+                        (Some(_), Some(_)) => {
+                            error!("Shard {} is DIFFERENT", position);
+                            used_backends.push((key, None));
+                        }
+                        _ => used_backends.push((key, None)),
                     }
                 }
 
@@ -567,6 +574,41 @@ async fn find_valid_backends(
     }
 }
 
+/// Probe every backend in the config which is not in `used`, and return the healthy ones
+/// tagged with their group index, together with the amount of `used` backends per group.
+/// The group counts serve as the starting load for [`pick_least_loaded_groups`], so
+/// follow-up picks keep the object spread over the configured groups.
+async fn probe_spare_backends(
+    cfg: &Config,
+    shard_len: usize,
+    used: &[&ZdbConnectionInfo],
+) -> (Vec<(usize, SequentialZdb)>, Vec<usize>) {
+    let mut group_load: Vec<usize> = vec![0; cfg.groups().len()];
+    let mut candidates = Vec::new();
+    for (group_idx, group) in cfg.groups().iter().enumerate() {
+        for backend in group.backends() {
+            if used.contains(&backend) {
+                group_load[group_idx] += 1;
+            } else {
+                candidates.push((group_idx, backend.clone()));
+            }
+        }
+    }
+
+    let probes = candidates.into_iter().map(|(group_idx, ci)| async move {
+        (group_idx, check_backend_space(ci, shard_len).await)
+    });
+    let mut healthy = Vec::new();
+    for (group_idx, result) in join_all(probes).await {
+        match result {
+            Ok(db) => healthy.push((group_idx, db)),
+            Err(e) => debug!("Skipping backend candidate: {}", e),
+        }
+    }
+
+    (healthy, group_load)
+}
+
 /// Find backends to hold rebuilt shards.
 ///
 /// Candidates are all backends in the config which do not already hold a live shard of the
@@ -587,30 +629,7 @@ async fn find_rebuild_backends(
         .filter_map(|(_, ci)| ci.as_ref())
         .collect();
 
-    // Track how many live shards of this object every group already holds, and collect the
-    // backends which are candidates for the missing shards.
-    let mut group_load: Vec<usize> = vec![0; cfg.groups().len()];
-    let mut candidates = Vec::new();
-    for (group_idx, group) in cfg.groups().iter().enumerate() {
-        for backend in group.backends() {
-            if used.contains(&backend) {
-                group_load[group_idx] += 1;
-            } else {
-                candidates.push((group_idx, backend.clone()));
-            }
-        }
-    }
-
-    let probes = candidates.into_iter().map(|(group_idx, ci)| async move {
-        (group_idx, check_backend_space(ci, shard_len).await)
-    });
-    let mut healthy = Vec::new();
-    for (group_idx, result) in join_all(probes).await {
-        match result {
-            Ok(db) => healthy.push((group_idx, db)),
-            Err(e) => debug!("Skipping rebuild target candidate: {}", e),
-        }
-    }
+    let (healthy, mut group_load) = probe_spare_backends(cfg, shard_len, &used).await;
 
     if healthy.len() < needed_backends {
         return Err(ZstorError::with_message(
@@ -628,6 +647,32 @@ async fn find_rebuild_backends(
         &mut group_load,
         needed_backends,
     ))
+}
+
+/// Find backends for a degraded write: as many healthy backends as available, up to
+/// `wanted`, spread over the groups, as long as at least `minimum` can be found. Used when
+/// the regular placement cannot be satisfied because backends are unreachable or full.
+async fn find_degraded_write_backends(
+    cfg: &Config,
+    shard_len: usize,
+    wanted: usize,
+    minimum: usize,
+) -> ZstorResult<Vec<SequentialZdb>> {
+    let (healthy, mut group_load) = probe_spare_backends(cfg, shard_len, &[]).await;
+
+    if healthy.len() < minimum {
+        return Err(ZstorError::with_message(
+            ZstorErrorKind::Storage,
+            format!(
+                "insufficient healthy backends even for a degraded write: {} healthy, need at least {} (minimal shards + degraded write margin)",
+                healthy.len(),
+                minimum
+            ),
+        ));
+    }
+
+    let amount = healthy.len().min(wanted);
+    Ok(pick_least_loaded_groups(healthy, &mut group_load, amount))
 }
 
 /// Pick `needed` entries out of `candidates`, always taking a candidate from the group with the
@@ -747,11 +792,33 @@ async fn save_data(
         shards[0].len()
     };
 
-    let dbs = find_valid_backends(cfg, shard_len, shards.len()).await?;
+    let wanted = shards.len();
+    let dbs = match find_valid_backends(cfg, shard_len, wanted).await {
+        Ok(dbs) => dbs,
+        Err(e) => {
+            // A full placement is not possible right now (backends unreachable or full).
+            // Rather than refusing the write - which turns one dead backend into a stalled
+            // fabric - degrade: place as many shards as healthy backends allow, as long as
+            // the data stays recoverable with a margin. The missing shards are backfilled
+            // by the repair sweep once capacity returns.
+            let minimum = cfg.data_shards() + cfg.degraded_write_margin();
+            let dbs = find_degraded_write_backends(cfg, shard_len, wanted, minimum).await?;
+            warn!(
+                "Degraded write: only {} of {} shards can be placed (full placement failed: {})",
+                dbs.len(),
+                wanted,
+                e
+            );
+            dbs
+        }
+    };
 
     trace!("store shards in backends");
 
-    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(shards.len());
+    let mut handles: Vec<JoinHandle<ZstorResult<_>>> = Vec::with_capacity(dbs.len());
+    // In a degraded write fewer backends than shards are available; the zip drops the
+    // unplaceable tail. Any `minimal_shards` shards recover the data, so which shards are
+    // dropped does not matter.
     for (db, (shard_idx, shard)) in dbs.into_iter().zip(shards.into_iter().enumerate()) {
         handles.push(tokio::spawn(async move {
             let keys = db.set(&shard).await?;

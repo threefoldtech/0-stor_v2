@@ -137,8 +137,8 @@ async fn sweep_objects(
                 )
             })??;
 
-        // iterate over the keys and check if the backends are healthy
-        // if not, rebuild the object
+        // iterate over the keys and check if all shards are placed and all backends holding
+        // them are healthy; if not, rebuild the object
         for (key, metadata) in metas.into_iter() {
             report.objects += 1;
             let backend_requests = metadata
@@ -147,6 +147,10 @@ async fn sweep_objects(
                 .map(|shard_info| shard_info.zdb())
                 .cloned()
                 .collect::<Vec<_>>();
+            // An object written while backends were down holds fewer shards than intended
+            // (degraded write); rebuilding it backfills the missing shards.
+            let missing_shards =
+                metadata.data_shards() + metadata.disposable_shards() > metadata.shards().len();
             let backends = backend_manager
                 .send(RequestBackends {
                     backend_requests,
@@ -159,7 +163,8 @@ async fn sweep_objects(
                         format!("failed to request backends: {}", e),
                     )
                 })?;
-            let must_rebuild = backends.into_iter().any(|b| !matches!(b, Ok(Some(_))));
+            let must_rebuild =
+                missing_shards || backends.into_iter().any(|b| !matches!(b, Ok(Some(_))));
             if must_rebuild {
                 report.degraded += 1;
                 match zstor

@@ -58,6 +58,15 @@ pub struct Config {
     /// Time in seconds a backend can be unreachable before it is considered gone, making its
     /// shards eligible for repair. Defaults to 900 seconds.
     pub missing_backend_grace_secs: Option<u64>,
+    /// The amount of shards which must be placed on top of the minimal amount needed to
+    /// recover the data, for a write to be accepted when not all expected shards can be
+    /// placed (because backends are unreachable or full). Writes always place all expected
+    /// shards when possible; this margin only bounds how far a write may degrade before it is
+    /// refused. Missing shards are backfilled by the repair sweep once capacity returns.
+    /// Defaults to 1, so a freshly written object always survives at least one further
+    /// backend loss. Set it to `expected_shards - minimal_shards` to refuse any degraded
+    /// write.
+    pub degraded_write_margin: Option<usize>,
     /// configuration to use for the encryption stage.
     pub encryption: Encryption,
     /// configuration to use for the compression stage.
@@ -169,6 +178,13 @@ impl Config {
     /// seconds when not set in the config.
     pub fn missing_backend_grace(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.missing_backend_grace_secs.unwrap_or(900))
+    }
+
+    /// The amount of shards which must be placed on top of the minimal amount needed to
+    /// recover the data, for a degraded write to be accepted. Defaults to 1 when not set in
+    /// the config.
+    pub fn degraded_write_margin(&self) -> usize {
+        self.degraded_write_margin.unwrap_or(1)
     }
 
     /// Return the encryption config to use for encoding this object.
@@ -499,6 +515,7 @@ mod tests {
             unattended_repair: None,
             repair_interval_secs: None,
             missing_backend_grace_secs: None,
+            degraded_write_margin: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],
@@ -666,6 +683,7 @@ password = "supersecretpass"
             unattended_repair: None,
             repair_interval_secs: None,
             missing_backend_grace_secs: None,
+            degraded_write_margin: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],

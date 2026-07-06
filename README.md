@@ -242,6 +242,15 @@ password = "supersecretpass"
 - `missing_backend_grace_secs`: Time in seconds a backend can be unreachable
     before it is considered gone, making its shards eligible for repair and
     the backend itself eligible for replacement. Defaults to 900 seconds.
+- `degraded_write_margin`: The amount of shards which must be placed on top
+    of `minimal_shards` for a write to be accepted when not all
+    `expected_shards` can be placed (because backends are unreachable or
+    full). Writes always place all expected shards when possible; this margin
+    only bounds how far a write may degrade before it is refused, and the
+    repair sweep backfills the missing shards once capacity returns. Defaults
+    to 1, so a freshly written object always survives at least one further
+    backend loss. Set it to `expected_shards - minimal_shards` to refuse any
+    degraded write.
 - `encryption`: configuration to use for the encryption stage. Currently
     only `AES` is supported. The encryption `key` is 32 random bytes in hexadecimal form.
 - `compression`: configuration to use for the compression stage.
