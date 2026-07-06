@@ -774,7 +774,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
 
 /// IntermediateRequestState for resolving cached connections
 enum IrState {
-    Cached((SequentialZdb, BackendState)),
+    Cached(Box<(SequentialZdb, BackendState)>),
     NotFound(ZdbConnectionInfo),
 }
 impl Handler<RequestBackends> for BackendManagerActor {
@@ -785,7 +785,7 @@ impl Handler<RequestBackends> for BackendManagerActor {
         for request in &msg.backend_requests {
             let cached_con = if let Some((c, state)) = self.managed_seq_dbs.get(request) {
                 match c {
-                    Some(con) => IrState::Cached((con.clone(), state.clone())),
+                    Some(con) => IrState::Cached(Box::new((con.clone(), state.clone()))),
                     // None means there is no readily available connection to the backend, so create a
                     // new one. This means state is not healthy anyway.
                     None => IrState::NotFound(request.clone()),
@@ -799,7 +799,8 @@ impl Handler<RequestBackends> for BackendManagerActor {
         Box::pin(async move {
             let interest = msg.interest;
             let futs = cached_cons.into_iter().map(|mut cc| async move {
-                if let IrState::Cached((con, state)) = cc {
+                if let IrState::Cached(cached) = cc {
+                    let (con, state) = *cached;
                     match interest {
                         StateInterest::Writeable if state.is_writeable() => return Ok(Some(con)),
                         StateInterest::Readable if state.is_readable() => return Ok(Some(con)),

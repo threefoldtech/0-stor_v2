@@ -274,14 +274,14 @@ impl Config {
         // acceptable to not find any good setup.
 
         // used groups must be <= disposable_shards/redundant_nodes, otherwise losing the max amount
-        // of nodes per group will lose too many shards
-        let max_groups = if self.redundant_nodes == 0 {
-            self.groups.len()
-        } else {
-            // add the redundant groups to the max groups, if we lose the entire group we no longer
-            // care about the individual nodes in the group after all
-            self.disposable_shards() / self.redundant_nodes + self.redundant_groups
-        };
+        // of nodes per group will lose too many shards. If no nodes are redundant, every group
+        // can be used. Otherwise, add the redundant groups to the max groups: if we lose the
+        // entire group we no longer care about the individual nodes in the group after all.
+        let max_groups = self
+            .disposable_shards()
+            .checked_div(self.redundant_nodes)
+            .map(|groups| groups + self.redundant_groups)
+            .unwrap_or(self.groups.len());
         // Get the index of every group for later lookup, eliminate groups which are statically too
         // small
         let groups: Vec<_> = self

@@ -100,6 +100,9 @@ impl Looper {
         }
     }
 
+    // The wrapped responses carry ZstorError, which clippy considers large; boxing it is a
+    // crate-wide refactor out of scope here, and the same lint is already allowed elsewhere.
+    #[allow(clippy::result_large_err)]
     async fn forward_cmd(&self, cmd: ZstorCommand) -> ZstorSchedulerResponse {
         match cmd {
             ZstorCommand::Store(store) => ZstorSchedulerResponse::Store(
