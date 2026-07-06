@@ -19,6 +19,7 @@ use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use zstor_v2::actors::config::ReloadConfig;
+use zstor_v2::actors::repairer::{RepairActor, SweepNow, SweepReport};
 use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
 use zstor_v2::actors::zstor_scheduler::Signaled;
 use zstor_v2::actors::zstor_scheduler::ZstorActorScheduler;
@@ -184,6 +185,15 @@ enum Cmd {
     /// the health of the backends. This info inludes if the backend is reachable, and the amount
     /// of used and free storage space.
     Status,
+
+    /// Run a repair sweep over all stored objects
+    ///
+    /// Scans all stored objects, and rebuilds every object which has one or more shards on an
+    /// unreachable backend onto healthy backends. This is the same scan the monitor runs
+    /// periodically when unattended repair is enabled; running it through this command works
+    /// regardless of that setting, so repair can be driven by an external scheduler. Prints a
+    /// summary of the sweep when it completes.
+    Sweep,
 }
 
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
@@ -331,6 +341,7 @@ async fn real_main() -> ZstorResult<()> {
         Cmd::Check { file } => {
             handle_command(ZstorCommand::Check(Check { path: file }), opts.config).await?
         }
+        Cmd::Sweep => handle_command(ZstorCommand::Sweep(SweepNow), opts.config).await?,
         Cmd::Test => {
             // load config => already done
             // connect to metastore => already done
@@ -500,7 +511,9 @@ async fn real_main() -> ZstorResult<()> {
             table.printstd();
         }
         Cmd::Monitor => {
-            let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
+            let system = zstor_v2::setup_system(opts.config, &cfg).await?;
+            let zstor = system.zstor;
+            let repairer = system.repairer;
             let mut pid_path = PathBuf::from("/var/run/zstor.pid");
             if let Some(cfg_pid_file) = cfg.pid_file() {
                 if let Some(v) = cfg_pid_file.to_str() {
@@ -541,9 +554,10 @@ async fn real_main() -> ZstorResult<()> {
                             Ok((con, remote)) => (con, remote),
                         };
                         let zs = zstor_scheduler.clone();
+                        let rep = repairer.clone();
                         tokio::spawn(async move {
                             debug!("Handling new client connection from {:?}", remote);
-                            if let Err(e) = handle_client(con, zs).await {
+                            if let Err(e) = handle_client(con, zs, rep).await {
                                 error!("Error while handeling client: {}", e);
                             }
                         });
@@ -592,7 +606,11 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActorScheduler>) -> ZstorResult<()>
+async fn handle_client<C>(
+    mut con: C,
+    zstor: Addr<ZstorActorScheduler>,
+    repairer: Addr<RepairActor>,
+) -> ZstorResult<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
 {
@@ -628,6 +646,10 @@ where
             Err(e) => ZstorResponse::Err(e.to_string()),
             Ok(Some(checksum)) => ZstorResponse::Checksum(checksum),
             Ok(None) => ZstorResponse::Success,
+        },
+        ZstorCommand::Sweep(sweep) => match repairer.send(sweep).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(report) => ZstorResponse::Sweep(report),
         },
     };
 
@@ -670,6 +692,7 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
 
         match res {
             ZstorResponse::Checksum(checksum) => println!("{}", hex::encode(checksum)),
+            ZstorResponse::Sweep(report) => print_sweep_report(&report),
             ZstorResponse::Err(err) => {
                 eprintln!("Zstor error: {}", err);
                 process::exit(1);
@@ -678,7 +701,8 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
         }
     } else {
         debug!("No zstor daemon socket found, running command in process");
-        let zstor = zstor_v2::setup_system(cfg_path, &cfg).await?;
+        let system = zstor_v2::setup_system(cfg_path, &cfg).await?;
+        let zstor = system.zstor;
         match zc {
             ZstorCommand::Store(store) => zstor.send(store).await??,
             ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,
@@ -688,9 +712,20 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
                     println!("{}", hex::encode(checksum));
                 }
             }
+            ZstorCommand::Sweep(sweep) => {
+                let report = system.repairer.send(sweep).await??;
+                print_sweep_report(&report);
+            }
         };
     };
     Ok(())
+}
+
+fn print_sweep_report(report: &SweepReport) {
+    println!(
+        "repair sweep finished: {} objects checked, {} degraded, {} rebuilt, {} failed",
+        report.objects, report.degraded, report.rebuilt, report.failed
+    );
 }
 
 #[allow(clippy::result_large_err)]

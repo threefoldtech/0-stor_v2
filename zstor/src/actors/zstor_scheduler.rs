@@ -1,4 +1,5 @@
 use super::priority_queue::PriorityQueue;
+use super::repairer::SweepReport;
 use super::zstor::{Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand};
 use crate::{meta::Checksum, ZstorError, ZstorErrorKind};
 use actix::prelude::*;
@@ -48,6 +49,8 @@ pub enum ZstorSchedulerResponse {
     Retrieve(Result<(), ZstorError>),
     /// Response for store command
     Store(Result<(), ZstorError>),
+    /// Response for sweep command
+    Sweep(Result<SweepReport, ZstorError>),
     /// Response for finalize command
     Done,
 }
@@ -97,6 +100,9 @@ impl Looper {
         }
     }
 
+    // The wrapped responses carry ZstorError, which clippy considers large; boxing it is a
+    // crate-wide refactor out of scope here, and the same lint is already allowed elsewhere.
+    #[allow(clippy::result_large_err)]
     async fn forward_cmd(&self, cmd: ZstorCommand) -> ZstorSchedulerResponse {
         match cmd {
             ZstorCommand::Store(store) => ZstorSchedulerResponse::Store(
@@ -123,6 +129,15 @@ impl Looper {
                     .await
                     .unwrap_or_else(|e| Err(ZstorError::from(e))),
             ),
+            // Sweeps are handled by the repair actor directly and never enter the scheduler
+            // queue; refuse defensively should that ever change.
+            ZstorCommand::Sweep(_) => {
+                error!("repair sweeps cannot be processed by the command scheduler");
+                ZstorSchedulerResponse::Sweep(Err(ZstorError::with_message(
+                    ZstorErrorKind::Storage,
+                    "repair sweeps cannot be processed by the command scheduler".to_string(),
+                )))
+            }
         }
     }
 

@@ -167,10 +167,7 @@ async fn attempt_removal(path: &Path, zstor: Addr<ZstorActor>) -> ZstorResult<bo
     let path = fs::canonicalize(path).await.map_err(|e| {
         ZstorError::new_io(
             "Could not canonicalize path".into(),
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Could not canonicalize path: {}", e),
-            ),
+            io::Error::other(format!("Could not canonicalize path: {}", e)),
         )
     })?;
     if zstor.send(Check { path: path.clone() }).await??.is_none() {
@@ -180,11 +177,8 @@ async fn attempt_removal(path: &Path, zstor: Addr<ZstorActor>) -> ZstorResult<bo
     // file is uploaded
     fs::remove_file(&path).await.map(|_| true).map_err(|e| {
         ZstorError::new_io(
-            "Could not canonicalize path".into(),
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Could not canonicalize path: {}", e),
-            ),
+            "Could not remove file".into(),
+            io::Error::other(format!("Could not remove file: {}", e)),
         )
     })
 }

@@ -71,6 +71,9 @@ impl Handler<GetConfig> for ConfigActor {
 impl Handler<ReloadConfig> for ConfigActor {
     type Result = AtomicResponse<Self, Result<(), ZstorError>>;
 
+    // The intermediate result carries ZstorError, which clippy considers large; boxing it is
+    // a crate-wide refactor out of scope here, and the same lint is already allowed elsewhere.
+    #[allow(clippy::result_large_err)]
     fn handle(&mut self, _: ReloadConfig, _: &mut Self::Context) -> Self::Result {
         let path = self.config_path.clone();
         debug!("Config actor reloading running config from {:?}", path);
