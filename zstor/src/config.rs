@@ -41,6 +41,9 @@ pub struct Config {
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
     pub max_zdb_data_dir_size: Option<u64>,
+    /// Time in seconds between checks of the data dir size. Only relevant when a data dir path
+    /// and size limit are set. Defaults to 60 seconds.
+    pub zdb_data_dir_check_interval_secs: Option<u64>,
     /// The mount point of an optional 0-db-fs. If present, stats will be collected from the
     /// 0-db-fs process.
     pub zdbfs_mountpoint: Option<PathBuf>,
@@ -178,6 +181,12 @@ impl Config {
     /// seconds when not set in the config.
     pub fn missing_backend_grace(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.missing_backend_grace_secs.unwrap_or(900))
+    }
+
+    /// The time between checks of the data dir size. Defaults to 60 seconds when not set in
+    /// the config.
+    pub fn zdb_data_dir_check_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.zdb_data_dir_check_interval_secs.unwrap_or(60))
     }
 
     /// The amount of shards which must be placed on top of the minimal amount needed to
@@ -512,6 +521,7 @@ mod tests {
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            zdb_data_dir_check_interval_secs: None,
             unattended_repair: None,
             repair_interval_secs: None,
             missing_backend_grace_secs: None,
@@ -680,6 +690,7 @@ password = "supersecretpass"
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            zdb_data_dir_check_interval_secs: None,
             unattended_repair: None,
             repair_interval_secs: None,
             missing_backend_grace_secs: None,

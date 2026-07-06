@@ -157,13 +157,16 @@ fn local_ci(port: u16) -> ZdbConnectionInfo {
 }
 
 /// Build a config over the given fleet: every data backend forms its own group, so repair
-/// target selection can be observed keeping the group spread.
+/// target selection can be observed keeping the group spread. When `data_dir` is given, the
+/// data dir monitor is configured with that (path, size cap in MiB, check interval in
+/// seconds).
 fn make_config(
     root: &Path,
     data_ports: &[u16],
     meta_ports: &[u16],
     unattended_repair: bool,
     repair_interval_secs: u64,
+    data_dir: Option<(&Path, u64, u64)>,
 ) -> Config {
     let meta_backends: [ZdbConnectionInfo; 4] = [
         local_ci(meta_ports[0]),
@@ -179,8 +182,9 @@ fn make_config(
         root: Some(root.to_path_buf()),
         socket: None,
         pid_file: None,
-        zdb_data_dir_path: None,
-        max_zdb_data_dir_size: None,
+        zdb_data_dir_path: data_dir.map(|(path, _, _)| path.to_path_buf()),
+        max_zdb_data_dir_size: data_dir.map(|(_, cap_mib, _)| cap_mib),
+        zdb_data_dir_check_interval_secs: data_dir.map(|(_, _, interval)| interval),
         zdbfs_mountpoint: None,
         prometheus_port: None,
         unattended_repair: Some(unattended_repair),
@@ -245,6 +249,7 @@ pub async fn setup_rig(
         &meta_ports,
         unattended_repair,
         repair_interval_secs,
+        None,
     );
     let system = zstor_v2::setup_system(root.join("zstor.toml"), &cfg)
         .await
@@ -279,6 +284,93 @@ pub async fn setup_rig(
         data_file,
         payload,
     })
+}
+
+/// Write a deterministic test payload of the given length to the given path, and return it.
+pub fn write_test_file(path: &Path, seed: u32, len: usize) -> Vec<u8> {
+    let payload: Vec<u8> = (0..len as u32)
+        .map(|i| (i.wrapping_mul(2654435761).wrapping_add(seed) >> 13) as u8)
+        .collect();
+    std::fs::write(path, &payload).expect("can write test file");
+    payload
+}
+
+/// Stand up a fleet and a zstor system with the data dir monitor enabled: a data dir capped
+/// at `cap_mib` MiB, checked every `interval_secs` seconds, holding one dispersed file of
+/// `file_len` bytes (the rig's `data_file`). With `via_symlink` the configured data dir path
+/// goes through a symlink, like a data dir on a mounted or relocated volume would. Returns
+/// the rig and the data dir path as configured. Returns None when no zdb binary is available.
+pub async fn setup_cache_rig(
+    name: &str,
+    cap_mib: u64,
+    interval_secs: u64,
+    file_len: usize,
+    via_symlink: bool,
+) -> Option<(TestRig, PathBuf)> {
+    let Some(bin) = zdb_binary() else {
+        eprintln!("skipping cache integration test: no zdb binary found (set ZDB_BINARY)");
+        return None;
+    };
+
+    let root = std::env::temp_dir().join(format!("zstor-cache-{}-{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("can create test root");
+
+    let ports = free_ports(9);
+    let data_ports = ports[..5].to_vec();
+    let meta_ports = ports[5..].to_vec();
+    let fleet = ZdbFleet::spawn(&bin, root.clone(), &data_ports, &meta_ports);
+
+    let data_dir = if via_symlink {
+        let real = root.join("realdir");
+        std::fs::create_dir_all(&real).expect("can create real data dir");
+        let link = root.join("datadir");
+        std::os::unix::fs::symlink(&real, &link).expect("can create data dir symlink");
+        link
+    } else {
+        let dir = root.join("datadir");
+        std::fs::create_dir_all(&dir).expect("can create data dir");
+        dir
+    };
+
+    let cfg = make_config(
+        &root,
+        &data_ports,
+        &meta_ports,
+        false,
+        600,
+        Some((&data_dir, cap_mib, interval_secs)),
+    );
+    let system = zstor_v2::setup_system(root.join("zstor.toml"), &cfg)
+        .await
+        .expect("can set up zstor system");
+
+    let data_file = data_dir.join("d0");
+    let payload = write_test_file(&data_file, 1, file_len);
+
+    system
+        .zstor
+        .send(Store {
+            file: data_file.clone(),
+            key_path: None,
+            save_failure: false,
+            delete: false,
+            blocking: true,
+        })
+        .await
+        .expect("can deliver store command")
+        .expect("store succeeds");
+
+    Some((
+        TestRig {
+            fleet,
+            cfg,
+            system,
+            data_file,
+            payload,
+        },
+        data_dir,
+    ))
 }
 
 /// The ports of the data backends currently referenced by the stored object's metadata.

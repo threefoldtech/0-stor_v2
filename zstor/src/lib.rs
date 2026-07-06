@@ -124,7 +124,13 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<ZstorS
     )
     .start();
 
-    let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
+    let _ = DirMonitorActor::new(
+        cfg_addr.clone(),
+        zstor.clone(),
+        metrics_addr.clone(),
+        cfg.zdb_data_dir_check_interval(),
+    )
+    .start();
 
     let repairer = RepairActor::new(
         meta_addr,

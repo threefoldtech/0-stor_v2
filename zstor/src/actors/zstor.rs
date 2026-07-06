@@ -254,17 +254,27 @@ impl Handler<Retrieve> for ZstorActor {
         AtomicResponse::new(Box::pin(
             async move {
                 let cfg = config.send(GetConfig).await?;
-                let metadata = meta
+                let mut metadata = meta
                     .send(LoadMeta {
                         path: msg.file.clone(),
                     })
-                    .await??
-                    .ok_or_else(|| {
-                        ZstorError::new_io(
-                            "no metadata found for file".to_string(),
-                            std::io::Error::from(std::io::ErrorKind::NotFound),
-                        )
-                    })?;
+                    .await??;
+                if metadata.is_none() {
+                    // The store pipeline keys metadata by the fully resolved path, so a file
+                    // addressed through a symlinked or relative location would never find its
+                    // own metadata under the path it was requested with.
+                    if let Ok(resolved) = resolve_path(&msg.file).await {
+                        if resolved != msg.file {
+                            metadata = meta.send(LoadMeta { path: resolved }).await??;
+                        }
+                    }
+                }
+                let metadata = metadata.ok_or_else(|| {
+                    ZstorError::new_io(
+                        "no metadata found for file".to_string(),
+                        std::io::Error::from(std::io::ErrorKind::NotFound),
+                    )
+                })?;
 
                 let shards = load_data(&metadata, 1).await?;
 
@@ -779,6 +789,22 @@ async fn rebuild_data(
     }
 
     Ok(())
+}
+
+/// Fully resolve a path on the filesystem, even when the file itself does not exist (the
+/// parent directory must). This mirrors how the store pipeline canonicalizes the paths it
+/// keys metadata under.
+async fn resolve_path(path: &Path) -> io::Result<PathBuf> {
+    match fs::canonicalize(path).await {
+        Ok(resolved) => Ok(resolved),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return Err(e);
+            };
+            Ok(fs::canonicalize(parent).await?.join(name))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn save_data(
