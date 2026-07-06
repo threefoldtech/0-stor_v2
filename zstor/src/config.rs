@@ -41,12 +41,35 @@ pub struct Config {
     /// Maximum size of the data dir in MiB, if this is set and the sum of the file sizes in the
     /// data dir gets higher than this value, the least used, already encoded file will be removed.
     pub max_zdb_data_dir_size: Option<u64>,
+    /// Time in seconds between checks of the data dir size. Only relevant when a data dir path
+    /// and size limit are set. Defaults to 60 seconds.
+    pub zdb_data_dir_check_interval_secs: Option<u64>,
     /// The mount point of an optional 0-db-fs. If present, stats will be collected from the
     /// 0-db-fs process.
     pub zdbfs_mountpoint: Option<PathBuf>,
     /// An optional port on which prometheus metrics will be exposed. If this is not set, the
     /// metrics will not get exposed.
     pub prometheus_port: Option<u16>,
+    /// Whether the monitor repairs degraded objects on its own. If enabled (the default), the
+    /// monitor periodically scans all stored objects and rebuilds those with shards on
+    /// unreachable backends. If disabled, scans only run when explicitly requested (through the
+    /// sweep command), so an external system can own repair scheduling.
+    pub unattended_repair: Option<bool>,
+    /// Time in seconds between automatic repair scans of all stored objects. Only relevant when
+    /// unattended repair is enabled. Defaults to 600 seconds.
+    pub repair_interval_secs: Option<u64>,
+    /// Time in seconds a backend can be unreachable before it is considered gone, making its
+    /// shards eligible for repair. Defaults to 900 seconds.
+    pub missing_backend_grace_secs: Option<u64>,
+    /// The amount of shards which must be placed on top of the minimal amount needed to
+    /// recover the data, for a write to be accepted when not all expected shards can be
+    /// placed (because backends are unreachable or full). Writes always place all expected
+    /// shards when possible; this margin only bounds how far a write may degrade before it is
+    /// refused. Missing shards are backfilled by the repair sweep once capacity returns.
+    /// Defaults to 1, so a freshly written object always survives at least one further
+    /// backend loss. Set it to `expected_shards - minimal_shards` to refuse any degraded
+    /// write.
+    pub degraded_write_margin: Option<usize>,
     /// configuration to use for the encryption stage.
     pub encryption: Encryption,
     /// configuration to use for the compression stage.
@@ -140,6 +163,37 @@ impl Config {
     /// Return the prometheus port on which prometheus formatted metrics will be served, if one is set.
     pub fn prometheus_port(&self) -> Option<u16> {
         self.prometheus_port
+    }
+
+    /// Whether the monitor repairs degraded objects on its own. Defaults to `true` when not set
+    /// in the config.
+    pub fn unattended_repair(&self) -> bool {
+        self.unattended_repair.unwrap_or(true)
+    }
+
+    /// The time between automatic repair scans. Defaults to 600 seconds when not set in the
+    /// config.
+    pub fn repair_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.repair_interval_secs.unwrap_or(600))
+    }
+
+    /// The time a backend can be unreachable before it is considered gone. Defaults to 900
+    /// seconds when not set in the config.
+    pub fn missing_backend_grace(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.missing_backend_grace_secs.unwrap_or(900))
+    }
+
+    /// The time between checks of the data dir size. Defaults to 60 seconds when not set in
+    /// the config.
+    pub fn zdb_data_dir_check_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.zdb_data_dir_check_interval_secs.unwrap_or(60))
+    }
+
+    /// The amount of shards which must be placed on top of the minimal amount needed to
+    /// recover the data, for a degraded write to be accepted. Defaults to 1 when not set in
+    /// the config.
+    pub fn degraded_write_margin(&self) -> usize {
+        self.degraded_write_margin.unwrap_or(1)
     }
 
     /// Return the encryption config to use for encoding this object.
@@ -245,14 +299,14 @@ impl Config {
         // acceptable to not find any good setup.
 
         // used groups must be <= disposable_shards/redundant_nodes, otherwise losing the max amount
-        // of nodes per group will lose too many shards
-        let max_groups = if self.redundant_nodes == 0 {
-            self.groups.len()
-        } else {
-            // add the redundant groups to the max groups, if we lose the entire group we no longer
-            // care about the individual nodes in the group after all
-            self.disposable_shards() / self.redundant_nodes + self.redundant_groups
-        };
+        // of nodes per group will lose too many shards. If no nodes are redundant, every group
+        // can be used. Otherwise, add the redundant groups to the max groups: if we lose the
+        // entire group we no longer care about the individual nodes in the group after all.
+        let max_groups = self
+            .disposable_shards()
+            .checked_div(self.redundant_nodes)
+            .map(|groups| groups + self.redundant_groups)
+            .unwrap_or(self.groups.len());
         // Get the index of every group for later lookup, eliminate groups which are statically too
         // small
         let groups: Vec<_> = self
@@ -467,6 +521,11 @@ mod tests {
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            zdb_data_dir_check_interval_secs: None,
+            unattended_repair: None,
+            repair_interval_secs: None,
+            missing_backend_grace_secs: None,
+            degraded_write_margin: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],
@@ -631,6 +690,11 @@ password = "supersecretpass"
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            zdb_data_dir_check_interval_secs: None,
+            unattended_repair: None,
+            repair_interval_secs: None,
+            missing_backend_grace_secs: None,
+            degraded_write_margin: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],

@@ -4,8 +4,6 @@ use crate::{
 };
 use actix::prelude::*;
 use log::warn;
-use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 
 /// Drop in replacement for the [`ExplorerActor`] which does not connect to the threefold grid.
 pub struct NopExplorerActor;
@@ -74,15 +72,4 @@ impl Handler<ExpandStorage> for NopExplorerActor {
             ))
         })
     }
-}
-
-/// The json structure of the response in a 0-db reservation
-#[derive(Debug, Serialize, Deserialize)]
-struct ZdbResultJson {
-    #[serde(rename = "Namespace")]
-    namespace: String,
-    #[serde(rename = "IPs")]
-    ips: Vec<IpAddr>,
-    #[serde(rename = "Port")]
-    port: u16,
 }

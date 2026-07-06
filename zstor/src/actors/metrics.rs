@@ -50,6 +50,11 @@ struct PromMetrics {
     index_disk_freespace_bytes_gauges: IntGaugeVec,
     data_disk_freespace_bytes_gauges: IntGaugeVec,
 
+    data_dir_size_bytes: IntGauge,
+    data_dir_size_limit_bytes: IntGauge,
+    data_dir_files_evicted: IntCounter,
+    data_dir_eviction_failures: IntCounter,
+
     zstor_store_commands_finished: IntCounterVec,
     zstor_retrieve_commands_finished: IntCounterVec,
     zstor_rebuild_commands_finished: IntCounterVec,
@@ -155,6 +160,26 @@ impl MetricsActor {
                 "data_disk_freespace_bytes",
                 "data_disk_freespace_bytes in namespace",
                 &["address", "namespace", "backend_type"]
+            )
+            .unwrap(),
+            data_dir_size_bytes: register_int_gauge!(
+                "data_dir_size_bytes",
+                "Total size of the files in the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_size_limit_bytes: register_int_gauge!(
+                "data_dir_size_limit_bytes",
+                "Configured size limit of the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_files_evicted: register_int_counter!(
+                "data_dir_files_evicted",
+                "Total amount of files evicted from the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_eviction_failures: register_int_counter!(
+                "data_dir_eviction_failures",
+                "Total amount of failed eviction attempts in the monitored 0-db data dir"
             )
             .unwrap(),
             zstor_store_commands_finished: register_int_counter_vec!(
@@ -307,6 +332,20 @@ pub struct UpdateZdbFsStats {
     pub stats: stats_t,
 }
 
+/// Message updating the stats of the monitored 0-db data dir after an eviction pass.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetDataDirStats {
+    /// Total size of the files in the data dir, after eviction.
+    pub size_bytes: u64,
+    /// The configured size limit of the data dir.
+    pub limit_bytes: u64,
+    /// The amount of files evicted in this pass.
+    pub evicted: u64,
+    /// The amount of files for which an eviction attempt failed in this pass.
+    pub failures: u64,
+}
+
 impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
@@ -368,6 +407,23 @@ impl Handler<UpdateZdbFsStats> for MetricsActor {
 
     fn handle(&mut self, msg: UpdateZdbFsStats, _: &mut Self::Context) -> Self::Result {
         self.zdbfs_stats = msg.stats;
+    }
+}
+
+impl Handler<SetDataDirStats> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetDataDirStats, _: &mut Self::Context) -> Self::Result {
+        self.prom_metrics
+            .data_dir_size_bytes
+            .set(msg.size_bytes as i64);
+        self.prom_metrics
+            .data_dir_size_limit_bytes
+            .set(msg.limit_bytes as i64);
+        self.prom_metrics.data_dir_files_evicted.inc_by(msg.evicted);
+        self.prom_metrics
+            .data_dir_eviction_failures
+            .inc_by(msg.failures);
     }
 }
 

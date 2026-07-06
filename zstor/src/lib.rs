@@ -59,8 +59,18 @@ pub mod zdbfs;
 /// Global result type for zstor operations
 pub type ZstorResult<T> = Result<T, ZstorError>;
 
+/// Handles to the actors of a running zstor system.
+pub struct ZstorSystem {
+    /// Address of the main zstor actor, which processes store, retrieve, rebuild and check
+    /// commands.
+    pub zstor: Addr<ZstorActor>,
+    /// Address of the repair actor, which sweeps the metastore for degraded objects and
+    /// rebuilds them.
+    pub repairer: Addr<RepairActor>,
+}
+
 /// Start the 0-stor monitor daemon
-pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<ZstorActor>> {
+pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<ZstorSystem> {
     let metastore = match cfg.meta() {
         Meta::Zdb(zdb_cfg) => {
             let backends = join_all(
@@ -101,6 +111,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
         explorer,
         metrics_addr.clone(),
         meta_addr.clone(),
+        cfg.missing_backend_grace(),
     )
     .start();
 
@@ -113,9 +124,22 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
     )
     .start();
 
-    let _ = DirMonitorActor::new(cfg_addr.clone(), zstor.clone()).start();
+    let _ = DirMonitorActor::new(
+        cfg_addr.clone(),
+        zstor.clone(),
+        metrics_addr.clone(),
+        cfg.zdb_data_dir_check_interval(),
+    )
+    .start();
 
-    let _ = RepairActor::new(meta_addr, backends, zstor.clone()).start();
+    let repairer = RepairActor::new(
+        meta_addr,
+        backends,
+        zstor.clone(),
+        cfg_addr,
+        cfg.repair_interval(),
+    )
+    .start();
 
     // Setup prometheus endpoint if needed
     if let Some(port) = prom_port {
@@ -130,7 +154,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<Addr<Z
         });
     };
 
-    Ok(zstor)
+    Ok(ZstorSystem { zstor, repairer })
 }
 
 /// Load a TOML encoded config file from the given path.
