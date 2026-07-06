@@ -47,6 +47,17 @@ pub struct Config {
     /// An optional port on which prometheus metrics will be exposed. If this is not set, the
     /// metrics will not get exposed.
     pub prometheus_port: Option<u16>,
+    /// Whether the monitor repairs degraded objects on its own. If enabled (the default), the
+    /// monitor periodically scans all stored objects and rebuilds those with shards on
+    /// unreachable backends. If disabled, scans only run when explicitly requested (through the
+    /// sweep command), so an external system can own repair scheduling.
+    pub unattended_repair: Option<bool>,
+    /// Time in seconds between automatic repair scans of all stored objects. Only relevant when
+    /// unattended repair is enabled. Defaults to 600 seconds.
+    pub repair_interval_secs: Option<u64>,
+    /// Time in seconds a backend can be unreachable before it is considered gone, making its
+    /// shards eligible for repair. Defaults to 900 seconds.
+    pub missing_backend_grace_secs: Option<u64>,
     /// configuration to use for the encryption stage.
     pub encryption: Encryption,
     /// configuration to use for the compression stage.
@@ -140,6 +151,24 @@ impl Config {
     /// Return the prometheus port on which prometheus formatted metrics will be served, if one is set.
     pub fn prometheus_port(&self) -> Option<u16> {
         self.prometheus_port
+    }
+
+    /// Whether the monitor repairs degraded objects on its own. Defaults to `true` when not set
+    /// in the config.
+    pub fn unattended_repair(&self) -> bool {
+        self.unattended_repair.unwrap_or(true)
+    }
+
+    /// The time between automatic repair scans. Defaults to 600 seconds when not set in the
+    /// config.
+    pub fn repair_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.repair_interval_secs.unwrap_or(600))
+    }
+
+    /// The time a backend can be unreachable before it is considered gone. Defaults to 900
+    /// seconds when not set in the config.
+    pub fn missing_backend_grace(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.missing_backend_grace_secs.unwrap_or(900))
     }
 
     /// Return the encryption config to use for encoding this object.
@@ -467,6 +496,9 @@ mod tests {
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            unattended_repair: None,
+            repair_interval_secs: None,
+            missing_backend_grace_secs: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],
@@ -631,6 +663,9 @@ password = "supersecretpass"
             zdbfs_mountpoint: Some("/tmp/test".into()),
             prometheus_port: None,
             max_zdb_data_dir_size: None,
+            unattended_repair: None,
+            repair_interval_secs: None,
+            missing_backend_grace_secs: None,
             groups: vec![
                 super::Group {
                     backends: vec![saddr, saddr2],

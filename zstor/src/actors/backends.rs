@@ -22,9 +22,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Amount of time a backend can be unreachable before it is actually considered unreachable.
-/// Currently set to 15 minutes.
-const MISSING_DURATION: Duration = Duration::from_secs(15 * 60);
 /// The amount of free space left in a backend before it is considered to be full. Currently this is
 /// 100 MiB.
 const FREESPACE_TRESHOLD: u64 = 100 * (1 << 20);
@@ -43,15 +40,18 @@ pub struct BackendManagerActor {
     metastore: Addr<MetaStoreActor>,
     managed_seq_dbs: HashMap<ZdbConnectionInfo, (Option<SequentialZdb>, BackendState)>,
     managed_meta_dbs: HashMap<ZdbConnectionInfo, (Option<UserKeyZdb>, BackendState)>,
+    missing_grace: Duration,
 }
 
 impl BackendManagerActor {
-    /// Create a new [`BackendManagerActor`].
+    /// Create a new [`BackendManagerActor`]. The `missing_grace` duration controls how long a
+    /// backend can be unreachable before it is considered gone.
     pub fn new(
         config_addr: Addr<ConfigActor>,
         explorer: Recipient<ExpandStorage>,
         metrics: Addr<MetricsActor>,
         metastore: Addr<MetaStoreActor>,
+        missing_grace: Duration,
     ) -> BackendManagerActor {
         Self {
             config_addr,
@@ -60,6 +60,7 @@ impl BackendManagerActor {
             metastore,
             managed_seq_dbs: HashMap::new(),
             managed_meta_dbs: HashMap::new(),
+            missing_grace,
         }
     }
 
@@ -233,10 +234,17 @@ impl Handler<ReloadConfig> for BackendManagerActor {
             async move {
                 let (managed_seq_dbs, managed_meta_dbs) =
                     get_zdbs_from_config(cfg_addr.clone()).await;
-                (managed_seq_dbs, managed_meta_dbs)
+                let grace = match cfg_addr.send(GetConfig).await {
+                    Ok(cfg) => Some(cfg.missing_backend_grace()),
+                    Err(_) => None,
+                };
+                (managed_seq_dbs, managed_meta_dbs, grace)
             }
             .into_actor(self)
-            .map(move |(seq_dbs, meta_dbs), actor, _| {
+            .map(move |(seq_dbs, meta_dbs, grace), actor, _| {
+                if let Some(grace) = grace {
+                    actor.missing_grace = grace;
+                }
                 // remove the data backends that are no longer managed from  the metrics
                 for (ci, _) in actor.managed_seq_dbs.iter() {
                     if !seq_dbs.contains_key(ci) {
@@ -386,6 +394,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
             .collect::<Vec<_>>();
 
         let actor_addr = ctx.address();
+        let grace = self.missing_grace;
         Box::pin(
             async move {
                 let futs = data_backend_info
@@ -395,7 +404,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             let info = match db.ns_info().await {
                                 Err(e) => {
                                     warn!("Failed to get ns_info from {}: {}", ci, e);
-                                    state.mark_unreachable();
+                                    state.mark_unreachable(grace);
                                     None
                                 }
                                 Ok(info) => {
@@ -410,7 +419,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                                 let info = match db.ns_info().await {
                                     Err(e) => {
                                         warn!("Failed to get ns_info from {}: {}", ci, e);
-                                        state.mark_unreachable();
+                                        state.mark_unreachable(grace);
                                         None
                                     }
                                     Ok(info) => {
@@ -420,7 +429,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                                 };
                                 (ci, Some(db), state, info)
                             } else {
-                                state.mark_unreachable();
+                                state.mark_unreachable(grace);
                                 (ci, None, state, None)
                             }
                         }
@@ -433,7 +442,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                             let info = match db.ns_info().await {
                                 Err(e) => {
                                     warn!("Failed to get ns_info from {}: {}", ci, e);
-                                    state.mark_unreachable();
+                                    state.mark_unreachable(grace);
                                     None
                                 }
                                 Ok(info) => {
@@ -448,7 +457,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                                 let info = match db.ns_info().await {
                                     Err(e) => {
                                         warn!("Failed to get ns_info from {}: {}", ci, e);
-                                        state.mark_unreachable();
+                                        state.mark_unreachable(grace);
                                         None
                                     }
                                     Ok(info) => {
@@ -458,7 +467,7 @@ impl Handler<CheckBackends> for BackendManagerActor {
                                 };
                                 (ci, Some(db), state, info)
                             } else {
-                                state.mark_unreachable();
+                                state.mark_unreachable(grace);
                                 (ci, None, state, None)
                             }
                         }
@@ -560,6 +569,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
     fn handle(&mut self, _: ReplaceBackends, _: &mut Self::Context) -> Self::Result {
         debug!("Attempting to replace backends");
         let explorer = self.explorer.clone();
+        let grace = self.missing_grace;
         // Grab all backends which must be replaced.
         let seq_replacements = self
             .managed_seq_dbs
@@ -587,7 +597,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
             .into_iter()
             .map(|(ci, state)| {
                 let explorer = explorer.clone();
-                get_seq_zdb(explorer, ci, state)
+                get_seq_zdb(explorer, ci, state, grace)
             })
             .collect::<Vec<_>>();
 
@@ -607,7 +617,7 @@ impl Handler<ReplaceBackends> for BackendManagerActor {
             // Finally, request new 0-dbs and decommission unreadable ones.
             .map(|(ci, state)| {
                 let explorer = explorer.clone();
-                get_user_zdb(explorer, ci, state)
+                get_user_zdb(explorer, ci, state, grace)
             })
             .collect::<Vec<_>>();
 
@@ -837,6 +847,7 @@ async fn get_seq_zdb(
     explorer: Recipient<ExpandStorage>,
     ci: ZdbConnectionInfo,
     state: BackendState,
+    grace: Duration,
 ) -> Result<(ZdbConnectionInfo, Option<SequentialZdb>, BackendState), ZstorError> {
     let res = explorer
         .send(ExpandStorage {
@@ -859,7 +870,7 @@ async fn get_seq_zdb(
         Ok(db) => {
             match db.ns_info().await {
                 Ok(info) => state.mark_healthy(info.free_space()),
-                Err(_) => state.mark_unreachable(),
+                Err(_) => state.mark_unreachable(grace),
             };
             Ok((res, Some(db), state))
         }
@@ -876,6 +887,7 @@ async fn get_user_zdb(
     explorer: Recipient<ExpandStorage>,
     ci: ZdbConnectionInfo,
     state: BackendState,
+    grace: Duration,
 ) -> Result<(ZdbConnectionInfo, Option<UserKeyZdb>, BackendState), ZstorError> {
     let res = explorer
         .send(ExpandStorage {
@@ -899,7 +911,7 @@ async fn get_user_zdb(
         Ok(db) => {
             match db.ns_info().await {
                 Ok(info) => state.mark_healthy(info.free_space()),
-                Err(_) => state.mark_unreachable(),
+                Err(_) => state.mark_unreachable(grace),
             };
             Ok((res, Some(db), state))
         }
@@ -945,15 +957,16 @@ impl BackendState {
     }
 
     /// Indicate that the backend is (currently) unreachable. Depending on the previous state, this
-    /// might change the state.
-    pub fn mark_unreachable(&mut self) {
+    /// might change the state. The `grace` duration controls how long a backend can remain
+    /// unreachable before it is considered gone.
+    pub fn mark_unreachable(&mut self, grace: Duration) {
         match self {
             BackendState::Unreachable => {}
-            BackendState::Unknown(since) if since.elapsed() >= MISSING_DURATION => {
+            BackendState::Unknown(since) if since.elapsed() >= grace => {
                 debug!("Backend state changed to unreachable");
                 *self = BackendState::Unreachable;
             }
-            BackendState::Unknown(since) if since.elapsed() < MISSING_DURATION => (),
+            BackendState::Unknown(since) if since.elapsed() < grace => (),
             _ => *self = BackendState::Unknown(Instant::now()),
         }
     }
