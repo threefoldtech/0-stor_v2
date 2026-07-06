@@ -50,6 +50,16 @@ struct PromMetrics {
     index_disk_freespace_bytes_gauges: IntGaugeVec,
     data_disk_freespace_bytes_gauges: IntGaugeVec,
 
+    data_dir_size_bytes: IntGauge,
+    data_dir_size_limit_bytes: IntGauge,
+    data_dir_files_evicted: IntCounter,
+    data_dir_eviction_failures: IntCounter,
+
+    fabric_objects: IntGauge,
+    fabric_objects_degraded: IntGauge,
+    fabric_redundancy_margin_shards: IntGauge,
+    fabric_unconfigured_backends: IntGauge,
+
     zstor_store_commands_finished: IntCounterVec,
     zstor_retrieve_commands_finished: IntCounterVec,
     zstor_rebuild_commands_finished: IntCounterVec,
@@ -155,6 +165,46 @@ impl MetricsActor {
                 "data_disk_freespace_bytes",
                 "data_disk_freespace_bytes in namespace",
                 &["address", "namespace", "backend_type"]
+            )
+            .unwrap(),
+            data_dir_size_bytes: register_int_gauge!(
+                "data_dir_size_bytes",
+                "Total size of the files in the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_size_limit_bytes: register_int_gauge!(
+                "data_dir_size_limit_bytes",
+                "Configured size limit of the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_files_evicted: register_int_counter!(
+                "data_dir_files_evicted",
+                "Total amount of files evicted from the monitored 0-db data dir"
+            )
+            .unwrap(),
+            data_dir_eviction_failures: register_int_counter!(
+                "data_dir_eviction_failures",
+                "Total amount of failed eviction attempts in the monitored 0-db data dir"
+            )
+            .unwrap(),
+            fabric_objects: register_int_gauge!(
+                "fabric_objects",
+                "Amount of objects in the metastore at the last scan or repair sweep"
+            )
+            .unwrap(),
+            fabric_objects_degraded: register_int_gauge!(
+                "fabric_objects_degraded",
+                "Amount of objects with missing shards or shards on unreachable backends at the last scan or repair sweep"
+            )
+            .unwrap(),
+            fabric_redundancy_margin_shards: register_int_gauge!(
+                "fabric_redundancy_margin_shards",
+                "How many more shards the worst object can lose before it is unreadable, at the last scan or repair sweep"
+            )
+            .unwrap(),
+            fabric_unconfigured_backends: register_int_gauge!(
+                "fabric_unconfigured_backends",
+                "Amount of distinct backends referenced by object metadata but absent from the running config, at the last scan or repair sweep"
             )
             .unwrap(),
             zstor_store_commands_finished: register_int_counter_vec!(
@@ -307,6 +357,35 @@ pub struct UpdateZdbFsStats {
     pub stats: stats_t,
 }
 
+/// Message updating the fabric health stats after a metastore scan or repair sweep.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetFabricStats {
+    /// Amount of objects in the metastore.
+    pub objects: u64,
+    /// Amount of objects with missing shards or shards on unreachable backends.
+    pub degraded: u64,
+    /// Worst-object redundancy margin in shards. None when there are no objects.
+    pub margin: Option<i64>,
+    /// Amount of distinct backends referenced by object metadata but absent from the
+    /// running config.
+    pub unconfigured_backends: u64,
+}
+
+/// Message updating the stats of the monitored 0-db data dir after an eviction pass.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetDataDirStats {
+    /// Total size of the files in the data dir, after eviction.
+    pub size_bytes: u64,
+    /// The configured size limit of the data dir.
+    pub limit_bytes: u64,
+    /// The amount of files evicted in this pass.
+    pub evicted: u64,
+    /// The amount of files for which an eviction attempt failed in this pass.
+    pub failures: u64,
+}
+
 impl Actor for MetricsActor {
     type Context = Context<Self>;
 }
@@ -368,6 +447,43 @@ impl Handler<UpdateZdbFsStats> for MetricsActor {
 
     fn handle(&mut self, msg: UpdateZdbFsStats, _: &mut Self::Context) -> Self::Result {
         self.zdbfs_stats = msg.stats;
+    }
+}
+
+impl Handler<SetFabricStats> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetFabricStats, _: &mut Self::Context) -> Self::Result {
+        self.prom_metrics.fabric_objects.set(msg.objects as i64);
+        self.prom_metrics
+            .fabric_objects_degraded
+            .set(msg.degraded as i64);
+        // With no objects there is no margin to report; the gauge keeps its last value.
+        if let Some(margin) = msg.margin {
+            self.prom_metrics
+                .fabric_redundancy_margin_shards
+                .set(margin);
+        }
+        self.prom_metrics
+            .fabric_unconfigured_backends
+            .set(msg.unconfigured_backends as i64);
+    }
+}
+
+impl Handler<SetDataDirStats> for MetricsActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetDataDirStats, _: &mut Self::Context) -> Self::Result {
+        self.prom_metrics
+            .data_dir_size_bytes
+            .set(msg.size_bytes as i64);
+        self.prom_metrics
+            .data_dir_size_limit_bytes
+            .set(msg.limit_bytes as i64);
+        self.prom_metrics.data_dir_files_evicted.inc_by(msg.evicted);
+        self.prom_metrics
+            .data_dir_eviction_failures
+            .inc_by(msg.failures);
     }
 }
 

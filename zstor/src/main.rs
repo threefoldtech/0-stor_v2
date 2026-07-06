@@ -19,6 +19,7 @@ use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use zstor_v2::actors::config::ReloadConfig;
+use zstor_v2::actors::repairer::{RepairActor, ScanNow, ScanReport, SweepNow, SweepReport};
 use zstor_v2::actors::zstor::{Check, Rebuild, Retrieve, Store, ZstorCommand, ZstorResponse};
 use zstor_v2::actors::zstor_scheduler::Signaled;
 use zstor_v2::actors::zstor_scheduler::ZstorActorScheduler;
@@ -184,6 +185,15 @@ enum Cmd {
     /// the health of the backends. This info inludes if the backend is reachable, and the amount
     /// of used and free storage space.
     Status,
+
+    /// Run a repair sweep over all stored objects
+    ///
+    /// Scans all stored objects, and rebuilds every object which has one or more shards on an
+    /// unreachable backend onto healthy backends. This is the same scan the monitor runs
+    /// periodically when unattended repair is enabled; running it through this command works
+    /// regardless of that setting, so repair can be driven by an external scheduler. Prints a
+    /// summary of the sweep when it completes.
+    Sweep,
 }
 
 /// ModuleFilter is a naive log filter which only allows (child modules of) a given module.
@@ -331,6 +341,7 @@ async fn real_main() -> ZstorResult<()> {
         Cmd::Check { file } => {
             handle_command(ZstorCommand::Check(Check { path: file }), opts.config).await?
         }
+        Cmd::Sweep => handle_command(ZstorCommand::Sweep(SweepNow), opts.config).await?,
         Cmd::Test => {
             // load config => already done
             // connect to metastore => already done
@@ -498,9 +509,33 @@ async fn real_main() -> ZstorResult<()> {
                 };
             }
             table.printstd();
+
+            // The tables above only show backends in the current config. Objects whose
+            // shards live on backends that were since swapped out of the config are
+            // invisible there, so ask the running daemon for the object-level view: how
+            // many objects are degraded and how much redundancy margin the worst one has
+            // left.
+            println!();
+            match cfg.socket() {
+                Some(socket) => {
+                    match socket_roundtrip(socket, &ZstorCommand::Scan(ScanNow)).await {
+                        Ok(ZstorResponse::Scan(report)) => print_scan_report(&report),
+                        Ok(ZstorResponse::Err(e)) => {
+                            println!("object health unavailable: {}", e)
+                        }
+                        Ok(_) => {
+                            println!("object health unavailable: unexpected daemon response")
+                        }
+                        Err(e) => println!("object health unavailable: {}", e),
+                    }
+                }
+                None => println!("object health unavailable: no daemon socket in config"),
+            }
         }
         Cmd::Monitor => {
-            let zstor = zstor_v2::setup_system(opts.config, &cfg).await?;
+            let system = zstor_v2::setup_system(opts.config, &cfg).await?;
+            let zstor = system.zstor;
+            let repairer = system.repairer;
             let mut pid_path = PathBuf::from("/var/run/zstor.pid");
             if let Some(cfg_pid_file) = cfg.pid_file() {
                 if let Some(v) = cfg_pid_file.to_str() {
@@ -541,9 +576,10 @@ async fn real_main() -> ZstorResult<()> {
                             Ok((con, remote)) => (con, remote),
                         };
                         let zs = zstor_scheduler.clone();
+                        let rep = repairer.clone();
                         tokio::spawn(async move {
                             debug!("Handling new client connection from {:?}", remote);
-                            if let Err(e) = handle_client(con, zs).await {
+                            if let Err(e) = handle_client(con, zs, rep).await {
                                 error!("Error while handeling client: {}", e);
                             }
                         });
@@ -592,7 +628,11 @@ async fn real_main() -> ZstorResult<()> {
     Ok(())
 }
 
-async fn handle_client<C>(mut con: C, zstor: Addr<ZstorActorScheduler>) -> ZstorResult<()>
+async fn handle_client<C>(
+    mut con: C,
+    zstor: Addr<ZstorActorScheduler>,
+    repairer: Addr<RepairActor>,
+) -> ZstorResult<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
 {
@@ -629,6 +669,14 @@ where
             Ok(Some(checksum)) => ZstorResponse::Checksum(checksum),
             Ok(None) => ZstorResponse::Success,
         },
+        ZstorCommand::Sweep(sweep) => match repairer.send(sweep).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(report) => ZstorResponse::Sweep(report),
+        },
+        ZstorCommand::Scan(scan) => match repairer.send(scan).await? {
+            Err(e) => ZstorResponse::Err(e.to_string()),
+            Ok(report) => ZstorResponse::Scan(report),
+        },
     };
 
     let res_buf = bincode::serialize(&res)?;
@@ -641,35 +689,45 @@ where
     Ok(())
 }
 
+/// Send a command to a running zstor daemon over its unix socket and return the response.
+async fn socket_roundtrip(socket: &Path, zc: &ZstorCommand) -> Result<ZstorResponse, ZstorError> {
+    let mut con = UnixStream::connect(socket)
+        .await
+        .map_err(|e| ZstorError::new_io("Could not connect to daemon socket".to_string(), e))?;
+    // expect here is fine as its a programming error
+    let buf = bincode::serialize(zc).expect("Failed to encode command");
+    con.write_u16(buf.len() as u16)
+        .await
+        .map_err(|e| ZstorError::new_io("Could not write command length to socket".into(), e))?;
+    con.write_all(&buf)
+        .await
+        .map_err(|e| ZstorError::new_io("Could not write command to socket".into(), e))?;
+    // now wait for the response
+    let res_len = con
+        .read_u16()
+        .await
+        .map_err(|e| ZstorError::new_io("Could not read response length from socket".into(), e))?;
+    let mut res_buf = vec![0; res_len as usize];
+    con.read_exact(&mut res_buf)
+        .await
+        .map_err(|e| ZstorError::new_io("Could not read response from socket".into(), e))?;
+    Ok(
+        bincode::deserialize::<ZstorResponse>(&res_buf)
+            .expect("Failed to decode reply from socket"),
+    )
+}
+
 async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), ZstorError> {
     let cfg = zstor_v2::load_config(&cfg_path).await?;
     // If a socket is set, try to send a command to a daemon.
     if let Some(socket) = cfg.socket() {
         debug!("Sending command to zstor daemon");
-        let mut con = UnixStream::connect(socket)
-            .await
-            .map_err(|e| ZstorError::new_io("Could not connect to daemon socket".to_string(), e))?;
-        // expect here is fine as its a programming error
-        let buf = bincode::serialize(&zc).expect("Failed to encode command");
-        con.write_u16(buf.len() as u16).await.map_err(|e| {
-            ZstorError::new_io("Could not write command length to socket".into(), e)
-        })?;
-        con.write_all(&buf)
-            .await
-            .map_err(|e| ZstorError::new_io("Could not write command to socket".into(), e))?;
-        // now wait for the response
-        let res_len = con.read_u16().await.map_err(|e| {
-            ZstorError::new_io("Could not read response length from socket".into(), e)
-        })?;
-        let mut res_buf = vec![0; res_len as usize];
-        con.read_exact(&mut res_buf)
-            .await
-            .map_err(|e| ZstorError::new_io("Could not read response from socket".into(), e))?;
-        let res = bincode::deserialize::<ZstorResponse>(&res_buf)
-            .expect("Failed to decode reply from socket");
+        let res = socket_roundtrip(socket, &zc).await?;
 
         match res {
             ZstorResponse::Checksum(checksum) => println!("{}", hex::encode(checksum)),
+            ZstorResponse::Sweep(report) => print_sweep_report(&report),
+            ZstorResponse::Scan(report) => print_scan_report(&report),
             ZstorResponse::Err(err) => {
                 eprintln!("Zstor error: {}", err);
                 process::exit(1);
@@ -678,7 +736,8 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
         }
     } else {
         debug!("No zstor daemon socket found, running command in process");
-        let zstor = zstor_v2::setup_system(cfg_path, &cfg).await?;
+        let system = zstor_v2::setup_system(cfg_path, &cfg).await?;
+        let zstor = system.zstor;
         match zc {
             ZstorCommand::Store(store) => zstor.send(store).await??,
             ZstorCommand::Retrieve(retrieve) => zstor.send(retrieve).await??,
@@ -688,9 +747,45 @@ async fn handle_command(zc: ZstorCommand, cfg_path: PathBuf) -> Result<(), Zstor
                     println!("{}", hex::encode(checksum));
                 }
             }
+            ZstorCommand::Sweep(sweep) => {
+                let report = system.repairer.send(sweep).await??;
+                print_sweep_report(&report);
+            }
+            ZstorCommand::Scan(scan) => {
+                let report = system.repairer.send(scan).await??;
+                print_scan_report(&report);
+            }
         };
     };
     Ok(())
+}
+
+fn print_sweep_report(report: &SweepReport) {
+    println!(
+        "repair sweep finished: {} objects checked, {} degraded, {} rebuilt, {} failed",
+        report.objects, report.degraded, report.rebuilt, report.failed
+    );
+}
+
+fn print_scan_report(report: &ScanReport) {
+    println!(
+        "object health: {} objects, {} degraded",
+        report.objects, report.degraded
+    );
+    match report.margin {
+        Some(margin) => println!(
+            "redundancy margin (worst object): {} shard(s) above the minimum needed to read it",
+            margin
+        ),
+        None => println!("redundancy margin: n/a (no objects stored)"),
+    }
+    println!(
+        "backends referenced by objects but absent from the config: {}",
+        report.unconfigured_backends
+    );
+    if report.sweep_active {
+        println!("note: a repair sweep was running during the scan, counts may be shifting");
+    }
 }
 
 #[allow(clippy::result_large_err)]

@@ -231,6 +231,26 @@ password = "supersecretpass"
     then be exposed through the build-in prometheus server.
 - `prometheus_port`: An optional port on which prometheus metrics will be
     exposed. If this is not set, the metrics will not get exposed.
+- `unattended_repair`: Whether the monitor repairs degraded objects on its
+    own. If `true` (the default), the monitor periodically scans all stored
+    objects and rebuilds those with shards on unreachable backends. If
+    `false`, scans only run when explicitly requested through the `sweep`
+    command, so repair scheduling can be owned by an external system.
+- `repair_interval_secs`: Time in seconds between automatic repair scans of
+    all stored objects. Only relevant when unattended repair is enabled.
+    Defaults to 600 seconds.
+- `missing_backend_grace_secs`: Time in seconds a backend can be unreachable
+    before it is considered gone, making its shards eligible for repair and
+    the backend itself eligible for replacement. Defaults to 900 seconds.
+- `degraded_write_margin`: The amount of shards which must be placed on top
+    of `minimal_shards` for a write to be accepted when not all
+    `expected_shards` can be placed (because backends are unreachable or
+    full). Writes always place all expected shards when possible; this margin
+    only bounds how far a write may degrade before it is refused, and the
+    repair sweep backfills the missing shards once capacity returns. Defaults
+    to 1, so a freshly written object always survives at least one further
+    backend loss. Set it to `expected_shards - minimal_shards` to refuse any
+    degraded write.
 - `encryption`: configuration to use for the encryption stage. Currently
     only `AES` is supported. The encryption `key` is 32 random bytes in hexadecimal form.
 - `compression`: configuration to use for the compression stage.
