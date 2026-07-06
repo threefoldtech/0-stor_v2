@@ -137,6 +137,7 @@ pub async fn setup_system(cfg_path: PathBuf, cfg: &Config) -> ZstorResult<ZstorS
         backends,
         zstor.clone(),
         cfg_addr,
+        metrics_addr.clone(),
         cfg.repair_interval(),
     )
     .start();

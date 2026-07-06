@@ -63,5 +63,6 @@ bindgen = "0.70.1"
 
 [dev-dependencies]
 rand = "0.8.5"
+toml = "0.8.19"
 criterion = "0.5.1"
 simple_logger = "5.0.0"

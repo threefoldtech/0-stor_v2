@@ -1,5 +1,5 @@
 use super::priority_queue::PriorityQueue;
-use super::repairer::SweepReport;
+use super::repairer::{ScanReport, SweepReport};
 use super::zstor::{Check, Rebuild, Retrieve, Store, ZstorActor, ZstorCommand};
 use crate::{meta::Checksum, ZstorError, ZstorErrorKind};
 use actix::prelude::*;
@@ -51,6 +51,8 @@ pub enum ZstorSchedulerResponse {
     Store(Result<(), ZstorError>),
     /// Response for sweep command
     Sweep(Result<SweepReport, ZstorError>),
+    /// Response for scan command
+    Scan(Result<ScanReport, ZstorError>),
     /// Response for finalize command
     Done,
 }
@@ -136,6 +138,14 @@ impl Looper {
                 ZstorSchedulerResponse::Sweep(Err(ZstorError::with_message(
                     ZstorErrorKind::Storage,
                     "repair sweeps cannot be processed by the command scheduler".to_string(),
+                )))
+            }
+            // Scans go to the repair actor directly too.
+            ZstorCommand::Scan(_) => {
+                error!("health scans cannot be processed by the command scheduler");
+                ZstorSchedulerResponse::Scan(Err(ZstorError::with_message(
+                    ZstorErrorKind::Storage,
+                    "health scans cannot be processed by the command scheduler".to_string(),
                 )))
             }
         }

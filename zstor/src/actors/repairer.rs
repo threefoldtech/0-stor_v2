@@ -2,12 +2,15 @@ use crate::actors::{
     backends::{BackendManagerActor, RequestBackends, StateInterest},
     config::{ConfigActor, GetConfig},
     meta::{MetaStoreActor, ScanMeta},
+    metrics::{MetricsActor, SetFabricStats},
     zstor::{Rebuild, ZstorActor},
 };
+use crate::zdb::ZdbConnectionInfo;
 use crate::{ZstorError, ZstorErrorKind};
 use actix::prelude::*;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +43,47 @@ pub struct SweepReport {
     pub failed: u64,
 }
 
+/// Message to run a health scan of all objects in the metastore right now. The scan probes
+/// the backends referenced by the object metadata and reports degraded objects and the
+/// remaining redundancy margin, but never rebuilds anything, so fabric health can be
+/// observed regardless of who owns repair scheduling.
+#[derive(Debug, Message, Serialize, Deserialize, Clone)]
+#[rtype(result = "Result<ScanReport, ZstorError>")]
+pub struct ScanNow;
+
+/// The result of a health scan over all objects in the metastore.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ScanReport {
+    /// Amount of objects inspected during the scan.
+    pub objects: u64,
+    /// Amount of objects with missing shards or shards on unreachable backends.
+    pub degraded: u64,
+    /// The redundancy margin of the worst object: how many of its shards can still become
+    /// unreachable before the object can no longer be read. Negative when an object is
+    /// already unreadable. None when there are no objects.
+    pub margin: Option<i64>,
+    /// Amount of distinct backends which are referenced by object metadata but absent from
+    /// the running config. Their shards are still used for reads, but nothing monitors or
+    /// repairs onto these backends anymore.
+    pub unconfigured_backends: u64,
+    /// Whether a repair sweep was running while this scan ran. Counts may be shifting.
+    pub sweep_active: bool,
+}
+
+/// The full result of a metastore scan, shared between the repair sweep and the dry health
+/// scan.
+struct FabricScan {
+    objects: u64,
+    degraded: u64,
+    rebuilt: u64,
+    failed: u64,
+    /// Worst-object redundancy margin, measured when the object was inspected. During a
+    /// repair sweep rebuilds can improve objects after they were measured, so this is a
+    /// pessimistic value; the next scan reflects the repairs.
+    margin: Option<i64>,
+    unconfigured_backends: u64,
+}
+
 /// Actor implementation of a repair queue. It periodically sweeps the metastore, verifies all
 /// backends holding shards are still reachable, and rebuilds objects for which that is not the
 /// case. Sweeps can also be requested on demand with [`SweepNow`].
@@ -48,8 +92,10 @@ pub struct RepairActor {
     backend_manager: Addr<BackendManagerActor>,
     zstor: Addr<ZstorActor>,
     cfg: Addr<ConfigActor>,
+    metrics: Addr<MetricsActor>,
     sweep_interval: Duration,
     handling_sweep_objects: Arc<AtomicBool>,
+    handling_scan_objects: Arc<AtomicBool>,
 }
 
 impl RepairActor {
@@ -62,6 +108,7 @@ impl RepairActor {
         backend_manager: Addr<BackendManagerActor>,
         zstor: Addr<ZstorActor>,
         cfg: Addr<ConfigActor>,
+        metrics: Addr<MetricsActor>,
         sweep_interval: Duration,
     ) -> RepairActor {
         Self {
@@ -69,8 +116,10 @@ impl RepairActor {
             backend_manager,
             zstor,
             cfg,
+            metrics,
             sweep_interval,
             handling_sweep_objects: Arc::new(AtomicBool::new(false)),
+            handling_scan_objects: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -98,19 +147,31 @@ impl Drop for SweepGuard {
     }
 }
 
-/// Sweep the metastore for objects with shards on unreachable backends and rebuild them. The
-/// caller must hold the sweep guard so no two sweeps run concurrently.
-async fn sweep_objects(
+/// Scan the metastore for objects with missing shards or shards on unreachable backends.
+/// With a zstor address the scan is a repair sweep and rebuilds what it finds; without one
+/// it only observes. Backend reachability is probed against the connection info recorded in
+/// the object metadata — not against the running config — so shards on backends which were
+/// swapped out of the config still count as reachable while those backends live, and a
+/// reconfiguration alone never looks like lost redundancy. Every distinct backend is probed
+/// once per scan (a batch per metastore page), so dead backends cost one connection attempt
+/// per scan instead of one per object referencing them. The caller must hold the relevant
+/// guard so no two sweeps run concurrently.
+async fn scan_objects(
     meta: Addr<MetaStoreActor>,
     backend_manager: Addr<BackendManagerActor>,
-    zstor: Addr<ZstorActor>,
-) -> Result<SweepReport, ZstorError> {
-    let mut report = SweepReport {
+    zstor: Option<Addr<ZstorActor>>,
+    configured: HashSet<ZdbConnectionInfo>,
+) -> Result<FabricScan, ZstorError> {
+    let mut scan = FabricScan {
         objects: 0,
         degraded: 0,
         rebuilt: 0,
         failed: 0,
+        margin: None,
+        unconfigured_backends: 0,
     };
+    let mut probed: HashMap<ZdbConnectionInfo, bool> = HashMap::new();
+    let mut unconfigured: HashSet<ZdbConnectionInfo> = HashSet::new();
 
     let start_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -137,23 +198,20 @@ async fn sweep_objects(
                 )
             })??;
 
-        // iterate over the keys and check if all shards are placed and all backends holding
-        // them are healthy; if not, rebuild the object
-        for (key, metadata) in metas.into_iter() {
-            report.objects += 1;
-            let backend_requests = metadata
-                .shards()
-                .iter()
-                .map(|shard_info| shard_info.zdb())
-                .cloned()
-                .collect::<Vec<_>>();
-            // An object written while backends were down holds fewer shards than intended
-            // (degraded write); rebuilding it backfills the missing shards.
-            let missing_shards =
-                metadata.data_shards() + metadata.disposable_shards() > metadata.shards().len();
-            let backends = backend_manager
+        // Probe every backend referenced by this page which has not been probed yet, in one
+        // concurrent batch.
+        let new_cis: Vec<ZdbConnectionInfo> = metas
+            .iter()
+            .flat_map(|(_, metadata)| metadata.shards().iter().map(|shard| shard.zdb()))
+            .filter(|ci| !probed.contains_key(*ci))
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        if !new_cis.is_empty() {
+            let results = backend_manager
                 .send(RequestBackends {
-                    backend_requests,
+                    backend_requests: new_cis.clone(),
                     interest: StateInterest::Readable,
                 })
                 .await
@@ -163,10 +221,40 @@ async fn sweep_objects(
                         format!("failed to request backends: {}", e),
                     )
                 })?;
-            let must_rebuild =
-                missing_shards || backends.into_iter().any(|b| !matches!(b, Ok(Some(_))));
-            if must_rebuild {
-                report.degraded += 1;
+            for (ci, result) in new_cis.into_iter().zip(results) {
+                probed.insert(ci, matches!(result, Ok(Some(_))));
+            }
+        }
+
+        // iterate over the keys and check if all shards are placed and all backends holding
+        // them are healthy; if not, the object is degraded (and rebuilt when sweeping)
+        for (key, metadata) in metas.into_iter() {
+            scan.objects += 1;
+            let mut reachable: i64 = 0;
+            for shard in metadata.shards() {
+                let ci = shard.zdb();
+                if probed.get(ci).copied().unwrap_or(false) {
+                    reachable += 1;
+                }
+                if !configured.contains(ci) {
+                    unconfigured.insert(ci.clone());
+                }
+            }
+            let object_margin = reachable - metadata.data_shards() as i64;
+            scan.margin = Some(match scan.margin {
+                Some(margin) => margin.min(object_margin),
+                None => object_margin,
+            });
+            // An object written while backends were down holds fewer shards than intended
+            // (degraded write); rebuilding it backfills the missing shards.
+            let missing_shards =
+                metadata.data_shards() + metadata.disposable_shards() > metadata.shards().len();
+            let unreachable_shards = (reachable as usize) < metadata.shards().len();
+            if missing_shards || unreachable_shards {
+                scan.degraded += 1;
+                let Some(zstor) = &zstor else {
+                    continue;
+                };
                 match zstor
                     .send(Rebuild {
                         file: None,
@@ -176,15 +264,15 @@ async fn sweep_objects(
                     .await
                 {
                     Ok(Ok(())) => {
-                        report.rebuilt += 1;
+                        scan.rebuilt += 1;
                         info!("Repaired object {}", key);
                     }
                     Ok(Err(e)) => {
-                        report.failed += 1;
+                        scan.failed += 1;
                         error!("Could not repair object {}: {}", key, e);
                     }
                     Err(e) => {
-                        report.failed += 1;
+                        scan.failed += 1;
                         error!("Could not deliver repair command for object {}: {}", key, e);
                     }
                 }
@@ -200,7 +288,43 @@ async fn sweep_objects(
         backend_idx = Some(idx);
     }
 
-    Ok(report)
+    scan.unconfigured_backends = unconfigured.len() as u64;
+    Ok(scan)
+}
+
+impl FabricScan {
+    /// The repair-outcome part of the scan.
+    fn sweep_report(&self) -> SweepReport {
+        SweepReport {
+            objects: self.objects,
+            degraded: self.degraded,
+            rebuilt: self.rebuilt,
+            failed: self.failed,
+        }
+    }
+
+    /// Push the fabric-health part of the scan to the metrics actor.
+    fn push_metrics(&self, metrics: &Addr<MetricsActor>) {
+        metrics.do_send(SetFabricStats {
+            objects: self.objects,
+            degraded: self.degraded,
+            margin: self.margin,
+            unconfigured_backends: self.unconfigured_backends,
+        });
+    }
+}
+
+/// The set of storage backends in the running config, to compare object metadata against.
+async fn configured_backends(
+    cfg: &Addr<ConfigActor>,
+) -> Result<HashSet<ZdbConnectionInfo>, ZstorError> {
+    let config = cfg.send(GetConfig).await.map_err(|e| {
+        ZstorError::with_message(
+            ZstorErrorKind::Config,
+            format!("could not get running config: {}", e),
+        )
+    })?;
+    Ok(config.backends().into_iter().cloned().collect())
 }
 
 /// Log the outcome of a finished sweep at a level matching its severity.
@@ -226,6 +350,7 @@ impl Handler<PeriodicSweep> for RepairActor {
         let backend_manager = self.backend_manager.clone();
         let zstor = self.zstor.clone();
         let cfg = self.cfg.clone();
+        let metrics = self.metrics.clone();
         let handling_sweep_objects = Arc::clone(&self.handling_sweep_objects);
 
         Box::pin(async move {
@@ -241,6 +366,13 @@ impl Handler<PeriodicSweep> for RepairActor {
                     return;
                 }
             }
+            let configured = match configured_backends(&cfg).await {
+                Ok(configured) => configured,
+                Err(e) => {
+                    error!("Could not get running config for periodic sweep: {}", e);
+                    return;
+                }
+            };
 
             if handling_sweep_objects.swap(true, Ordering::Relaxed) {
                 info!("Dropping periodic repair sweep - a sweep is already running");
@@ -251,8 +383,11 @@ impl Handler<PeriodicSweep> for RepairActor {
             };
 
             info!("Starting periodic repair sweep");
-            match sweep_objects(meta, backend_manager, zstor).await {
-                Ok(report) => log_sweep_report(&report),
+            match scan_objects(meta, backend_manager, Some(zstor), configured).await {
+                Ok(scan) => {
+                    log_sweep_report(&scan.sweep_report());
+                    scan.push_metrics(&metrics);
+                }
                 Err(e) => error!("Repair sweep aborted: {}", e),
             }
         })
@@ -266,9 +401,12 @@ impl Handler<SweepNow> for RepairActor {
         let meta = self.meta.clone();
         let backend_manager = self.backend_manager.clone();
         let zstor = self.zstor.clone();
+        let cfg = self.cfg.clone();
+        let metrics = self.metrics.clone();
         let handling_sweep_objects = Arc::clone(&self.handling_sweep_objects);
 
         Box::pin(async move {
+            let configured = configured_backends(&cfg).await?;
             if handling_sweep_objects.swap(true, Ordering::Relaxed) {
                 return Err(ZstorError::with_message(
                     ZstorErrorKind::Storage,
@@ -280,9 +418,52 @@ impl Handler<SweepNow> for RepairActor {
             };
 
             info!("Starting requested repair sweep");
-            let report = sweep_objects(meta, backend_manager, zstor).await?;
+            let scan = scan_objects(meta, backend_manager, Some(zstor), configured).await?;
+            let report = scan.sweep_report();
             log_sweep_report(&report);
+            scan.push_metrics(&metrics);
             Ok(report)
+        })
+    }
+}
+
+impl Handler<ScanNow> for RepairActor {
+    type Result = ResponseFuture<Result<ScanReport, ZstorError>>;
+
+    fn handle(&mut self, _: ScanNow, _: &mut Self::Context) -> Self::Result {
+        let meta = self.meta.clone();
+        let backend_manager = self.backend_manager.clone();
+        let cfg = self.cfg.clone();
+        let metrics = self.metrics.clone();
+        let handling_scan_objects = Arc::clone(&self.handling_scan_objects);
+        let handling_sweep_objects = Arc::clone(&self.handling_sweep_objects);
+
+        Box::pin(async move {
+            let configured = configured_backends(&cfg).await?;
+            if handling_scan_objects.swap(true, Ordering::Relaxed) {
+                return Err(ZstorError::with_message(
+                    ZstorErrorKind::Storage,
+                    "a health scan is already running".to_string(),
+                ));
+            }
+            let _guard = SweepGuard {
+                flag: handling_scan_objects,
+            };
+
+            // A scan may run next to a sweep: it only reads, and refusing would make health
+            // unobservable exactly while repair is busy. The flag tells the caller the
+            // numbers may be shifting under a concurrent sweep.
+            let sweep_active = handling_sweep_objects.load(Ordering::Relaxed);
+            debug!("Starting requested health scan");
+            let scan = scan_objects(meta, backend_manager, None, configured).await?;
+            scan.push_metrics(&metrics);
+            Ok(ScanReport {
+                objects: scan.objects,
+                degraded: scan.degraded,
+                margin: scan.margin,
+                unconfigured_backends: scan.unconfigured_backends,
+                sweep_active,
+            })
         })
     }
 }

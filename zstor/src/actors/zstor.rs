@@ -24,7 +24,7 @@ use tokio::{fs, io, task::JoinHandle};
 use super::{
     backends::BackendManagerActor,
     config::ReloadConfig,
-    repairer::{SweepNow, SweepReport},
+    repairer::{ScanNow, ScanReport, SweepNow, SweepReport},
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -40,6 +40,8 @@ pub enum ZstorCommand {
     Check(Check),
     /// Command to run a repair sweep over all stored objects.
     Sweep(SweepNow),
+    /// Command to run a health scan over all stored objects, without repairing anything.
+    Scan(ScanNow),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -53,6 +55,8 @@ pub enum ZstorResponse {
     Checksum(Checksum),
     /// The report of a completed repair sweep.
     Sweep(SweepReport),
+    /// The report of a completed health scan.
+    Scan(ScanReport),
 }
 
 #[derive(Serialize, Deserialize, Debug, Message, Clone)]
